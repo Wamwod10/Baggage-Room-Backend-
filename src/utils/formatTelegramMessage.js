@@ -39,6 +39,14 @@ const formatDate = (date) => {
   return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 };
 
+const formatIsoDate = (date) => {
+  if (!date) return "-";
+  const d = new Date(date);
+  if (Number.isNaN(d.getTime())) return "-";
+  const pad = (v) => String(v).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+};
+
 const formatPayment = (payment) => {
   switch (String(payment || "").toUpperCase()) {
     case "CASH":
@@ -68,53 +76,37 @@ const formatAdmin = (user) => {
 
 const formatLockerNumber = (value) => {
   const number = cleanText(value);
-  return number === "-" ? "-" : `№${number}`;
+  return number === "-" ? "-" : `#${number}`;
 };
 
 const orderNumber = (order = {}) => cleanText(order.orderNumber || order.displayId);
 
 const orderMessage = (order = {}) => {
   const items = Array.isArray(order.items) ? order.items : [];
-  const lockerLines = items.map((item) => {
-    const locker = formatLockerNumber(item.lockerNumber || item.locker?.number);
-    const size = cleanText(item.size);
-    const price = formatMoney(item.finalPrice || item.finalAmount || 0, item.currency || order.currency);
-    return `• ${locker} | ${size} | ${price}`;
-  });
+  const sizeLabel = { S: "Small", M: "Medium", L: "Large" };
+  const sizes = [...new Set(items.map((item) => sizeLabel[item.size] || cleanText(item.size)).filter((item) => item && item !== "-"))];
+  const count = items.length || Number(order.count || 0);
 
   return [
-    "🧳 Yangi bagaj qabul qilindi",
+    "📦 Yangi baggage qabul qilindi",
     "",
-    `🧾 Buyurtma:\n${orderNumber(order)}`,
+    `🏢 Filial: ${formatBranch(order.branch || order.branchName)}`,
+    `👤 Klient: ${cleanText(order.clientName || order.client)}`,
+    `📞 Telefon: ${cleanText(order.phone)}`,
+    `🪪 Passport: ${cleanText(order.passport)}`,
     "",
-    `🏢 Filial:\n${formatBranch(order.branch || order.branchName)}`,
+    `🧳 Size: ${sizes.join(", ") || "-"}`,
+    `🔢 Soni: ${count} ta`,
     "",
-    `👤 Admin:\n${formatAdmin(order.createdBy || order.admin)}`,
+    `🕒 Check-in: ${formatIsoDate(order.checkIn || order.createdAt)}`,
+    `🕘 Check-out: ${formatIsoDate(order.plannedCheckOut)}`,
     "",
-    `👥 Mijoz:\n${cleanText(order.clientName || order.client)}`,
+    `💳 To'lov: ${formatPayment(order.paymentType)}`,
+    `💰 Summa: ${formatMoney(order.realPaidAmount || order.finalAmount || 0, order.currency)}`,
     "",
-    `☎️ Telefon:\n${cleanText(order.phone)}`,
-    "",
-    lockerLines.length ? ["🔐 Yacheykalar:", ...lockerLines].join("\n") : null,
-    "",
-    `📦 Jami:\n${items.length || Number(order.count || 0)} ta bagaj`,
-    "",
-    `⏳ Tarif:\n${cleanText(order.tariffHours || order.customHours)} soat`,
-    "",
-    `💰 Narx:\n${formatMoney(order.calculatedAmount || 0, order.currency)}`,
-    "",
-    `🎁 Chegirma:\n${formatMoney(order.discountAmount || 0, order.currency)}`,
-    "",
-    `💵 Yakuniy:\n${formatMoney(order.finalAmount || 0, order.currency)}`,
-    "",
-    `💳 To'lov:\n${formatPayment(order.paymentType)}`,
-    "",
-    `🕘 Qabul:\n${formatDate(order.checkIn || order.createdAt)}`,
-    "",
-    `🕘 Tugash:\n${formatDate(order.plannedCheckOut)}`,
-  ]
-    .filter(Boolean)
-    .join("\n");
+    `🆔 Order: ${orderNumber(order)}`,
+    `📅 Sana: ${formatIsoDate(order.createdAt || order.checkIn)}`,
+  ].join("\n");
 };
 
 const shiftOpenedMessage = (shift = {}) => [

@@ -22,8 +22,8 @@ const settingsBody = z.object({
   lockerServiceEnabled: z.boolean().optional(),
 });
 
-router.get("/settings", validate(z.object({ query: z.object({ branchId: z.string().optional() }) })), telegramController.settings);
+router.get("/settings", validate(z.object({ query: z.object({ branchId: z.string().optional() }) })), requireRole("SUPER_ADMIN"), telegramController.settings);
 router.patch("/settings/:branchId", validate(branchParam.extend({ body: settingsBody })), requireRole("SUPER_ADMIN"), telegramController.update);
-router.post("/test/:branchId", validate(branchParam), telegramController.test);
+router.post("/test/:branchId", validate(branchParam), requireRole("SUPER_ADMIN"), telegramController.test);
 
 module.exports = router;

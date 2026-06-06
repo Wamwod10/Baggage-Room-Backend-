@@ -4,7 +4,7 @@ const validate = require("../middleware/validate.middleware");
 const tariffController = require("../controllers/tariff.controller");
 const { requireRole } = require("../middleware/role.middleware");
 
-router.get("/", tariffController.list);
+router.get("/", requireRole("SUPER_ADMIN"), tariffController.list);
 router.patch(
   "/:id",
   validate(
