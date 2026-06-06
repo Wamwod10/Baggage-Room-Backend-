@@ -6,6 +6,11 @@ const { audit } = require("./activity.service");
 const { findOpenShift, createCashMovement } = require("./cashMovement.service");
 const telegram = require("./telegram.service");
 
+const includeExpense = {
+  branch: { select: { id: true, name: true } },
+  createdBy: { select: { id: true, name: true, login: true } },
+};
+
 const listExpenses = async (user, query) => {
   const where = {
     ...branchWhere(user, query.branchId),
@@ -15,7 +20,7 @@ const listExpenses = async (user, query) => {
   if (query.search) where.OR = [{ category: { contains: query.search, mode: "insensitive" } }, { reason: { contains: query.search, mode: "insensitive" } }];
   return prisma.expense.findMany({
     where,
-    include: { branch: { select: { id: true, name: true } }, createdBy: { select: { id: true, name: true } } },
+    include: includeExpense,
     orderBy: { createdAt: "desc" },
   });
 };
@@ -27,6 +32,7 @@ const createExpense = async (user, body) => {
     const shift = await findOpenShift(tx, branchId);
     const expense = await tx.expense.create({
       data: { branchId, shiftId: shift?.id || null, category: body.category, reason: body.reason, amount: body.amount, currency: body.currency || "UZS", createdById: user.id },
+      include: includeExpense,
     });
     await createCashMovement({ tx, branchId, shiftId: shift?.id || null, type: "EXPENSE", direction: "OUT", amount: body.amount, currency: body.currency || "UZS", note: body.reason, createdById: user.id });
     await audit({ tx, branchId, userId: user.id, entityType: "Expense", entityId: expense.id, action: "EXPENSE_CREATE", newValue: expense, description: body.reason });

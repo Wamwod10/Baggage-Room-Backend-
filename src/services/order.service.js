@@ -248,6 +248,7 @@ const updateOrder = async (user, id, body) => {
   const data = Object.fromEntries(Object.entries(body).filter(([key]) => allowed.includes(key)));
   const updated = await prisma.order.update({ where: { id }, data, include: includeOrder });
   await audit({ branchId: current.branchId, userId: user.id, entityType: "Order", entityId: id, action: "ORDER_EDIT", oldValue: current, newValue: updated, description: "Order edited" });
+  telegram.sendSafely(telegram.sendOrderEdit({ ...updated, updatedBy: user }, data), { branchId: current.branchId, userId: user.id, entityType: "Order", entityId: id });
   return updated;
 };
 
@@ -320,7 +321,7 @@ const pickupOrder = async (user, id, body) => {
     }
     await audit({ tx, branchId: order.branchId, userId: user.id, entityType: "Order", entityId: id, action: "ORDER_PICKUP", oldValue: order, newValue: updated, description: "Order picked up" });
     if (overtimeAmount > 0) {
-      telegram.sendSafely(telegram.sendOvertimePayment(updated), { branchId: order.branchId, userId: user.id, entityType: "Order", entityId: id });
+      telegram.sendSafely(telegram.sendOvertimePayment({ ...updated, overtimePaymentType: body.paymentType || "CASH" }), { branchId: order.branchId, userId: user.id, entityType: "Order", entityId: id });
     }
     return updated;
   });
@@ -352,11 +353,14 @@ const cancelOrder = async (user, id, body) => {
   });
 };
 
-const markDelayedOrders = async () => {
+const markDelayedOrders = async (branchId = undefined) => {
   const now = new Date();
   const overdue = await prisma.order.findMany({
-    where: { status: "ACTIVE", plannedCheckOut: { lt: now } },
-    select: { id: true, branchId: true, orderNumber: true, clientName: true, phone: true, finalAmount: true, currency: true, paymentType: true },
+    where: { ...(branchId ? { branchId } : {}), status: "ACTIVE", plannedCheckOut: { lt: now } },
+    include: {
+      branch: { select: { id: true, name: true } },
+      items: { select: { lockerNumber: true, locker: { select: { number: true } } } },
+    },
   });
   for (const order of overdue) {
     await prisma.$transaction(async (tx) => {

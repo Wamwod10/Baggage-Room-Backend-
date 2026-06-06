@@ -46,7 +46,7 @@ const setService = async (user, id, data) => {
     newValue: updated,
     description: "Locker moved to service",
   });
-  telegram.sendSafely(telegram.sendLockerService({ branchId: locker.branchId, locker: locker.number, status: "SERVICE" }), { branchId: locker.branchId, userId: user.id, entityType: "Locker", entityId: id });
+  telegram.sendSafely(telegram.sendLockerService({ branchId: locker.branchId, branch: locker.branch, locker: locker.number, status: "SERVICE", reason: data.serviceReason || data.reason, createdBy: user }), { branchId: locker.branchId, userId: user.id, entityType: "Locker", entityId: id });
   return updated;
 };
 
@@ -67,13 +67,13 @@ const restore = async (user, id) => {
     newValue: updated,
     description: "Locker restored from service",
   });
-  telegram.sendSafely(telegram.sendLockerService({ branchId: locker.branchId, locker: locker.number, status: "EMPTY" }), { branchId: locker.branchId, userId: user.id, entityType: "Locker", entityId: id });
+  telegram.sendSafely(telegram.sendLockerService({ branchId: locker.branchId, branch: locker.branch, locker: locker.number, status: "EMPTY", reason: locker.serviceReason, createdBy: user }), { branchId: locker.branchId, userId: user.id, entityType: "Locker", entityId: id });
   return updated;
 };
 
 const transfer = async (user, data) => {
   return prisma.$transaction(async (tx) => {
-    const order = await tx.order.findUnique({ where: { id: data.orderId }, include: { items: true } });
+    const order = await tx.order.findUnique({ where: { id: data.orderId }, include: { items: true, branch: { select: { id: true, name: true } } } });
     if (!order || !["ACTIVE", "DELAYED"].includes(order.status)) throw new AppError("Active order not found", 404);
     getScopedBranchId(user, order.branchId);
 
@@ -105,7 +105,7 @@ const transfer = async (user, data) => {
       newValue: { toLockerId: to.id, toLockerNumber: to.number },
       description: data.note || "Locker transferred",
     });
-    telegram.sendSafely(telegram.sendLockerTransfer({ branchId: order.branchId, from: from.number, to: to.number, order: order.orderNumber }), { branchId: order.branchId, userId: user.id, entityType: "Order", entityId: order.id });
+    telegram.sendSafely(telegram.sendLockerTransfer({ branchId: order.branchId, branch: order.branch, from: from.number, to: to.number, order: order.orderNumber, note: data.note, createdBy: user }), { branchId: order.branchId, userId: user.id, entityType: "Order", entityId: order.id });
     return result;
   });
 };

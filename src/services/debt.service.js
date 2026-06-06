@@ -6,6 +6,12 @@ const { audit } = require("./activity.service");
 const { findOpenShift, createCashMovement } = require("./cashMovement.service");
 const telegram = require("./telegram.service");
 
+const includeDebt = {
+  order: { select: { id: true, orderNumber: true, status: true } },
+  branch: { select: { id: true, name: true } },
+  closedBy: { select: { id: true, name: true, login: true } },
+};
+
 const listDebts = async (user, query) => {
   const where = {
     ...branchWhere(user, query.branchId),
@@ -22,7 +28,7 @@ const listDebts = async (user, query) => {
   }
   return prisma.debt.findMany({
     where,
-    include: { order: { select: { id: true, orderNumber: true, status: true } }, branch: { select: { id: true, name: true } }, closedBy: { select: { id: true, name: true } } },
+    include: includeDebt,
     orderBy: { createdAt: "desc" },
   });
 };
@@ -34,11 +40,14 @@ const closeDebt = async (user, id, body) => {
     if (debt.status === "CLOSED") throw new AppError("Debt is already closed", 400);
     getScopedBranchId(user, debt.branchId);
     const paidAmount = body.amount ?? debt.amount;
+    if (paidAmount <= 0) throw new AppError("Debt payment amount must be positive", 400);
+    if (paidAmount !== debt.amount) throw new AppError("Debt close amount must equal open debt amount", 400);
     const shift = await findOpenShift(tx, debt.branchId);
 
     const updated = await tx.debt.update({
       where: { id },
       data: { status: "CLOSED", closedAt: new Date(), closedById: user.id },
+      include: includeDebt,
     });
     await createCashMovement({
       tx,

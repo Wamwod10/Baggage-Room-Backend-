@@ -47,6 +47,7 @@ const openShift = async (user, body) => {
 const computeShiftReport = async (tx, shift) => {
   const movements = await tx.cashMovement.findMany({ where: { shiftId: shift.id } });
   const debts = await tx.debt.findMany({ where: { branchId: shift.branchId, createdAt: { gte: shift.openedAt, lte: new Date() } } });
+  const ordersCount = await tx.order.count({ where: { branchId: shift.branchId, createdAt: { gte: shift.openedAt, lte: new Date() } } });
 
   const inMovements = movements.filter((item) => item.direction === "IN");
   const outMovements = movements.filter((item) => item.direction === "OUT");
@@ -61,7 +62,7 @@ const computeShiftReport = async (tx, shift) => {
   const manualOut = sum(outMovements.filter((item) => item.type === "MANUAL_CORRECTION"));
   const systemExpectedCash = shift.openingCash + shift.acceptedCash + cashRevenue + manualIn - expenseAmount - inkassaAmount - manualOut;
 
-  return { totalRevenue, cashRevenue, cardRevenue, transferRevenue, debtAmount, expenseAmount, inkassaAmount, systemExpectedCash };
+  return { totalRevenue, cashRevenue, cardRevenue, transferRevenue, debtAmount, expenseAmount, inkassaAmount, systemExpectedCash, ordersCount };
 };
 
 const closeShift = async (user, id, body) => {
@@ -69,7 +70,7 @@ const closeShift = async (user, id, body) => {
     const shift = await tx.shift.findUnique({ where: { id } });
     if (!shift || shift.status !== "OPEN") throw new AppError("Bu filialda ochiq smena yo'q", 404);
     getScopedBranchId(user, shift.branchId);
-    const report = await computeShiftReport(tx, shift);
+    const { ordersCount, ...report } = await computeShiftReport(tx, shift);
     const closingCash = body.closingCash ?? report.systemExpectedCash;
     const updated = await tx.shift.update({
       where: { id },
@@ -84,9 +85,10 @@ const closeShift = async (user, id, body) => {
       },
       include,
     });
-    await audit({ tx, branchId: shift.branchId, userId: user.id, entityType: "Shift", entityId: id, action: "SHIFT_CLOSE", oldValue: shift, newValue: updated, description: "Shift closed" });
-    telegram.sendSafely(telegram.sendShiftClose(updated), { branchId: shift.branchId, userId: user.id, entityType: "Shift", entityId: id });
-    return updated;
+    const result = { ...updated, ordersCount };
+    await audit({ tx, branchId: shift.branchId, userId: user.id, entityType: "Shift", entityId: id, action: "SHIFT_CLOSE", oldValue: shift, newValue: result, description: "Shift closed" });
+    telegram.sendSafely(telegram.sendShiftClose(result), { branchId: shift.branchId, userId: user.id, entityType: "Shift", entityId: id });
+    return result;
   });
 };
 

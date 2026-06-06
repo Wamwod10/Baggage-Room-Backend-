@@ -1,4 +1,4 @@
-const { formatCurrency: formatCurrencyRaw, currencyFractionDigits } = require("./money");
+const { currencyFractionDigits } = require("./money");
 
 const safe = (value, fallback = "-") => {
   if (value === undefined || value === null) return fallback;
@@ -6,34 +6,29 @@ const safe = (value, fallback = "-") => {
   return value;
 };
 
-const isLikelyId = (s = "") => {
-  if (typeof s !== "string") return false;
-  const trimmed = s.trim();
-  if (trimmed.length >= 8 && !/\s/.test(trimmed) && /^[A-Za-z0-9\-_]+$/.test(trimmed)) return true;
-  return false;
+const isLikelyDatabaseId = (value = "") => {
+  if (typeof value !== "string") return false;
+  const trimmed = value.trim();
+  return trimmed.length >= 12 && !/\s/.test(trimmed) && /^[A-Za-z0-9_-]+$/.test(trimmed);
 };
 
-const formatCurrency = (amount, currency = "UZS") => {
-  try {
-    const raw = formatCurrencyRaw(amount, currency, "uz-UZ");
-    if ((currency || "").toUpperCase() === "UZS") {
-      return raw.replace(/UZS/i, "so'm");
-    }
-    return raw;
-  } catch {
-    const digits = currencyFractionDigits[currency] ?? 2;
-    const major = Number(amount || 0) / 10 ** digits;
-    const num = new Intl.NumberFormat("ru-RU", { minimumFractionDigits: digits, maximumFractionDigits: digits }).format(major);
-    return `${num} ${currency}`;
-  }
+const cleanText = (value, fallback = "-") => {
+  const result = safe(value, fallback);
+  if (typeof result === "string" && isLikelyDatabaseId(result)) return fallback;
+  return result;
 };
 
 const formatMoney = (amount, currency = "UZS") => {
-  try {
-    return formatCurrency(amount, currency);
-  } catch {
-    return `${Number(amount || 0).toLocaleString("ru-RU")} ${currency}`;
-  }
+  const code = (currency || "UZS").toUpperCase();
+  const digits = currencyFractionDigits[code] ?? 2;
+  const major = Number(amount || 0) / 10 ** digits;
+  const formatted = new Intl.NumberFormat("ru-RU", {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  }).format(major).replace(/[\u00a0\u202f]/g, " ");
+
+  if (code === "UZS") return `${formatted} so'm`;
+  return `${formatted} ${code}`;
 };
 
 const formatDate = (date) => {
@@ -45,379 +40,290 @@ const formatDate = (date) => {
 };
 
 const formatPayment = (payment) => {
-  if (!payment) return "-";
-  const p = String(payment).toLowerCase();
-  if (p.includes("cash") || p.includes("naqd")) return "Naqd 💵";
-  if (p.includes("card") || p.includes("karta") || p.includes("terminal")) return "Karta 💳";
-  if (p.includes("transfer") || p.includes("o'") || p.includes("otkaz") || p.includes("o'tkaz")) return "O'tkazma 🏦";
-  if (p.includes("debt") || p.includes("qarz")) return "Qarz 📝";
-  return "-";
+  switch (String(payment || "").toUpperCase()) {
+    case "CASH":
+      return "Naqd";
+    case "CARD":
+      return "Karta";
+    case "TRANSFER":
+      return "O'tkazma";
+    case "DEBT":
+      return "Qarz";
+    default:
+      return "-";
+  }
 };
 
 const formatBranch = (branch) => {
   if (!branch) return "-";
-  if (typeof branch === "object") return safe(branch.name || branch.title || branch.displayName, "-");
-  if (typeof branch === "string") {
-    if (isLikelyId(branch)) return "-";
-    return branch;
-  }
-  return "-";
+  if (typeof branch === "object") return cleanText(branch.name || branch.title || branch.displayName);
+  return cleanText(branch);
 };
 
 const formatAdmin = (user) => {
   if (!user) return "-";
-  if (typeof user === "string") return user;
-  return safe(user.fullName || user.name || user.login || user.adminName, "-");
+  if (typeof user === "object") return cleanText(user.name || user.fullName || user.login || user.adminName);
+  return cleanText(user);
 };
 
+const formatLockerNumber = (value) => {
+  const number = cleanText(value);
+  return number === "-" ? "-" : `№${number}`;
+};
+
+const orderNumber = (order = {}) => cleanText(order.orderNumber || order.displayId);
+
 const orderMessage = (order = {}) => {
-  const orderNumber = safe(order.orderNumber || order.displayId || "-");
-  const branch = formatBranch(order.branch || order.branchName || order.branchId);
-  const admin = order.createdBy ? formatAdmin(order.createdBy) : formatAdmin(order.admin);
-  const client = safe(order.clientName || order.client || "-");
-  const phone = safe(order.phone || "-");
   const items = Array.isArray(order.items) ? order.items : [];
-
-  const lockerLines = items.length
-    ? items.map((it) => `• №${safe(it.lockerNumber || it.locker?.number || it.lockerId)} | ${safe(it.size)} | ${formatMoney(it.finalPrice || it.finalAmount || it.finalPrice, it.currency || order.currency)}`)
-    : [];
-
-  const totalCount = items.length || safe(order.count || 0, 0);
-  const tariff = safe(order.tariffHours || order.customHours || order.tariff || "-");
-  const basePrice = formatMoney(order.calculatedAmount || order.originalPrice || order.finalPrice, order.currency);
-  const discount = formatMoney(order.discountAmount || order.discount || 0, order.currency);
-  const final = formatMoney(order.finalAmount || order.realPaidAmount || order.finalPrice, order.currency);
-  const payment = formatPayment(order.paymentType || order.payment || order.payMethod);
-  const checkIn = formatDate(order.checkIn || order.createdAt);
-  const checkOut = formatDate(order.plannedCheckOut || order.checkOut || order.plannedCheckOut);
+  const lockerLines = items.map((item) => {
+    const locker = formatLockerNumber(item.lockerNumber || item.locker?.number);
+    const size = cleanText(item.size);
+    const price = formatMoney(item.finalPrice || item.finalAmount || 0, item.currency || order.currency);
+    return `• ${locker} | ${size} | ${price}`;
+  });
 
   return [
     "🧳 Yangi bagaj qabul qilindi",
     "",
-    `🧾 Buyurtma:\n${orderNumber}`,
+    `🧾 Buyurtma:\n${orderNumber(order)}`,
     "",
-    `🏢 Filial:\n${branch}`,
+    `🏢 Filial:\n${formatBranch(order.branch || order.branchName)}`,
     "",
-    `👨‍💼 Admin:\n${admin}`,
+    `👤 Admin:\n${formatAdmin(order.createdBy || order.admin)}`,
     "",
-    `👤 Mijoz:\n${client}`,
+    `👥 Mijoz:\n${cleanText(order.clientName || order.client)}`,
     "",
-    `📞 Telefon:\n${phone}`,
+    `☎️ Telefon:\n${cleanText(order.phone)}`,
     "",
     lockerLines.length ? ["🔐 Yacheykalar:", ...lockerLines].join("\n") : null,
     "",
-    `📦 Jami:\n${totalCount} ta bagaj`,
+    `📦 Jami:\n${items.length || Number(order.count || 0)} ta bagaj`,
     "",
-    `⏳ Tarif:\n${tariff} soat`,
+    `⏳ Tarif:\n${cleanText(order.tariffHours || order.customHours)} soat`,
     "",
-    `💰 Narx:\n${basePrice}`,
+    `💰 Narx:\n${formatMoney(order.calculatedAmount || 0, order.currency)}`,
     "",
-    `🎁 Chegirma:\n${discount}`,
+    `🎁 Chegirma:\n${formatMoney(order.discountAmount || 0, order.currency)}`,
     "",
-    `💵 Yakuniy:\n${final}`,
+    `💵 Yakuniy:\n${formatMoney(order.finalAmount || 0, order.currency)}`,
     "",
-    `💳 To'lov:\n${payment}`,
+    `💳 To'lov:\n${formatPayment(order.paymentType)}`,
     "",
-    `🕒 Qabul:\n${checkIn}`,
+    `🕘 Qabul:\n${formatDate(order.checkIn || order.createdAt)}`,
     "",
-    `🕘 Tugash:\n${checkOut}`,
+    `🕘 Tugash:\n${formatDate(order.plannedCheckOut)}`,
   ]
     .filter(Boolean)
     .join("\n");
 };
 
-const shiftOpenedMessage = (shift = {}) => {
-  const branch = formatBranch(shift.branch || shift.branchName || shift.branchId);
-  const admin = formatAdmin(shift.openedBy || shift.admin || shift.openedByName);
-  const openingCash = formatMoney(shift.openingCash || shift.acceptedCash || 0, shift.currency || "UZS");
-  const accepted = formatMoney(shift.acceptedCash || shift.acceptedAmount || 0, shift.currency || "UZS");
-  const openedAt = formatDate(shift.openedAt || shift.createdAt);
+const shiftOpenedMessage = (shift = {}) => [
+  "🟢 Kassa ochildi",
+  "",
+  `🏢 Filial:\n${formatBranch(shift.branch || shift.branchName)}`,
+  "",
+  `👤 Admin:\n${formatAdmin(shift.openedBy || shift.admin || shift.openedByName)}`,
+  "",
+  `💵 Boshlang'ich kassa:\n${formatMoney(shift.openingCash || 0, shift.currency || "UZS")}`,
+  "",
+  `💰 Oldingi smenadan qabul:\n${formatMoney(shift.acceptedCash || 0, shift.currency || "UZS")}`,
+  "",
+  `🕘 Ochildi:\n${formatDate(shift.openedAt || shift.createdAt)}`,
+].join("\n");
 
-  return [
-    "🟢 Kassa ochildi",
-    "",
-    `🏢 Filial:\n${branch}`,
-    "",
-    `👨‍💼 Admin:\n${admin}`,
-    "",
-    `💵 Boshlang'ich kassa:\n${openingCash}`,
-    "",
-    `💰 Oldingi smenadan qabul:\n${accepted}`,
-    "",
-    `🕘 Ochilgan vaqt:\n${openedAt}`,
-  ].join("\n");
-};
-
-const shiftClosedMessage = (shift = {}) => {
-  const branch = formatBranch(shift.branch || shift.branchName || shift.branchId);
-  const closedBy = formatAdmin(shift.closedBy || shift.closedByName || shift.handoverToName || shift.handoverTo);
-  const openedBy = formatAdmin(shift.openedBy || shift.admin || shift.openedByName);
-  const orders = safe(shift.report?.orders || shift.ordersCount || shift.orders || 0, 0);
-  const totalRevenue = formatMoney(shift.totalRevenue || shift.report?.totalRevenue || 0, shift.currency || "UZS");
-  const cash = formatMoney(shift.cashRevenue || shift.report?.cashRevenue || 0, shift.currency || "UZS");
-  const card = formatMoney(shift.cardRevenue || shift.report?.cardRevenue || 0, shift.currency || "UZS");
-  const transfer = formatMoney(shift.transferRevenue || shift.report?.transferRevenue || 0, shift.currency || "UZS");
-  const expense = formatMoney(shift.expenseAmount || shift.report?.expenseAmount || 0, shift.currency || "UZS");
-  const inkassa = formatMoney(shift.inkassaAmount || shift.report?.inkassaAmount || 0, shift.currency || "UZS");
-  const debt = formatMoney(shift.debtAmount || shift.report?.debtAmount || 0, shift.currency || "UZS");
-  const cashLeft = formatMoney(shift.closingCash || shift.cashLeft || shift.report?.systemExpectedCash || 0, shift.currency || "UZS");
-  const shiftTime = `${shift.shiftTime || "-"}`;
-
-  return [
-    "🔴 Smena yopildi",
-    "",
-    `🏢 Filial:\n${branch}`,
-    "",
-    `👨‍💼 Topshirgan:\n${openedBy}`,
-    "",
-    `👤 Qabul qiluvchi:\n${closedBy}`,
-    "",
-    "::::::::::::::::::::::::",
-    "",
-    `📦 Buyurtmalar:\n${orders} ta`,
-    "",
-    `💰 Umumiy savdo:\n${totalRevenue}`,
-    "",
-    `💵 Naqd:\n${cash}`,
-    "",
-    `💳 Karta:\n${card}`,
-    "",
-    `🏦 O'tkazma:\n${transfer}`,
-    "",
-    "::::::::::::::::::::::::",
-    "",
-    `💸 Xarajat:\n${expense}`,
-    "",
-    `🏦 Inkassa:\n${inkassa}`,
-    "",
-    `📝 Qarz:\n${debt}`,
-    "",
-    "::::::::::::::::::::::::",
-    "",
-    `💰 Kassada qolgan:\n${cashLeft}`,
-    "",
-    `🕘 Smena vaqti:\n${shiftTime}`,
-  ].join("\n");
-};
+const shiftClosedMessage = (shift = {}) => [
+  "🔴 Smena yopildi",
+  "",
+  `🏢 Filial:\n${formatBranch(shift.branch || shift.branchName)}`,
+  "",
+  `👤 Topshirgan:\n${formatAdmin(shift.openedBy || shift.admin || shift.openedByName)}`,
+  "",
+  `👤 Yopgan:\n${formatAdmin(shift.closedBy || shift.closedByName)}`,
+  "",
+  "::::::::::::::::::::::::",
+  "",
+  `📦 Buyurtmalar:\n${Number(shift.ordersCount || shift.orders || 0)} ta`,
+  "",
+  `💰 Umumiy tushum:\n${formatMoney(shift.totalRevenue || 0, shift.currency || "UZS")}`,
+  "",
+  `💵 Naqd:\n${formatMoney(shift.cashRevenue || 0, shift.currency || "UZS")}`,
+  "",
+  `💳 Karta:\n${formatMoney(shift.cardRevenue || 0, shift.currency || "UZS")}`,
+  "",
+  `🏦 O'tkazma:\n${formatMoney(shift.transferRevenue || 0, shift.currency || "UZS")}`,
+  "",
+  "::::::::::::::::::::::::",
+  "",
+  `💸 Xarajat:\n${formatMoney(shift.expenseAmount || 0, shift.currency || "UZS")}`,
+  "",
+  `🏦 Inkassa:\n${formatMoney(shift.inkassaAmount || 0, shift.currency || "UZS")}`,
+  "",
+  `📝 Ochiq qarz:\n${formatMoney(shift.debtAmount || 0, shift.currency || "UZS")}`,
+  "",
+  "::::::::::::::::::::::::",
+  "",
+  `💰 Kassada qolgan:\n${formatMoney(shift.closingCash || shift.systemExpectedCash || 0, shift.currency || "UZS")}`,
+  "",
+  `🕘 Yopildi:\n${formatDate(shift.closedAt || new Date())}`,
+].join("\n");
 
 const orderCancelledMessage = (order = {}) => {
-  const orderNumber = safe(order.orderNumber || order.displayId || "-");
-  const branch = formatBranch(order.branch || order.branchName || order.branchId);
-  const client = safe(order.clientName || order.client || "-");
-  const locker = (order.items && order.items[0]) ? `№${order.items[0].lockerNumber || order.items[0].locker?.number}` : (order.lockerNumber ? `№${order.lockerNumber}` : "-");
-  const reason = safe(order.cancelReason || order.cancellationReason || order.reason || "-");
-  const admin = formatAdmin(order.cancelledBy || order.cancelledByName || order.admin || order.createdBy);
-  const time = formatDate(order.cancelledAt || order.updatedAt || order.createdAt);
+  const firstItem = Array.isArray(order.items) ? order.items[0] : null;
 
   return [
     "❌ Buyurtma bekor qilindi",
     "",
-    `🧾 Buyurtma:\n${orderNumber}`,
+    `🧾 Buyurtma:\n${orderNumber(order)}`,
     "",
-    `🏢 Filial:\n${branch}`,
+    `🏢 Filial:\n${formatBranch(order.branch || order.branchName)}`,
     "",
-    `👤 Mijoz:\n${client}`,
+    `👥 Mijoz:\n${cleanText(order.clientName || order.client)}`,
     "",
-    `🔐 Yacheyka:\n${locker}`,
+    `🔐 Yacheyka:\n${formatLockerNumber(firstItem?.lockerNumber || firstItem?.locker?.number || order.lockerNumber)}`,
     "",
-    `📝 Sabab:\n${reason}`,
+    `📝 Sabab:\n${cleanText(order.cancelReason || order.cancellationReason || order.reason)}`,
     "",
-    `👨‍💼 Bekor qildi:\n${admin}`,
+    `👤 Bekor qildi:\n${formatAdmin(order.cancelledBy || order.cancelledByName || order.admin || order.createdBy)}`,
     "",
-    `🕒 Vaqt:\n${time}`,
+    `🕘 Vaqt:\n${formatDate(order.cancelledAt || order.updatedAt || order.createdAt)}`,
   ].join("\n");
 };
 
 const delayedBaggageMessage = (order = {}) => {
-  const orderNumber = safe(order.orderNumber || order.displayId || "-");
-  const branch = formatBranch(order.branch || order.branchName || order.branchId);
-  const client = safe(order.clientName || order.client || "-");
-  const phone = safe(order.phone || "-");
-  const locker = (order.items && order.items[0]) ? `№${order.items[0].lockerNumber || order.items[0].locker?.number}` : "-";
-  const planned = formatDate(order.plannedCheckOut || order.checkOut);
-  const diffHours = order.delayHours || order.delay || "-";
-  const extra = formatMoney(order.overtimeAmount || order.extraCharge || 0, order.currency || "UZS");
+  const firstItem = Array.isArray(order.items) ? order.items[0] : null;
 
   return [
-    "⚠️ Kechikkan bagaj!",
+    "⚠️ Kechikkan bagaj",
     "",
-    `🧾 Buyurtma:\n${orderNumber}`,
+    `🧾 Buyurtma:\n${orderNumber(order)}`,
     "",
-    `🏢 Filial:\n${branch}`,
+    `🏢 Filial:\n${formatBranch(order.branch || order.branchName)}`,
     "",
-    `👤 Mijoz:\n${client}`,
+    `👥 Mijoz:\n${cleanText(order.clientName || order.client)}`,
     "",
-    `📞 Telefon:\n${phone}`,
+    `☎️ Telefon:\n${cleanText(order.phone)}`,
     "",
-    `🔐 Yacheyka:\n${locker}`,
+    `🔐 Yacheyka:\n${formatLockerNumber(firstItem?.lockerNumber || firstItem?.locker?.number || order.lockerNumber)}`,
     "",
-    `⏰ Tugashi kerak edi:\n${planned}`,
+    `⏰ Tugashi kerak edi:\n${formatDate(order.plannedCheckOut)}`,
     "",
-    `⌛ Kechikdi:\n${diffHours} soat`,
-    "",
-    `💰 Qo'shimcha hisob:\n${extra}`,
+    `💰 Qo'shimcha hisob:\n${formatMoney(order.overtimeAmount || order.extraCharge || 0, order.currency || "UZS")}`,
   ].join("\n");
 };
 
-const overtimePaymentMessage = (order = {}) => {
-  const orderNumber = safe(order.orderNumber || order.displayId || "-");
-  const client = safe(order.clientName || order.client || "-");
-  const hours = safe(order.overtimeHours || order.extraHours || "-");
-  const amount = formatMoney(order.overtimeAmount || order.amount || 0, order.currency || "UZS");
-  const payment = formatPayment(order.paymentType || order.payment);
-  const admin = formatAdmin(order.pickedUpBy || order.admin || order.createdBy);
+const overtimePaymentMessage = (order = {}) => [
+  "⏰ Overtime to'lovi",
+  "",
+  `🧾 Buyurtma:\n${orderNumber(order)}`,
+  "",
+  `🏢 Filial:\n${formatBranch(order.branch || order.branchName)}`,
+  "",
+  `👥 Mijoz:\n${cleanText(order.clientName || order.client)}`,
+  "",
+  `⌛ Ortiqcha vaqt:\n${cleanText(order.overtimeHours || 0)} soat`,
+  "",
+  `💵 To'landi:\n${formatMoney(order.overtimeAmount || 0, order.currency || "UZS")}`,
+  "",
+  `💳 To'lov:\n${formatPayment(order.overtimePaymentType || order.paymentType)}`,
+  "",
+  `👤 Admin:\n${formatAdmin(order.pickedUpBy || order.admin || order.createdBy)}`,
+].join("\n");
 
-  return [
-    "⏰ Qo'shimcha vaqt to'lovi",
-    "",
-    `🧾 Buyurtma:\n${orderNumber}`,
-    "",
-    `👤 Mijoz:\n${client}`,
-    "",
-    `⌛ Ortiqcha vaqt:\n${hours} soat`,
-    "",
-    `💵 To'landi:\n${amount}`,
-    "",
-    `💳 To'lov:\n${payment}`,
-    "",
-    `👨‍💼 Admin:\n${admin}`,
-  ].join("\n");
-};
+const debtClosedMessage = (debt = {}) => [
+  "✅ Qarz yopildi",
+  "",
+  `🧾 Buyurtma:\n${cleanText(debt.orderNumber || debt.order?.orderNumber)}`,
+  "",
+  `🏢 Filial:\n${formatBranch(debt.branch || debt.branchName)}`,
+  "",
+  `👥 Mijoz:\n${cleanText(debt.clientName || debt.client)}`,
+  "",
+  `☎️ Telefon:\n${cleanText(debt.phone)}`,
+  "",
+  `💰 Qarz summa:\n${formatMoney(debt.amount || 0, debt.currency || "UZS")}`,
+  "",
+  `💳 To'lov:\n${formatPayment(debt.paymentType || debt.payment)}`,
+  "",
+  `👤 Yopdi:\n${formatAdmin(debt.closedBy || debt.admin || debt.closedByName)}`,
+].join("\n");
 
-const debtClosedMessage = (debt = {}) => {
-  const orderNumber = safe(debt.orderNumber || debt.order?.orderNumber || "-");
-  const client = safe(debt.clientName || debt.client || "-");
-  const phone = safe(debt.phone || "-");
-  const amount = formatMoney(debt.amount || 0, debt.currency || "UZS");
-  const payment = formatPayment(debt.paymentType || debt.payment);
-  const admin = formatAdmin(debt.closedBy || debt.admin || debt.closedByName);
+const inkassaMessage = (inkassa = {}) => [
+  "🏦 Inkassa qilindi",
+  "",
+  `🏢 Filial:\n${formatBranch(inkassa.branch || inkassa.branchName)}`,
+  "",
+  `👤 Kimga:\n${cleanText(inkassa.receiverName || inkassa.receiver || inkassa.recipient)}`,
+  "",
+  `💰 Summa:\n${formatMoney(inkassa.amount || 0, inkassa.currency || "UZS")}`,
+  "",
+  `📝 Izoh:\n${cleanText(inkassa.note || inkassa.description)}`,
+  "",
+  `👤 Admin:\n${formatAdmin(inkassa.createdBy || inkassa.admin || inkassa.adminName)}`,
+  "",
+  `🕘 Sana:\n${formatDate(inkassa.createdAt || new Date())}`,
+].join("\n");
 
-  return [
-    "✅ Qarz yopildi",
-    "",
-    `🧾 Buyurtma:\n${orderNumber}`,
-    "",
-    `👤 Mijoz:\n${client}`,
-    "",
-    `📞 Telefon:\n${phone}`,
-    "",
-    `💰 Qarz summa:\n${amount}`,
-    "",
-    `💳 To'lov:\n${payment}`,
-    "",
-    `👨‍💼 Yopdi:\n${admin}`,
-  ].join("\n");
-};
-
-const inkassaMessage = (inkassa = {}) => {
-  const branch = formatBranch(inkassa.branch || inkassa.branchName || inkassa.branchId);
-  const to = safe(inkassa.receiverName || inkassa.receiver || inkassa.recipient || inkassa.handoverTo);
-  const amount = formatMoney(inkassa.amount || 0, inkassa.currency || "UZS");
-  const note = safe(inkassa.note || inkassa.description || "-");
-  const admin = formatAdmin(inkassa.createdBy || inkassa.admin || inkassa.adminName || inkassa.createdById);
-  const date = formatDate(inkassa.createdAt || inkassa.createdAt || new Date());
-
-  return [
-    "🏦 Inkassa qilindi",
-    "",
-    `🏢 Filial:\n${branch}`,
-    "",
-    `👤 Kimga:\n${to}`,
-    "",
-    `💰 Summa:\n${amount}`,
-    "",
-    `📝 Izoh:\n${note}`,
-    "",
-    `👨‍💼 Admin:\n${admin}`,
-    "",
-    `🕒 Sana:\n${date}`,
-  ].join("\n");
-};
-
-const expenseMessage = (expense = {}) => {
-  const branch = formatBranch(expense.branch || expense.branchName || expense.branchId);
-  const category = safe(expense.category || expense.type || "-");
-  const amount = formatMoney(expense.amount || 0, expense.currency || "UZS");
-  const reason = safe(expense.note || expense.reason || expense.description || "-");
-  const admin = formatAdmin(expense.createdBy || expense.admin || expense.adminName);
-
-  return [
-    "💸 Xarajat qo'shildi",
-    "",
-    `🏢 Filial:\n${branch}`,
-    "",
-    `📂 Turi:\n${category}`,
-    "",
-    `💰 Summa:\n${amount}`,
-    "",
-    `📝 Sabab:\n${reason}`,
-    "",
-    `👨‍💼 Admin:\n${admin}`,
-  ].join("\n");
-};
+const expenseMessage = (expense = {}) => [
+  "💸 Xarajat qo'shildi",
+  "",
+  `🏢 Filial:\n${formatBranch(expense.branch || expense.branchName)}`,
+  "",
+  `📂 Turi:\n${cleanText(expense.category || expense.type)}`,
+  "",
+  `💰 Summa:\n${formatMoney(expense.amount || 0, expense.currency || "UZS")}`,
+  "",
+  `📝 Sabab:\n${cleanText(expense.reason || expense.note || expense.description)}`,
+  "",
+  `👤 Admin:\n${formatAdmin(expense.createdBy || expense.admin || expense.adminName)}`,
+].join("\n");
 
 const orderEditMessage = (order = {}, changes = {}) => {
-  const orderNumber = safe(order.orderNumber || order.displayId || "-");
-  const admin = formatAdmin(order.updatedBy || order.admin || order.createdBy);
-  const changesLines = Object.entries(changes || {}).map(([k, v]) => `${k}: ${safe(v)}`).join("\n") || "-";
-  const time = formatDate(order.updatedAt || new Date());
+  const lines = Object.entries(changes || {})
+    .filter(([, value]) => value !== undefined)
+    .map(([key, value]) => `• ${key}: ${cleanText(value)}`);
 
   return [
     "✏️ Buyurtma o'zgartirildi",
     "",
-    `🧾 Buyurtma:\n${orderNumber}`,
+    `🧾 Buyurtma:\n${orderNumber(order)}`,
     "",
-    `👨‍💼 Admin:\n${admin}`,
+    `🏢 Filial:\n${formatBranch(order.branch || order.branchName)}`,
     "",
-    `O'zgargan:\n${changesLines}`,
+    `👤 Admin:\n${formatAdmin(order.updatedBy || order.admin || order.createdBy)}`,
     "",
-    `🕒 Sana:\n${time}`,
+    `O'zgargan:\n${lines.length ? lines.join("\n") : "-"}`,
+    "",
+    `🕘 Sana:\n${formatDate(order.updatedAt || new Date())}`,
   ].join("\n");
 };
 
-const lockerTransferMessage = (payload = {}, transfer = {}) => {
-  const branch = formatBranch(payload.branch || payload.branchName || payload.branchId);
-  const orderNumber = safe(payload.orderNumber || payload.order || "-");
-  const from = transfer.from ? `№${transfer.from.number} ${transfer.from.size || ""}` : transfer.from;
-  const to = transfer.to ? `№${transfer.to.number} ${transfer.to.size || ""}` : transfer.to;
-  const reason = safe(transfer.reason || payload.reason || "-");
-  const admin = formatAdmin(transfer.admin || payload.admin || payload.createdBy);
+const lockerTransferMessage = (payload = {}, transfer = {}) => [
+  "🔄 Yacheyka almashtirildi",
+  "",
+  `🏢 Filial:\n${formatBranch(payload.branch || payload.branchName)}`,
+  "",
+  `🧾 Buyurtma:\n${cleanText(payload.orderNumber || payload.order)}`,
+  "",
+  `Eski:\n${formatLockerNumber(transfer.from?.number || payload.from)}`,
+  "",
+  `Yangi:\n${formatLockerNumber(transfer.to?.number || payload.to)}`,
+  "",
+  `📝 Sabab:\n${cleanText(transfer.reason || payload.reason || payload.note)}`,
+  "",
+  `👤 Admin:\n${formatAdmin(transfer.admin || payload.admin || payload.createdBy)}`,
+].join("\n");
 
-  return [
-    "🔄 Yacheyka almashtirildi",
-    "",
-    `🏢 Filial:\n${branch}`,
-    "",
-    `🧾 Buyurtma:\n${orderNumber}`,
-    "",
-    `Eski:\n${from}`,
-    "",
-    `Yangi:\n${to}`,
-    "",
-    `📝 Sabab:\n${reason}`,
-    "",
-    `👨‍💼 Admin:\n${admin}`,
-  ].join("\n");
-};
-
-const lockerServiceMessage = (payload = {}) => {
-  const branch = formatBranch(payload.branch || payload.branchName || payload.branchId);
-  const locker = payload.locker ? `№${payload.locker}` : payload.lockerId ? `№${payload.lockerId}` : "-";
-  const reason = safe(payload.reason || payload.note || "-");
-  const admin = formatAdmin(payload.admin || payload.createdBy);
-
-  return [
-    "🔒 Yacheyka servisga olindi",
-    "",
-    `🏢 Filial:\n${branch}`,
-    "",
-    `🔐 Yacheyka:\n${locker}`,
-    "",
-    `📝 Sabab:\n${reason}`,
-    "",
-    `👨‍💼 Admin:\n${admin}`,
-  ].join("\n");
-};
+const lockerServiceMessage = (payload = {}) => [
+  payload.status === "EMPTY" ? "✅ Yacheyka servisdan chiqarildi" : "🔒 Yacheyka servisga olindi",
+  "",
+  `🏢 Filial:\n${formatBranch(payload.branch || payload.branchName)}`,
+  "",
+  `🔐 Yacheyka:\n${formatLockerNumber(payload.locker || payload.lockerNumber)}`,
+  "",
+  `📝 Sabab:\n${cleanText(payload.reason || payload.note)}`,
+  "",
+  `👤 Admin:\n${formatAdmin(payload.admin || payload.createdBy)}`,
+].join("\n");
 
 module.exports = {
   orderMessage,

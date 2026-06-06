@@ -14,7 +14,6 @@ const {
   lockerServiceMessage,
 } = require("../utils/formatTelegramMessage");
 const { AppError } = require("../utils/response");
-const { formatCurrency } = require("../utils/money");
 const logger = require("../utils/logger");
 
 const eventFlag = {
@@ -62,6 +61,7 @@ const sendOvertimePayment = (order) => sendBranchEvent(order.branchId, "overtime
 const sendDebtClosed = (debt) => sendBranchEvent(debt.branchId, "debtClosed", debtClosedMessage(debt));
 const sendInkassa = (inkassa) => sendBranchEvent(inkassa.branchId, "inkassa", inkassaMessage(inkassa));
 const sendExpense = (expense) => sendBranchEvent(expense.branchId, "expense", expenseMessage(expense));
+const sendOrderEdit = (order, changes) => sendBranchEvent(order.branchId, "orderEdit", orderEditMessage(order, changes));
 const sendLockerTransfer = (payload, transfer) => sendBranchEvent(payload.branchId || transfer.branchId, "lockerTransfer", lockerTransferMessage(payload, transfer));
 const sendLockerService = (payload) => sendBranchEvent(payload.branchId, "lockerService", lockerServiceMessage(payload));
 const testSend = async (branchId) => sendBranchEvent(branchId, "newOrder", "🧾 Test xabari: Telegram sozlamalari tekshirilmoqda");
@@ -98,6 +98,7 @@ module.exports = {
   sendDebtClosed,
   sendInkassa,
   sendExpense,
+  sendOrderEdit,
   sendLockerTransfer,
   sendLockerService,
   testSend,
