@@ -19,7 +19,7 @@ const listShifts = async (user, query) => {
 
 const currentShift = async (user, query = {}) => {
   const branchId = getScopedBranchId(user, query.branchId || user.branchId);
-  if (!branchId) throw new AppError("branchId is required", 400);
+  if (!branchId) return null;
   return prisma.shift.findFirst({ where: { branchId, status: "OPEN" }, include, orderBy: { openedAt: "desc" } });
 };
 
@@ -67,7 +67,7 @@ const computeShiftReport = async (tx, shift) => {
 const closeShift = async (user, id, body) => {
   return prisma.$transaction(async (tx) => {
     const shift = await tx.shift.findUnique({ where: { id } });
-    if (!shift || shift.status !== "OPEN") throw new AppError("Open shift not found", 404);
+    if (!shift || shift.status !== "OPEN") throw new AppError("Bu filialda ochiq smena yo'q", 404);
     getScopedBranchId(user, shift.branchId);
     const report = await computeShiftReport(tx, shift);
     const closingCash = body.closingCash ?? report.systemExpectedCash;
