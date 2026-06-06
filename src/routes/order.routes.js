@@ -22,7 +22,7 @@ router.post(
   validate(
     z.object({
       body: z.object({
-        branchId: z.string().optional(),
+        branchId: z.string().min(1, "branchId is required"),
         clientName: z.string().trim().min(2),
         phone,
         passport: z.string().optional(),
@@ -39,8 +39,19 @@ router.post(
         checkIn: z.string().datetime().optional(),
         plannedCheckOut: z.string().datetime().optional(),
         note: z.string().optional(),
-        lockerIds: z.array(z.string()).optional(),
+        lockerIds: z.array(z.string().min(1)).optional(),
         items: z.array(orderItem).optional(),
+      }).superRefine((body, ctx) => {
+        const hasItems = Array.isArray(body.items) && body.items.length > 0;
+        const hasLockerIds = Array.isArray(body.lockerIds) && body.lockerIds.length > 0;
+
+        if (!hasItems && !hasLockerIds) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["items"],
+            message: "items or lockerIds must contain at least one locker",
+          });
+        }
       }),
     })
   ),

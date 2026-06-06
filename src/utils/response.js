@@ -1,5 +1,13 @@
 const success = (res, data = null, statusCode = 200) => {
-  return res.status(statusCode).json({ success: true, data });
+  if (data && Array.isArray(data.items) && data.pagination) {
+    return res.status(statusCode).json({
+      success: true,
+      data: data.items,
+      pagination: data.pagination,
+    });
+  }
+
+  return res.status(statusCode).json({ success: true, data: data === undefined ? null : data });
 };
 
 const fail = (res, message = "Something went wrong", statusCode = 500, errors = []) => {

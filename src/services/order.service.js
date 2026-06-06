@@ -20,11 +20,27 @@ const includeOrder = {
 };
 
 const normalizeOrderItems = (body) => {
-  if (Array.isArray(body.items) && body.items.length) return body.items;
+  if (Array.isArray(body.items) && body.items.length) {
+    const invalid = body.items.find((item) => !item || !item.lockerId);
+    if (invalid) {
+      throw new AppError("lockerId is required for every item", 400, [
+        { field: "items.lockerId", message: "lockerId is required" },
+      ]);
+    }
+    return body.items;
+  }
   if (Array.isArray(body.lockerIds) && body.lockerIds.length) {
+    const invalid = body.lockerIds.find((lockerId) => !lockerId);
+    if (invalid) {
+      throw new AppError("lockerId is required", 400, [
+        { field: "lockerIds", message: "lockerId is required" },
+      ]);
+    }
     return body.lockerIds.map((lockerId) => ({ lockerId }));
   }
-  throw new AppError("At least one locker is required", 400);
+  throw new AppError("At least one locker is required", 400, [
+    { field: "items", message: "items must be a non-empty array" },
+  ]);
 };
 
 const listOrders = async (user, query) => {
@@ -55,9 +71,24 @@ const getOrder = async (user, id) => {
 
 const createOrder = async (user, body) => {
   const warnings = [];
-  const requestedBranchId = body.branchId || user.branchId;
+  if (!body.branchId) {
+    throw new AppError("branchId is required", 400, [
+      { field: "branchId", message: "branchId is required" },
+    ]);
+  }
+  if (!body.clientName || !String(body.clientName).trim()) {
+    throw new AppError("clientName is required", 400, [
+      { field: "clientName", message: "clientName is required" },
+    ]);
+  }
+  if (!body.phone || !String(body.phone).trim()) {
+    throw new AppError("phone is required", 400, [
+      { field: "phone", message: "phone is required" },
+    ]);
+  }
+  const requestedBranchId = body.branchId;
   const branchId = getScopedBranchId(user, requestedBranchId);
-  if (!branchId) throw new AppError("branchId is required", 400);
+  if (!branchId) throw new AppError("branchId is required", 400, [{ field: "branchId", message: "branchId is required" }]);
 
   const duplicate = await prisma.order.findFirst({
     where: { branchId, phone: body.phone, status: { in: ["ACTIVE", "DELAYED"] } },
@@ -71,22 +102,49 @@ const createOrder = async (user, body) => {
 
     const inputItems = normalizeOrderItems(body);
     const lockerIds = inputItems.map((item) => item.lockerId);
-    const lockers = await tx.locker.findMany({ where: { id: { in: lockerIds }, branchId } });
-    if (lockers.length !== lockerIds.length) throw new AppError("One or more lockers were not found in this branch", 400);
+    const uniqueLockerIds = [...new Set(lockerIds)];
+    if (uniqueLockerIds.length !== lockerIds.length) {
+      throw new AppError("Duplicate lockers are not allowed", 400, [
+        { field: "items", message: "Duplicate lockers are not allowed" },
+      ]);
+    }
+    const lockers = await tx.locker.findMany({ where: { id: { in: uniqueLockerIds }, branchId } });
+    if (lockers.length !== uniqueLockerIds.length) {
+      throw new AppError("One or more lockers were not found in this branch", 400, [
+        { field: "items.lockerId", message: "Locker not found in this branch" },
+      ]);
+    }
     for (const locker of lockers) {
       if (locker.status !== "EMPTY" || locker.currentOrderId) {
-        throw new AppError(`Locker ${locker.number} is not available`, 400);
+        const reason = locker.currentOrderId ? "busy" : String(locker.status || "unavailable").toLowerCase();
+        throw new AppError(`Locker ${locker.number} is not available (${reason})`, 400, [
+          { field: "items.lockerId", lockerId: locker.id, message: "Locker is busy or in service" },
+        ]);
       }
     }
 
     const tariffs = await tx.tariff.findMany({ where: { branchId } });
     const tariffsBySize = Object.fromEntries(tariffs.map((tariff) => [tariff.size, tariff]));
     const tariffHours = Number(body.customHours || body.tariffHours);
+    if (!Number.isFinite(tariffHours) || tariffHours <= 0) {
+      throw new AppError("tariffHours is required", 400, [
+        { field: "tariffHours", message: "tariffHours must be a positive number" },
+      ]);
+    }
     const currency = body.currency || "UZS";
     const itemRows = inputItems.map((item) => {
       const locker = lockers.find((row) => row.id === item.lockerId);
+      if (!locker) {
+        throw new AppError("Locker not found", 400, [
+          { field: "items.lockerId", lockerId: item.lockerId, message: "Locker not found" },
+        ]);
+      }
       const tariff = tariffsBySize[locker.size];
-      if (!tariff) throw new AppError(`Tariff for size ${locker.size} not found`, 400);
+      if (!tariff) {
+        throw new AppError(`Tariff for size ${locker.size} not found`, 400, [
+          { field: "tariff", size: locker.size, message: `Tariff for size ${locker.size} not found` },
+        ]);
+      }
       const originalPrice = item.originalPrice ?? calculatePrice(tariff, item.tariffHours || tariffHours);
       const discountAmount = Number(item.discountAmount || 0);
       return {
