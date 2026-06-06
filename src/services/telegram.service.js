@@ -1,5 +1,18 @@
 const prisma = require("../config/prisma");
-const { orderMessage, simpleMessage } = require("../utils/formatTelegramMessage");
+const {
+  orderMessage,
+  shiftOpenedMessage,
+  shiftClosedMessage,
+  orderCancelledMessage,
+  delayedBaggageMessage,
+  overtimePaymentMessage,
+  debtClosedMessage,
+  inkassaMessage,
+  expenseMessage,
+  orderEditMessage,
+  lockerTransferMessage,
+  lockerServiceMessage,
+} = require("../utils/formatTelegramMessage");
 const { AppError } = require("../utils/response");
 const { formatCurrency } = require("../utils/money");
 const logger = require("../utils/logger");
@@ -40,18 +53,18 @@ const sendBranchEvent = async (branchId, event, text) => {
   return sendRaw(setting, text);
 };
 
-const sendNewOrder = (order) => sendBranchEvent(order.branchId, "newOrder", orderMessage("New order", order));
-const sendShiftOpen = (shift) => sendBranchEvent(shift.branchId, "shiftOpen", simpleMessage("Shift opened", { branch: shift.branchId, openingCash: shift.openingCash }));
-const sendShiftClose = (shift) => sendBranchEvent(shift.branchId, "shiftClose", simpleMessage("Shift closed", { totalRevenue: shift.totalRevenue, difference: shift.difference }));
-const sendOrderCancel = (order) => sendBranchEvent(order.branchId, "orderCancel", orderMessage("Order cancelled", order));
-const sendDelayedBaggage = (order) => sendBranchEvent(order.branchId, "delayedBaggage", orderMessage("Delayed baggage", order));
-const sendOvertimePayment = (order) => sendBranchEvent(order.branchId, "overtimePayment", orderMessage("Overtime payment", order));
-const sendDebtClosed = (debt) => sendBranchEvent(debt.branchId, "debtClosed", simpleMessage("Debt closed", { client: debt.clientName, amount: formatCurrency(debt.amount, debt.currency) }));
-const sendInkassa = (inkassa) => sendBranchEvent(inkassa.branchId, "inkassa", simpleMessage("Inkassa", { receiver: inkassa.receiverName, amount: formatCurrency(inkassa.amount, inkassa.currency) }));
-const sendExpense = (expense) => sendBranchEvent(expense.branchId, "expense", simpleMessage("Expense", { category: expense.category, amount: formatCurrency(expense.amount, expense.currency) }));
-const sendLockerTransfer = (payload) => sendBranchEvent(payload.branchId, "lockerTransfer", simpleMessage("Locker transfer", payload));
-const sendLockerService = (payload) => sendBranchEvent(payload.branchId, "lockerService", simpleMessage("Locker service", payload));
-const testSend = async (branchId) => sendBranchEvent(branchId, "newOrder", "Baggage Room test message");
+const sendNewOrder = (order) => sendBranchEvent(order.branchId, "newOrder", orderMessage(order));
+const sendShiftOpen = (shift) => sendBranchEvent(shift.branchId, "shiftOpen", shiftOpenedMessage(shift));
+const sendShiftClose = (shift) => sendBranchEvent(shift.branchId, "shiftClose", shiftClosedMessage(shift));
+const sendOrderCancel = (order) => sendBranchEvent(order.branchId, "orderCancel", orderCancelledMessage(order));
+const sendDelayedBaggage = (order) => sendBranchEvent(order.branchId, "delayedBaggage", delayedBaggageMessage(order));
+const sendOvertimePayment = (order) => sendBranchEvent(order.branchId, "overtimePayment", overtimePaymentMessage(order));
+const sendDebtClosed = (debt) => sendBranchEvent(debt.branchId, "debtClosed", debtClosedMessage(debt));
+const sendInkassa = (inkassa) => sendBranchEvent(inkassa.branchId, "inkassa", inkassaMessage(inkassa));
+const sendExpense = (expense) => sendBranchEvent(expense.branchId, "expense", expenseMessage(expense));
+const sendLockerTransfer = (payload, transfer) => sendBranchEvent(payload.branchId || transfer.branchId, "lockerTransfer", lockerTransferMessage(payload, transfer));
+const sendLockerService = (payload) => sendBranchEvent(payload.branchId, "lockerService", lockerServiceMessage(payload));
+const testSend = async (branchId) => sendBranchEvent(branchId, "newOrder", "🧾 Test xabari: Telegram sozlamalari tekshirilmoqda");
 
 const sendSafely = async (promise, { branchId = null, userId = null, entityType = "Telegram", entityId = "telegram", action = "TELEGRAM_SEND_ERROR" } = {}) => {
   try {
