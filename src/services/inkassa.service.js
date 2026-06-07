@@ -5,9 +5,10 @@ const { AppError } = require("../utils/response");
 const { audit } = require("./activity.service");
 const { findOpenShift, createCashMovement } = require("./cashMovement.service");
 const telegram = require("./telegram.service");
+const googleSheets = require("./googleSheets.service");
 
 const includeInkassa = {
-  branch: { select: { id: true, name: true } },
+  branch: { select: { id: true, name: true, code: true } },
   createdBy: { select: { id: true, name: true, login: true } },
 };
 
@@ -35,6 +36,7 @@ const createInkassa = async (user, body) => {
     return inkassa;
   });
   telegram.sendSafely(telegram.sendInkassa(inkassa), { branchId, userId: user.id, entityType: "Inkassa", entityId: inkassa.id });
+  googleSheets.sendSafely(googleSheets.sendInkassa(inkassa), { action: "INKASSA", branchId, entityType: "Inkassa", entityId: inkassa.id });
   return inkassa;
 };
 

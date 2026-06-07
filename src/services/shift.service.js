@@ -5,6 +5,7 @@ const { dateRangeWhere } = require("../utils/date");
 const { sum } = require("../utils/money");
 const { audit } = require("./activity.service");
 const telegram = require("./telegram.service");
+const googleSheets = require("./googleSheets.service");
 
 const include = {
   branch: { select: { id: true, name: true, code: true } },
@@ -41,6 +42,7 @@ const openShift = async (user, body) => {
   });
   await audit({ branchId, userId: user.id, entityType: "Shift", entityId: shift.id, action: "SHIFT_OPEN", newValue: shift, description: "Shift opened" });
   telegram.sendSafely(telegram.sendShiftOpen(shift), { branchId, userId: user.id, entityType: "Shift", entityId: shift.id });
+  googleSheets.sendSafely(googleSheets.sendShiftOpen(shift), { action: "SHIFT_OPEN", branchId, entityType: "Shift", entityId: shift.id });
   return shift;
 };
 
@@ -90,6 +92,7 @@ const closeShift = async (user, id, body) => {
     return result;
   });
   telegram.sendSafely(telegram.sendShiftClose(result), { branchId: result.branchId, userId: user.id, entityType: "Shift", entityId: id });
+  googleSheets.sendSafely(googleSheets.sendShiftClose(result), { action: "SHIFT_CLOSE", branchId: result.branchId, entityType: "Shift", entityId: id });
   return result;
 };
 

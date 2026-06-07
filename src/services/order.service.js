@@ -8,6 +8,7 @@ const { audit } = require("./activity.service");
 const { createNotification } = require("./notification.service");
 const { findOpenShift, createCashMovement } = require("./cashMovement.service");
 const telegram = require("./telegram.service");
+const googleSheets = require("./googleSheets.service");
 const { paginated } = require("../utils/pagination");
 
 const includeOrder = {
@@ -238,6 +239,7 @@ const createOrder = async (user, body) => {
   });
 
   telegram.sendSafely(telegram.sendNewOrder(created), { branchId, userId: user.id, entityType: "Order", entityId: created.id });
+  googleSheets.sendSafely(googleSheets.sendNewOrder(created), { action: "NEW_ORDER", branchId, entityType: "Order", entityId: created.id });
   return { order: created, warnings };
 };
 
@@ -253,10 +255,12 @@ const updateOrder = async (user, id, body) => {
 };
 
 const pickupOrder = async (user, id, body) => {
-  return prisma.$transaction(async (tx) => {
+  const result = await prisma.$transaction(async (tx) => {
     const order = await tx.order.findUnique({ where: { id }, include: includeOrder });
     if (!order || !["ACTIVE", "DELAYED"].includes(order.status)) throw new AppError("Active order not found", 404);
     getScopedBranchId(user, order.branchId);
+    let closedDebt = null;
+    let debtPaidAmount = 0;
 
     const pickupTime = body.realPickupTime ? new Date(body.realPickupTime) : new Date();
     const overtimeHours = Math.max(0, Math.ceil((pickupTime.getTime() - order.plannedCheckOut.getTime()) / 3600000));
@@ -291,7 +295,7 @@ const pickupOrder = async (user, id, body) => {
       });
     }
     if (order.debt?.status === "OPEN" && body.debtPaidAmount !== undefined) {
-      const debtPaidAmount = Number(body.debtPaidAmount);
+      debtPaidAmount = Number(body.debtPaidAmount);
       if (debtPaidAmount > order.debt.amount) throw new AppError("Debt payment cannot exceed open debt amount", 400);
       if (debtPaidAmount > 0) {
         await createCashMovement({
@@ -313,9 +317,13 @@ const pickupOrder = async (user, id, body) => {
         });
       }
       if (debtPaidAmount === order.debt.amount) {
-        await tx.debt.update({
+        closedDebt = await tx.debt.update({
           where: { id: order.debt.id },
           data: { status: "CLOSED", closedAt: new Date(), closedById: user.id },
+          include: {
+            branch: { select: { id: true, name: true, code: true } },
+            order: { select: { id: true, orderNumber: true, passport: true, checkIn: true, plannedCheckOut: true, realPickupTime: true } },
+          },
         });
       }
     }
@@ -323,8 +331,13 @@ const pickupOrder = async (user, id, body) => {
     if (overtimeAmount > 0) {
       telegram.sendSafely(telegram.sendOvertimePayment({ ...updated, overtimePaymentType: body.paymentType || "CASH" }), { branchId: order.branchId, userId: user.id, entityType: "Order", entityId: id });
     }
-    return updated;
+    return { updated, closedDebt, debtPaidAmount };
   });
+  googleSheets.sendSafely(googleSheets.sendPickup(result.updated, { amount: result.updated.overtimeAmount || 0, currency: body.currency || result.updated.currency, paymentType: body.paymentType || "CASH" }), { action: "PICKUP", branchId: result.updated.branchId, entityType: "Order", entityId: id });
+  if (result.closedDebt) {
+    googleSheets.sendSafely(googleSheets.sendDebtClosed(result.closedDebt, { amount: result.debtPaidAmount, currency: body.currency || result.updated.currency, paymentType: body.paymentType || "CASH" }), { action: "DEBT_CLOSED", branchId: result.updated.branchId, entityType: "Debt", entityId: result.closedDebt.id });
+  }
+  return result.updated;
 };
 
 const cancelOrder = async (user, id, body) => {
