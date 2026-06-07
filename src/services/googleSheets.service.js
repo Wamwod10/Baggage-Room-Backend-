@@ -25,13 +25,18 @@ const branchName = (entity) => {
   return branchNameByCode[code] || entity?.branch?.name || entity?.branch || null;
 };
 
-const lockerNumbers = (order) => {
+const lockerItems = (order) => {
   if (!Array.isArray(order?.items)) return [];
-  return order.items.map((item) => item.lockerNumber || item.locker?.number).filter((number) => number !== undefined && number !== null);
+  return order.items
+    .map((item) => ({
+      number: item.lockerNumber || item.locker?.number,
+      size: item.size || item.locker?.size,
+    }))
+    .filter((locker) => locker.number !== undefined && locker.number !== null && locker.size);
 };
 
 const orderPayload = (action, order, overrides = {}) => {
-  const lockers = lockerNumbers(order);
+  const lockers = lockerItems(order);
   return {
     branchCode: branchCode(order),
     branch: branchName(order),
