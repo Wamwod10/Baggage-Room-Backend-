@@ -13,15 +13,49 @@ const prisma = new PrismaClient({
   adapter,
 });
 
-const branches = [
-  { name: "Тошкент халкаро аэропорт", code: "TIA", login: "toshkent_airport" },
-  { name: "Тошкент Шимолий вокзал", code: "TSV", login: "toshkent_shimoliy" },
-  { name: "Тошкент Жанубий вокзал", code: "TJV", login: "toshkent_janubiy" },
-  { name: "Самарканд вокзал", code: "SVK", login: "samarqand_vokzal" },
-  { name: "Самарканд халкаро аэропорт", code: "SIA", login: "samarqand_airport" },
-];
+const superAdmin = {
+  login: "rahbariyat",
+  name: "Rahbariyat",
+  password: "Rahbar@2026",
+};
 
-const defaultPassword = process.env.SEED_PASSWORD || "Admin@12345";
+const branches = [
+  {
+    name: "Toshkent xalqaro aeroport",
+    code: "TIA",
+    login: "tosh_airport",
+    oldLogin: "toshkent_airport",
+    password: "Tair@2026",
+  },
+  {
+    name: "Toshkent Shimoliy vokzal",
+    code: "TSV",
+    login: "tosh_shimoliy",
+    oldLogin: "toshkent_shimoliy",
+    password: "Tshim@2026",
+  },
+  {
+    name: "Toshkent Janubiy vokzal",
+    code: "TJV",
+    login: "tosh_janubiy",
+    oldLogin: "toshkent_janubiy",
+    password: "Tjan@2026",
+  },
+  {
+    name: "Samarqand vokzal",
+    code: "SVK",
+    login: "sam_vokzal",
+    oldLogin: "samarqand_vokzal",
+    password: "Svok@2026",
+  },
+  {
+    name: "Samarqand xalqaro aeroport",
+    code: "SIA",
+    login: "sam_airport",
+    oldLogin: "samarqand_airport",
+    password: "Sair@2026",
+  },
+];
 
 const regularLockers = {
   S: [1, 4, 5, 6, 9, 13, 14, 15, 16, 17, 18],
@@ -82,13 +116,39 @@ const seedLockers = async (branch) => {
   }
 };
 
-const main = async () => {
-  const passwordHash = await bcrypt.hash(defaultPassword, 12);
+const upsertSeedUser = async ({ login, oldLogin, name, password, role, branchId = null }) => {
+  const passwordHash = await bcrypt.hash(password, 12);
+  const currentUser = await prisma.user.findUnique({ where: { login } });
+  const legacyUser = oldLogin
+    ? await prisma.user.findUnique({ where: { login: oldLogin } })
+    : null;
 
-  await prisma.user.upsert({
-    where: { login: "rahbariyat" },
-    update: { name: "Rahbariyat", passwordHash, role: "SUPER_ADMIN", branchId: null, isActive: true },
-    create: { login: "rahbariyat", name: "Rahbariyat", passwordHash, role: "SUPER_ADMIN" },
+  if (legacyUser && !currentUser) {
+    return prisma.user.update({
+      where: { id: legacyUser.id },
+      data: { login, name, passwordHash, role, branchId, isActive: true },
+    });
+  }
+
+  if (legacyUser && currentUser && legacyUser.id !== currentUser.id) {
+    await prisma.user.update({
+      where: { id: legacyUser.id },
+      data: { isActive: false },
+    });
+  }
+
+  return prisma.user.upsert({
+    where: { login },
+    update: { name, passwordHash, role, branchId, isActive: true },
+    create: { login, name, passwordHash, role, branchId, isActive: true },
+  });
+};
+
+const main = async () => {
+  await upsertSeedUser({
+    ...superAdmin,
+    role: "SUPER_ADMIN",
+    branchId: null,
   });
 
   for (const item of branches) {
@@ -98,10 +158,13 @@ const main = async () => {
       create: { name: item.name, code: item.code },
     });
 
-    await prisma.user.upsert({
-      where: { login: item.login },
-      update: { name: item.name, passwordHash, role: "BRANCH_ADMIN", branchId: branch.id, isActive: true },
-      create: { login: item.login, name: item.name, passwordHash, role: "BRANCH_ADMIN", branchId: branch.id },
+    await upsertSeedUser({
+      login: item.login,
+      oldLogin: item.oldLogin,
+      name: item.name,
+      password: item.password,
+      role: "BRANCH_ADMIN",
+      branchId: branch.id,
     });
 
     await prisma.telegramSetting.upsert({
@@ -122,10 +185,10 @@ const main = async () => {
     }
   }
 
-  process.stdout.write("\nSeed completed. Default logins:\n");
-  process.stdout.write(`SUPER_ADMIN: rahbariyat / ${defaultPassword}\n`);
+  process.stdout.write("\nSeed completed. Updated logins:\n");
+  process.stdout.write(`SUPER_ADMIN: ${superAdmin.login}\n`);
   for (const branch of branches) {
-    process.stdout.write(`BRANCH_ADMIN: ${branch.login} / ${defaultPassword} (${branch.name})\n`);
+    process.stdout.write(`BRANCH_ADMIN: ${branch.login} (${branch.name})\n`);
   }
 };
 

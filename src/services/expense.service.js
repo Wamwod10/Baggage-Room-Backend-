@@ -28,7 +28,7 @@ const listExpenses = async (user, query) => {
 const createExpense = async (user, body) => {
   const branchId = getScopedBranchId(user, body.branchId || user.branchId);
   if (!branchId) throw new AppError("branchId is required", 400);
-  return prisma.$transaction(async (tx) => {
+  const expense = await prisma.$transaction(async (tx) => {
     const shift = await findOpenShift(tx, branchId);
     const expense = await tx.expense.create({
       data: { branchId, shiftId: shift?.id || null, category: body.category, reason: body.reason, amount: body.amount, currency: body.currency || "UZS", createdById: user.id },
@@ -36,9 +36,10 @@ const createExpense = async (user, body) => {
     });
     await createCashMovement({ tx, branchId, shiftId: shift?.id || null, type: "EXPENSE", direction: "OUT", amount: body.amount, currency: body.currency || "UZS", note: body.reason, createdById: user.id });
     await audit({ tx, branchId, userId: user.id, entityType: "Expense", entityId: expense.id, action: "EXPENSE_CREATE", newValue: expense, description: body.reason });
-    telegram.sendSafely(telegram.sendExpense(expense), { branchId, userId: user.id, entityType: "Expense", entityId: expense.id });
     return expense;
   });
+  telegram.sendSafely(telegram.sendExpense(expense), { branchId, userId: user.id, entityType: "Expense", entityId: expense.id });
+  return expense;
 };
 
 const deleteExpense = async (user, id) => {

@@ -66,7 +66,7 @@ const computeShiftReport = async (tx, shift) => {
 };
 
 const closeShift = async (user, id, body) => {
-  return prisma.$transaction(async (tx) => {
+  const result = await prisma.$transaction(async (tx) => {
     const shift = await tx.shift.findUnique({ where: { id } });
     if (!shift || shift.status !== "OPEN") throw new AppError("Bu filialda ochiq smena yo'q", 404);
     getScopedBranchId(user, shift.branchId);
@@ -87,9 +87,10 @@ const closeShift = async (user, id, body) => {
     });
     const result = { ...updated, ordersCount };
     await audit({ tx, branchId: shift.branchId, userId: user.id, entityType: "Shift", entityId: id, action: "SHIFT_CLOSE", oldValue: shift, newValue: result, description: "Shift closed" });
-    telegram.sendSafely(telegram.sendShiftClose(result), { branchId: shift.branchId, userId: user.id, entityType: "Shift", entityId: id });
     return result;
   });
+  telegram.sendSafely(telegram.sendShiftClose(result), { branchId: result.branchId, userId: user.id, entityType: "Shift", entityId: id });
+  return result;
 };
 
 module.exports = { listShifts, currentShift, openShift, closeShift, computeShiftReport };
