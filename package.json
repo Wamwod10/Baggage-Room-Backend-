@@ -12,7 +12,8 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:deploy": "prisma migrate deploy",
     "seed": "node prisma/seed.js",
-    "prisma:seed": "node prisma/seed.js"
+    "prisma:seed": "node prisma/seed.js",
+    "reset:data": "node scripts/resetProductionData.js"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.8.0",
