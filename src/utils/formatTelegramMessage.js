@@ -1,4 +1,5 @@
 const { currencyFractionDigits } = require("./money");
+const { formatTashkentDateTime } = require("./date");
 
 const safe = (value, fallback = "-") => {
   if (value === undefined || value === null) return fallback;
@@ -33,10 +34,7 @@ const formatMoney = (amount, currency = "UZS") => {
 
 const formatDate = (date) => {
   if (!date) return "-";
-  const d = new Date(date);
-  if (Number.isNaN(d.getTime())) return "-";
-  const pad = (value) => String(value).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  return formatTashkentDateTime(date);
 };
 
 const formatPayment = (payment) => {

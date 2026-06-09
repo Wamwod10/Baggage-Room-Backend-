@@ -64,17 +64,9 @@ const regularLockers = {
 };
 
 const airportLockers = {
-  S: [29, 30, 31, 36, 37, 38, 39, 40, 41, 42, 43, 44],
-  M: [
-    ...Array.from({ length: 10 }, (_, i) => i + 1),
-    ...Array.from({ length: 8 }, (_, i) => i + 12),
-    ...Array.from({ length: 8 }, (_, i) => i + 21),
-    32,
-    33,
-    34,
-    35,
-  ],
-  L: [11, 20],
+  L: [...Array.from({ length: 29 }, (_, i) => i + 1), 33, 34, 35, 36],
+  S: [30, 31, 32, 37, 38, 39],
+  M: [40, 41, 42, 43, 44, 45],
 };
 
 const airportTariffs = {

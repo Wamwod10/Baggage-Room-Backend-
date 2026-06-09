@@ -1,11 +1,11 @@
 const prisma = require("../config/prisma");
 const { branchWhere, getScopedBranchId } = require("../utils/scope");
-const { dateRangeWhere, startOfToday } = require("../utils/date");
+const { dateRangeWhere, formatTashkentDateKey, getTashkentParts, startOfToday } = require("../utils/date");
 const { sum, byKeySum } = require("../utils/money");
 const { markDelayedOrders } = require("./order.service");
 
 const asNumber = (value) => Number(value || 0);
-const dayKey = (date) => date.toISOString().slice(0, 10);
+const dayKey = (date) => formatTashkentDateKey(date);
 const branchName = (item) => item.branch?.name || item.branchId || "Unknown";
 const userName = (user) => user?.name || user?.login || "Unknown";
 
@@ -168,7 +168,7 @@ const reports = async (user, query) => {
 
   const peakHours = {};
   for (const order of orders) {
-    const hour = order.createdAt.getHours();
+    const hour = getTashkentParts(order.createdAt).hour;
     peakHours[hour] = (peakHours[hour] || 0) + 1;
   }
 

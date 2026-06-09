@@ -146,7 +146,8 @@ const createOrder = async (user, body) => {
           { field: "tariff", size: locker.size, message: `Tariff for size ${locker.size} not found` },
         ]);
       }
-      const originalPrice = item.originalPrice ?? calculatePrice(tariff, item.tariffHours || tariffHours);
+      const itemTariffHours = Number(item.tariffHours || tariffHours);
+      const originalPrice = calculatePrice(tariff, itemTariffHours);
       const discountAmount = Number(item.discountAmount || 0);
       return {
         locker,
@@ -154,7 +155,7 @@ const createOrder = async (user, body) => {
           lockerId: locker.id,
           lockerNumber: locker.number,
           size: locker.size,
-          tariffHours: Number(item.tariffHours || tariffHours),
+          tariffHours: itemTariffHours,
           originalPrice,
           discountAmount,
           finalPrice: Math.max(0, originalPrice - discountAmount),

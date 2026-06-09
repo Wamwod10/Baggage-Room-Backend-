@@ -1,4 +1,5 @@
 const { formatCurrency } = require("./money");
+const { formatTashkentDateTime } = require("./date");
 
 const formatReceipt = (order) => {
   const items = order.items || [];
@@ -13,6 +14,9 @@ const formatReceipt = (order) => {
     checkIn: order.checkIn,
     plannedCheckOut: order.plannedCheckOut,
     realPickupTime: order.realPickupTime,
+    displayCheckIn: formatTashkentDateTime(order.checkIn),
+    displayPlannedCheckOut: formatTashkentDateTime(order.plannedCheckOut),
+    displayRealPickupTime: formatTashkentDateTime(order.realPickupTime),
     lockers: items.map((item) => ({
       lockerId: item.lockerId,
       lockerNumber: item.lockerNumber,
@@ -37,6 +41,7 @@ const formatReceipt = (order) => {
     },
     note: order.note,
     createdAt: order.createdAt,
+    displayCreatedAt: formatTashkentDateTime(order.createdAt),
   };
 };
 

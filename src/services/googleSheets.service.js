@@ -1,4 +1,5 @@
 const logger = require("../utils/logger");
+const { formatTashkentIso } = require("../utils/date");
 
 const TIMEOUT_MS = 5000;
 
@@ -15,7 +16,7 @@ const isEnabled = () => process.env.GOOGLE_SHEETS_ENABLED === "true" && Boolean(
 const toIso = (value) => {
   if (!value) return null;
   const date = value instanceof Date ? value : new Date(value);
-  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+  return Number.isNaN(date.getTime()) ? null : formatTashkentIso(date);
 };
 
 const branchCode = (entity) => entity?.branch?.code || entity?.branchCode || null;
