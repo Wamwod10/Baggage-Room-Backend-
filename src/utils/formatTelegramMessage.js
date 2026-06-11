@@ -74,9 +74,15 @@ const line = (label, value) => `${label}: ${cleanText(value)}`;
 
 const orderMessage = (order = {}) => {
   const items = Array.isArray(order.items) ? order.items : [];
-  const sizeLabel = { S: "Small", M: "Medium", L: "Large" };
-  const sizes = [...new Set(items.map((item) => sizeLabel[item.size] || cleanText(item.size)).filter((item) => item && item !== "-"))];
-  const count = items.length || Number(order.count || 0);
+  const sizeLabel = { S: "Small", M: "Medium", L: "Large", XL: "XL" };
+  const sizeCounts = items.reduce((acc, item) => {
+    const size = sizeLabel[item.size] || cleanText(item.size);
+    if (!size || size === "-") return acc;
+    acc[size] = (acc[size] || 0) + Number(item.count || 1);
+    return acc;
+  }, {});
+  const sizes = Object.entries(sizeCounts).map(([size, count]) => `${size}: ${count} ta`);
+  const count = Object.values(sizeCounts).reduce((total, value) => total + value, 0) || Number(order.count || 0);
 
   return [
     "📦 Yangi baggage qabul qilindi",

@@ -4,6 +4,7 @@ const { addHours, dateRangeWhere } = require("../utils/date");
 const { branchWhere, getScopedBranchId } = require("../utils/scope");
 const { generateOrderNumber } = require("../utils/generateOrderId");
 const { calculatePrice } = require("./tariff.service");
+const { convertUzsToCurrencyMinor } = require("../utils/money");
 const { audit } = require("./activity.service");
 const { createNotification } = require("./notification.service");
 const { findOpenShift, createCashMovement } = require("./cashMovement.service");
@@ -28,7 +29,10 @@ const normalizeOrderItems = (body) => {
         { field: "items.lockerId", message: "lockerId is required" },
       ]);
     }
-    return body.items;
+    return body.items.map((item) => ({
+      ...item,
+      count: Math.max(1, Number(item.count || 1)),
+    }));
   }
   if (Array.isArray(body.lockerIds) && body.lockerIds.length) {
     const invalid = body.lockerIds.find((lockerId) => !lockerId);
@@ -37,7 +41,7 @@ const normalizeOrderItems = (body) => {
         { field: "lockerIds", message: "lockerId is required" },
       ]);
     }
-    return body.lockerIds.map((lockerId) => ({ lockerId }));
+    return body.lockerIds.map((lockerId) => ({ lockerId, count: 1 }));
   }
   throw new AppError("At least one locker is required", 400, [
     { field: "items", message: "items must be a non-empty array" },
@@ -104,11 +108,6 @@ const createOrder = async (user, body) => {
     const inputItems = normalizeOrderItems(body);
     const lockerIds = inputItems.map((item) => item.lockerId);
     const uniqueLockerIds = [...new Set(lockerIds)];
-    if (uniqueLockerIds.length !== lockerIds.length) {
-      throw new AppError("Duplicate lockers are not allowed", 400, [
-        { field: "items", message: "Duplicate lockers are not allowed" },
-      ]);
-    }
     const lockers = await tx.locker.findMany({ where: { id: { in: uniqueLockerIds }, branchId } });
     if (lockers.length !== uniqueLockerIds.length) {
       throw new AppError("One or more lockers were not found in this branch", 400, [
@@ -133,6 +132,12 @@ const createOrder = async (user, body) => {
       ]);
     }
     const currency = body.currency || "UZS";
+    const exchangeRate = currency === "UZS" ? 1 : Number(body.exchangeRate || 0);
+    if (currency !== "UZS" && (!Number.isFinite(exchangeRate) || exchangeRate <= 0)) {
+      throw new AppError(`Exchange rate for ${currency} is required`, 400, [
+        { field: "exchangeRate", message: `Exchange rate for ${currency} is required` },
+      ]);
+    }
     const itemRows = inputItems.map((item) => {
       const locker = lockers.find((row) => row.id === item.lockerId);
       if (!locker) {
@@ -140,22 +145,28 @@ const createOrder = async (user, body) => {
           { field: "items.lockerId", lockerId: item.lockerId, message: "Locker not found" },
         ]);
       }
-      const tariff = tariffsBySize[locker.size];
+      const size = item.size || locker.size;
+      const tariff = tariffsBySize[size];
       if (!tariff) {
-        throw new AppError(`Tariff for size ${locker.size} not found`, 400, [
-          { field: "tariff", size: locker.size, message: `Tariff for size ${locker.size} not found` },
+        throw new AppError(`Tariff for size ${size} not found`, 400, [
+          { field: "tariff", size, message: `Tariff for size ${size} not found` },
         ]);
       }
       const itemTariffHours = Number(item.tariffHours || tariffHours);
-      const originalPrice = calculatePrice(tariff, itemTariffHours);
+      const count = Math.max(1, Number(item.count || 1));
+      const unitPriceUZS = calculatePrice(tariff, itemTariffHours);
+      const unitPrice = convertUzsToCurrencyMinor(unitPriceUZS, currency, exchangeRate);
+      const originalPrice = unitPrice * count;
       const discountAmount = Number(item.discountAmount || 0);
       return {
         locker,
         data: {
           lockerId: locker.id,
           lockerNumber: locker.number,
-          size: locker.size,
+          size,
+          count,
           tariffHours: itemTariffHours,
+          unitPrice,
           originalPrice,
           discountAmount,
           finalPrice: Math.max(0, originalPrice - discountAmount),
@@ -200,8 +211,8 @@ const createOrder = async (user, body) => {
       include: includeOrder,
     });
 
-    for (const item of itemRows) {
-      await tx.locker.update({ where: { id: item.locker.id }, data: { status: "BUSY", currentOrderId: order.id } });
+    for (const locker of lockers) {
+      await tx.locker.update({ where: { id: locker.id }, data: { status: "BUSY", currentOrderId: order.id } });
     }
 
     const shift = await findOpenShift(tx, branchId);

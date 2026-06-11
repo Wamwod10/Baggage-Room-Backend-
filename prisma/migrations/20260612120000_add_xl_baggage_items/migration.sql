@@ -1,0 +1,9 @@
+ALTER TYPE "LockerSize" ADD VALUE IF NOT EXISTS 'XL';
+
+ALTER TABLE "OrderItem"
+ADD COLUMN IF NOT EXISTS "count" INTEGER NOT NULL DEFAULT 1,
+ADD COLUMN IF NOT EXISTS "unitPrice" INTEGER NOT NULL DEFAULT 0;
+
+UPDATE "OrderItem"
+SET "unitPrice" = "originalPrice"
+WHERE "unitPrice" = 0;

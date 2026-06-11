@@ -1,10 +1,12 @@
 const router = require("express").Router();
-const { z, idParam, amount, currency, paymentType, phone, orderStatus } = require("../utils/validation");
+const { z, idParam, amount, currency, paymentType, phone, orderStatus, lockerSize } = require("../utils/validation");
 const validate = require("../middleware/validate.middleware");
 const orderController = require("../controllers/order.controller");
 
 const orderItem = z.object({
   lockerId: z.string().min(1),
+  size: lockerSize.optional(),
+  count: z.coerce.number().int().positive().optional(),
   tariffHours: z.coerce.number().int().positive().optional(),
   originalPrice: amount.optional(),
   discountAmount: amount.optional(),
@@ -36,6 +38,7 @@ router.post(
         finalAmount: amount.optional(),
         realPaidAmount: amount.optional(),
         realPaidReason: z.string().optional(),
+        exchangeRate: z.coerce.number().positive().optional(),
         checkIn: z.string().datetime().optional(),
         plannedCheckOut: z.string().datetime().optional(),
         note: z.string().optional(),

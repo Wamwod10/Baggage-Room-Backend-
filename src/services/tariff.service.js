@@ -3,6 +3,17 @@ const { AppError } = require("../utils/response");
 const { branchWhere } = require("../utils/scope");
 const { audit } = require("./activity.service");
 
+const ZERO_TARIFF = {
+  price1h: 0,
+  price12h: 0,
+  price24h: 0,
+  price48h: 0,
+  price72h: 0,
+  after72hPrice: 0,
+};
+const BASE_BAGGAGE_SIZES = ["S", "M", "L"];
+const XL_BRANCH_CODES = new Set(["TSV", "TJV", "SVK"]);
+
 const calculatePrice = (tariff, hours) => {
   const h = Number(hours);
   if (h <= 1) return tariff.price1h;
@@ -13,9 +24,29 @@ const calculatePrice = (tariff, hours) => {
   return tariff.price72h + Math.ceil((h - 72) / 24) * tariff.after72hPrice;
 };
 
+const sizesForBranch = (branch) => [
+  ...BASE_BAGGAGE_SIZES,
+  ...(XL_BRANCH_CODES.has(branch.code) ? ["XL"] : []),
+];
+
+const ensureTariffs = async (where) => {
+  const branches = await prisma.branch.findMany({ where: where.branchId ? { id: where.branchId } : {}, select: { id: true, code: true } });
+  for (const branch of branches) {
+    for (const size of sizesForBranch(branch)) {
+      await prisma.tariff.upsert({
+        where: { branchId_size: { branchId: branch.id, size } },
+        update: {},
+        create: { branchId: branch.id, size, ...ZERO_TARIFF },
+      });
+    }
+  }
+};
+
 const listTariffs = async (user, query) => {
+  const where = branchWhere(user, query.branchId);
+  await ensureTariffs(where);
   return prisma.tariff.findMany({
-    where: branchWhere(user, query.branchId),
+    where,
     include: { branch: { select: { id: true, name: true, code: true } } },
     orderBy: [{ branch: { name: "asc" } }, { size: "asc" }],
   });
@@ -40,4 +71,4 @@ const updateTariff = async (user, id, data) => {
   return updated;
 };
 
-module.exports = { calculatePrice, listTariffs, updateTariff };
+module.exports = { calculatePrice, listTariffs, updateTariff, sizesForBranch, XL_BRANCH_CODES };

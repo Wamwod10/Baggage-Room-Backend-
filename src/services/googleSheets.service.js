@@ -32,6 +32,7 @@ const lockerItems = (order) => {
     .map((item) => ({
       number: item.lockerNumber || item.locker?.number,
       size: item.size || item.locker?.size,
+      count: item.count || 1,
     }))
     .filter((locker) => locker.number !== undefined && locker.number !== null && locker.size);
 };

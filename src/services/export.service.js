@@ -28,7 +28,7 @@ const sanitizeOrderForExport = (order) => ({
   plannedCheckOut: order.plannedCheckOut,
   realPickupTime: order.realPickupTime,
   lockers: Array.isArray(order.items)
-    ? order.items.map((item) => `${item.lockerNumber} ${item.size}`).join("; ")
+    ? order.items.map((item) => `${item.lockerNumber} ${item.size} x${item.count || 1}`).join("; ")
     : "",
   createdBy: order.createdBy?.name || order.createdBy?.login || "",
   createdAt: order.createdAt,

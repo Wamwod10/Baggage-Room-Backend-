@@ -83,12 +83,12 @@ const transfer = async (user, data) => {
     if (from.branchId !== order.branchId || to.branchId !== order.branchId) throw new AppError("Lockers must be in order branch", 400);
     if (to.status !== "EMPTY" || to.currentOrderId) throw new AppError("Target locker is not available", 400);
 
-    const item = order.items.find((orderItem) => orderItem.lockerId === from.id);
-    if (!item) throw new AppError("Source locker is not attached to this order", 400);
+    const hasSourceItems = order.items.some((orderItem) => orderItem.lockerId === from.id);
+    if (!hasSourceItems) throw new AppError("Source locker is not attached to this order", 400);
 
-    await tx.orderItem.update({
-      where: { id: item.id },
-      data: { lockerId: to.id, lockerNumber: to.number, size: to.size },
+    await tx.orderItem.updateMany({
+      where: { orderId: order.id, lockerId: from.id },
+      data: { lockerId: to.id, lockerNumber: to.number },
     });
     await tx.locker.update({ where: { id: from.id }, data: { status: "EMPTY", currentOrderId: null } });
     await tx.locker.update({ where: { id: to.id }, data: { status: order.status === "DELAYED" ? "DELAYED" : "BUSY", currentOrderId: order.id } });

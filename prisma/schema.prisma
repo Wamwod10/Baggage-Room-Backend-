@@ -17,6 +17,7 @@ enum LockerSize {
   S
   M
   L
+  XL
 }
 
 enum LockerStatus {
@@ -213,7 +214,9 @@ model OrderItem {
   lockerId        String
   lockerNumber    Int
   size            LockerSize
+  count           Int         @default(1)
   tariffHours     Int
+  unitPrice       Int         @default(0)
   originalPrice   Int
   discountAmount  Int         @default(0)
   finalPrice      Int

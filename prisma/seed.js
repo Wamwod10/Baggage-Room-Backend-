@@ -79,6 +79,7 @@ const stationTariffs = {
   S: { price1h: 4000, price12h: 40000, price24h: 75000, price48h: 120000, price72h: 180000, after72hPrice: 30000 },
   M: { price1h: 6000, price12h: 55000, price24h: 100000, price48h: 160000, price72h: 240000, after72hPrice: 40000 },
   L: { price1h: 8000, price12h: 75000, price24h: 140000, price48h: 240000, price72h: 360000, after72hPrice: 50000 },
+  XL: { price1h: 0, price12h: 0, price24h: 0, price48h: 0, price72h: 0, after72hPrice: 0 },
 };
 
 const samAirportTariffs = {

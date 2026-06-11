@@ -197,7 +197,7 @@ const reports = async (user, query) => {
         const key = item.size || "UNKNOWN";
         if (!acc[key]) acc[key] = { size: key, orders: 0, count: 0, amount: 0 };
         acc[key].orders += 1;
-        acc[key].count += 1;
+        acc[key].count += Number(item.count || 1);
         acc[key].amount += asNumber(item.finalPrice);
       }
       return acc;

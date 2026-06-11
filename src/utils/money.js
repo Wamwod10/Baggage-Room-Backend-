@@ -15,6 +15,19 @@ const currencyFractionDigits = {
   RUB: 2,
 };
 
+const convertUzsToCurrencyMinor = (amountUZS, currency = "UZS", exchangeRate = 1) => {
+  const code = currency || "UZS";
+  if (code === "UZS") return Math.round(Number(amountUZS || 0));
+
+  const rate = Number(exchangeRate || 0);
+  if (!Number.isFinite(rate) || rate <= 0) {
+    throw new TypeError(`Exchange rate for ${code} is required`);
+  }
+
+  const digits = currencyFractionDigits[code] ?? 2;
+  return Math.round((Number(amountUZS || 0) / rate) * 10 ** digits);
+};
+
 const parseCurrency = (value, currency = "UZS") => {
   if (Number.isInteger(value)) return value;
   const digits = currencyFractionDigits[currency] ?? 2;
@@ -45,4 +58,4 @@ const formatCurrency = (amount, currency = "UZS", locale = "uz-UZ") => {
   }).format(major);
 };
 
-module.exports = { sum, byKeySum, parseCurrency, formatCurrency, currencyFractionDigits };
+module.exports = { sum, byKeySum, parseCurrency, formatCurrency, currencyFractionDigits, convertUzsToCurrencyMinor };
