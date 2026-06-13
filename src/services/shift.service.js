@@ -65,7 +65,7 @@ const computeShiftReport = async (tx, shift) => {
   const debtAmount = sum(debts.filter((item) => item.status === "OPEN"));
   const manualIn = sum(inMovements.filter((item) => item.type === "MANUAL_CORRECTION"));
   const manualOut = sum(outMovements.filter((item) => item.type === "MANUAL_CORRECTION"));
-  const systemExpectedCash = shift.openingCash + shift.acceptedCash + cashRevenue + manualIn - expenseAmount - inkassaAmount - manualOut;
+  const systemExpectedCash = shift.openingCash + totalRevenue + manualIn - expenseAmount - inkassaAmount - manualOut;
 
   return { totalRevenue, cashRevenue, cardRevenue, transferRevenue, debtAmount, expenseAmount, inkassaAmount, systemExpectedCash, ordersCount };
 };

@@ -39,8 +39,26 @@ const HEADERS = [
   "Amount",
   "Currency",
   "Payment Type",
+  "Recipient",
+  "Note",
+  "Section",
   "Idempotency Key",
 ];
+
+const ACTION_STYLE = {
+  INKASSA: {
+    background: "#fce4d6",
+    fontColor: "#7f1d1d",
+  },
+  EXPENSE: {
+    background: "#f4cccc",
+    fontColor: "#7f1d1d",
+  },
+  DEBT_CLOSED: {
+    background: "#d9ead3",
+    fontColor: "#274e13",
+  },
+};
 
 function doPost(e) {
   try {
@@ -63,6 +81,7 @@ function doPost(e) {
     const row = buildRow_(payload, idempotencyKey);
     const targetRow = firstEmptyRowByColumn_(sheet, 1);
     sheet.getRange(targetRow, 1, 1, row.length).setValues([row]);
+    styleRow_(sheet, targetRow, payload.action, row.length);
 
     return json_({ ok: true, row: targetRow, idempotencyKey });
   } catch (error) {
@@ -107,14 +126,18 @@ function hasDuplicate_(sheet, idempotencyKey) {
   if (!idempotencyKey) return false;
 
   const maxRows = Math.max(sheet.getMaxRows(), 2);
-  const values = sheet.getRange(2, 15, maxRows - 1, 1).getDisplayValues();
+  const idempotencyColumn = HEADERS.indexOf("Idempotency Key") + 1;
+  const values = sheet.getRange(2, idempotencyColumn, maxRows - 1, 1).getDisplayValues();
   return values.some((row) => String(row[0] || "").trim() === idempotencyKey);
 }
 
 function buildRow_(payload, idempotencyKey) {
+  const action = String(payload.action || "");
+  const recipient = payload.recipientName || (action === "INKASSA" ? payload.clientName : "");
+
   return [
     payload.createdAt || new Date(),
-    payload.action || "",
+    actionLabel_(action),
     payload.branchCode || "",
     payload.branch || "",
     payload.orderNumber || "",
@@ -127,8 +150,45 @@ function buildRow_(payload, idempotencyKey) {
     payload.amount === null || payload.amount === undefined ? "" : payload.amount,
     payload.currency || "",
     payload.paymentType || "",
+    recipient || "",
+    payload.note || "",
+    payload.sheetSection || action || "",
     idempotencyKey || "",
   ];
+}
+
+function styleRow_(sheet, row, action, width) {
+  const style = ACTION_STYLE[String(action || "").toUpperCase()];
+  if (!style) return;
+
+  const range = sheet.getRange(row, 1, 1, width);
+  range.setBackground(style.background);
+  range.setFontColor(style.fontColor);
+
+  if (String(action || "").toUpperCase() === "INKASSA") {
+    range.setFontWeight("bold");
+  }
+}
+
+function actionLabel_(action) {
+  switch (String(action || "").toUpperCase()) {
+    case "INKASSA":
+      return "Inkassa";
+    case "EXPENSE":
+      return "Xarajat";
+    case "DEBT_CLOSED":
+      return "Qarz yopildi";
+    case "NEW_ORDER":
+      return "Yangi order";
+    case "PICKUP":
+      return "Pickup";
+    case "SHIFT_OPEN":
+      return "Smena ochildi";
+    case "SHIFT_CLOSE":
+      return "Smena yopildi";
+    default:
+      return action || "";
+  }
 }
 
 function buildIdempotencyKey_(payload) {

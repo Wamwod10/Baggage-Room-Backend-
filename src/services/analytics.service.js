@@ -27,9 +27,13 @@ const buildBranchSummary = ({ branches, orders, lockers, movements }) =>
     const branchExpenses = movements.filter(
       (movement) => movement.branchId === branch.id && movement.direction === "OUT" && movement.type === "EXPENSE",
     );
+    const branchInkassa = movements.filter(
+      (movement) => movement.branchId === branch.id && movement.direction === "OUT" && movement.type === "INKASSA",
+    );
 
     const revenue = sum(branchIn);
     const expenseAmount = sum(branchExpenses);
+    const inkassaAmount = sum(branchInkassa);
 
     return {
       id: branch.id,
@@ -44,7 +48,8 @@ const buildBranchSummary = ({ branches, orders, lockers, movements }) =>
       emptyLockers: branchLockers.filter((locker) => locker.status === "EMPTY").length,
       busyLockers: branchLockers.filter((locker) => locker.status === "BUSY").length,
       revenue,
-      netProfit: revenue - expenseAmount,
+      netProfit: revenue - expenseAmount - inkassaAmount,
+      cashOnHand: revenue - expenseAmount - inkassaAmount,
     };
   });
 
@@ -95,8 +100,10 @@ const dashboard = async (user, query) => {
   const lockerCounts = countBy(lockers, (item) => item.status);
   const todayRevenue = sum(todayPayments);
   const expenseAmount = sum(todayExpenses);
+  const inkassaAmount = sum(todayInkassa);
   const cashMovementIn = todayRevenue;
   const cashMovementOut = sum(todayOut);
+  const cashOnHand = sum(shiftStatus, (shift) => shift.systemExpectedCash);
 
   return {
     todayRevenue,
@@ -106,7 +113,9 @@ const dashboard = async (user, query) => {
     totalOrders,
     todayOrders: todayClients,
     todayClients,
-    netProfit: todayRevenue - expenseAmount,
+    netProfit: todayRevenue - expenseAmount - inkassaAmount,
+    cashOnHand,
+    cashLeft: cashOnHand,
     expenseAmount,
     totalExpenses: expenseAmount,
     debtAmount: sum(openDebts),
@@ -115,7 +124,7 @@ const dashboard = async (user, query) => {
     busyLockers: lockerCounts.BUSY || 0,
     delayedOrders,
     cancelledOrders,
-    inkassaAmount: sum(inkassa) || sum(todayInkassa),
+    inkassaAmount,
     cashMovementIn,
     cashMovementOut,
     paymentBreakdown: byKeySum(todayPayments, "paymentType"),
@@ -167,6 +176,7 @@ const reports = async (user, query) => {
 
   const revenueByDay = {};
   const expensesByDay = {};
+  const inkassaByDay = {};
   const ordersByDay = {};
   for (const item of inMovements) {
     const day = dayKey(item.createdAt);
@@ -175,6 +185,10 @@ const reports = async (user, query) => {
   for (const item of expenseMovements.length ? expenseMovements : expenses) {
     const day = dayKey(item.createdAt);
     expensesByDay[day] = (expensesByDay[day] || 0) + item.amount;
+  }
+  for (const item of inkassaMovements.length ? inkassaMovements : inkassa) {
+    const day = dayKey(item.createdAt);
+    inkassaByDay[day] = (inkassaByDay[day] || 0) + item.amount;
   }
   for (const order of orders) {
     const day = dayKey(order.createdAt);
@@ -191,13 +205,15 @@ const reports = async (user, query) => {
     const branchOrders = orders.filter((order) => order.branchId === branch.id);
     const branchRevenue = sum(inMovements.filter((item) => item.branchId === branch.id));
     const branchExpenses = sum(expenseMovements.filter((item) => item.branchId === branch.id));
+    const branchInkassa = sum(inkassaMovements.filter((item) => item.branchId === branch.id));
     const delayed = branchOrders.filter((order) => order.status === "DELAYED").length;
     const cancelled = branchOrders.filter((order) => order.status === "CANCELLED").length;
 
     return {
       branch: branch.name,
       revenue: branchRevenue,
-      profit: branchRevenue - branchExpenses,
+      profit: branchRevenue - branchExpenses - branchInkassa,
+      cashOnHand: branchRevenue - branchExpenses - branchInkassa,
       orders: branchOrders.length,
       active: branchOrders.filter((order) => ["ACTIVE", "DELAYED"].includes(order.status)).length,
       delayed,
@@ -234,6 +250,8 @@ const reports = async (user, query) => {
   }
 
   const shiftRevenueTotal = sum(shiftsWithReports, (shift) => shift.totalRevenue);
+  const shiftCashOnHandTotal = sum(shiftsWithReports, (shift) => shift.systemExpectedCash);
+  const cashOnHand = shiftsWithReports.length ? shiftCashOnHandTotal : totalRevenue - totalExpenses - totalInkassa;
   const bestShift = shiftsWithReports
     .slice()
     .sort((a, b) => asNumber(b.totalRevenue) - asNumber(a.totalRevenue))[0];
@@ -249,8 +267,10 @@ const reports = async (user, query) => {
     financeAnalytics: {
       revenue: totalRevenue,
       totalExpenses,
-      netProfit: totalRevenue - totalExpenses,
-      profitMargin: percent(totalRevenue - totalExpenses, totalRevenue),
+      totalInkassa,
+      netProfit: totalRevenue - totalExpenses - totalInkassa,
+      cashOnHand,
+      profitMargin: percent(totalRevenue - totalExpenses - totalInkassa, totalRevenue),
       averageOrder: totalOrders ? Math.round(totalRevenue / totalOrders) : 0,
       averageShiftRevenue: shiftsWithReports.length ? Math.round(shiftRevenueTotal / shiftsWithReports.length) : 0,
       expenseRatio: percent(totalExpenses, totalRevenue),
@@ -258,6 +278,7 @@ const reports = async (user, query) => {
     },
     revenueByDay,
     expensesByDay,
+    inkassaByDay,
     ordersByDay,
     revenueByBranch: movements.filter((m) => m.direction === "IN").reduce((acc, item) => {
       const name = branchName(item);

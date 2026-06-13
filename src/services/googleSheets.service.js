@@ -89,6 +89,7 @@ const basePayload = (action, entity, overrides = {}) =>
     orderId: entity?.orderId || entity?.order?.id || null,
     orderNumber: entity?.orderNumber || entity?.order?.orderNumber || null,
     clientName: entity?.clientName || entity?.receiverName || null,
+    recipientName: entity?.receiverName || entity?.recipientName || null,
     phone: entity?.phone || null,
     passport: entity?.passport || entity?.order?.passport || null,
     lockers: [],
@@ -97,6 +98,7 @@ const basePayload = (action, entity, overrides = {}) =>
     amount: entity?.amount ?? entity?.closingCash ?? entity?.openingCash ?? null,
     currency: entity?.currency || null,
     paymentType: entity?.paymentType || null,
+    note: entity?.note || entity?.reason || null,
     action,
     createdAt: toIso(entity?.createdAt || entity?.openedAt || new Date()),
     ...overrides,
@@ -260,7 +262,17 @@ const sendDebtClosed = (debt, extra = {}) =>
 
 const sendExpense = (expense) => postWebhook(basePayload("EXPENSE", expense));
 
-const sendInkassa = (inkassa) => postWebhook(basePayload("INKASSA", inkassa));
+const sendInkassa = (inkassa) =>
+  postWebhook(
+    basePayload("INKASSA", inkassa, {
+      clientName: inkassa?.receiverName || inkassa?.recipientName || null,
+      recipientName: inkassa?.receiverName || inkassa?.recipientName || null,
+      note: inkassa?.note || null,
+      sheetSection: "INKASSA",
+      rowType: "OUT",
+      displayName: "Inkassa",
+    }),
+  );
 
 const sendShiftOpen = (shift) =>
   postWebhook(
