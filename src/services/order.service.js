@@ -3,7 +3,11 @@ const { AppError } = require("../utils/response");
 const { addHours, dateRangeWhere } = require("../utils/date");
 const { branchWhere, getScopedBranchId } = require("../utils/scope");
 const { generateOrderNumber } = require("../utils/generateOrderId");
-const { calculatePrice } = require("./tariff.service");
+const {
+  calculatePrice,
+  sizesForBranch,
+  MULTI_ORDER_LOCKER_BRANCH_CODES,
+} = require("./tariff.service");
 const { convertUzsToCurrencyMinor } = require("../utils/money");
 const { audit } = require("./activity.service");
 const { createNotification } = require("./notification.service");
@@ -31,7 +35,7 @@ const normalizeOrderItems = (body) => {
     }
     return body.items.map((item) => ({
       ...item,
-      count: Math.max(1, Number(item.count || 1)),
+      count: Number.isFinite(Number(item.count)) ? Math.max(1, Number(item.count)) : 1,
     }));
   }
   if (Array.isArray(body.lockerIds) && body.lockerIds.length) {
@@ -106,6 +110,7 @@ const createOrder = async (user, body) => {
     if (!branch) throw new AppError("Branch not found", 404);
 
     const inputItems = normalizeOrderItems(body);
+    const allowsMultiOrderLockers = MULTI_ORDER_LOCKER_BRANCH_CODES.has(branch.code);
     const lockerIds = inputItems.map((item) => item.lockerId);
     const uniqueLockerIds = [...new Set(lockerIds)];
     const lockers = await tx.locker.findMany({ where: { id: { in: uniqueLockerIds }, branchId } });
@@ -115,7 +120,9 @@ const createOrder = async (user, body) => {
       ]);
     }
     for (const locker of lockers) {
-      if (locker.status !== "EMPTY" || locker.currentOrderId) {
+      const isBlockedByOccupancy = !allowsMultiOrderLockers && (locker.status !== "EMPTY" || locker.currentOrderId);
+      const isBlockedByService = locker.status === "SERVICE";
+      if (isBlockedByOccupancy || isBlockedByService) {
         const reason = locker.currentOrderId ? "busy" : String(locker.status || "unavailable").toLowerCase();
         throw new AppError(`Locker ${locker.number} is not available (${reason})`, 400, [
           { field: "items.lockerId", lockerId: locker.id, message: "Locker is busy or in service" },
@@ -125,6 +132,7 @@ const createOrder = async (user, body) => {
 
     const tariffs = await tx.tariff.findMany({ where: { branchId } });
     const tariffsBySize = Object.fromEntries(tariffs.map((tariff) => [tariff.size, tariff]));
+    const allowedSizes = new Set(sizesForBranch(branch));
     const tariffHours = Number(body.customHours || body.tariffHours);
     if (!Number.isFinite(tariffHours) || tariffHours <= 0) {
       throw new AppError("tariffHours is required", 400, [
@@ -145,7 +153,17 @@ const createOrder = async (user, body) => {
           { field: "items.lockerId", lockerId: item.lockerId, message: "Locker not found" },
         ]);
       }
-      const size = item.size || locker.size;
+      const size = item.size;
+      if (!size) {
+        throw new AppError("Baggage size is required for every item", 400, [
+          { field: "items.size", lockerId: item.lockerId, message: "Baggage size is required" },
+        ]);
+      }
+      if (!allowedSizes.has(size)) {
+        throw new AppError(`Size ${size} is not available for this branch`, 400, [
+          { field: "items.size", size, message: `Size ${size} is not available for this branch` },
+        ]);
+      }
       const tariff = tariffsBySize[size];
       if (!tariff) {
         throw new AppError(`Tariff for size ${size} not found`, 400, [
@@ -153,7 +171,12 @@ const createOrder = async (user, body) => {
         ]);
       }
       const itemTariffHours = Number(item.tariffHours || tariffHours);
-      const count = Math.max(1, Number(item.count || 1));
+      if (!Number.isFinite(itemTariffHours) || itemTariffHours <= 0) {
+        throw new AppError("tariffHours must be a positive number", 400, [
+          { field: "items.tariffHours", lockerId: item.lockerId, message: "tariffHours must be a positive number" },
+        ]);
+      }
+      const count = Number.isFinite(Number(item.count)) ? Math.max(1, Number(item.count)) : 1;
       const unitPriceUZS = calculatePrice(tariff, itemTariffHours);
       const unitPrice = convertUzsToCurrencyMinor(unitPriceUZS, currency, exchangeRate);
       const originalPrice = unitPrice * count;
@@ -211,8 +234,10 @@ const createOrder = async (user, body) => {
       include: includeOrder,
     });
 
-    for (const locker of lockers) {
-      await tx.locker.update({ where: { id: locker.id }, data: { status: "BUSY", currentOrderId: order.id } });
+    if (!allowsMultiOrderLockers) {
+      for (const locker of lockers) {
+        await tx.locker.update({ where: { id: locker.id }, data: { status: "BUSY", currentOrderId: order.id } });
+      }
     }
 
     const shift = await findOpenShift(tx, branchId);
@@ -251,7 +276,7 @@ const createOrder = async (user, body) => {
   });
 
   telegram.sendSafely(telegram.sendNewOrder(created), { branchId, userId: user.id, entityType: "Order", entityId: created.id });
-  googleSheets.sendSafely(googleSheets.sendNewOrder(created), { action: "NEW_ORDER", branchId, entityType: "Order", entityId: created.id });
+  googleSheets.sendSafely(googleSheets.sendNewOrder(created), { action: "NEW_ORDER", branchId, userId: user.id, entityType: "Order", entityId: created.id });
   return { order: created, warnings };
 };
 
@@ -276,7 +301,7 @@ const pickupOrder = async (user, id, body) => {
 
     const pickupTime = body.realPickupTime ? new Date(body.realPickupTime) : new Date();
     const overtimeHours = Math.max(0, Math.ceil((pickupTime.getTime() - order.plannedCheckOut.getTime()) / 3600000));
-    const overtimeAmount = Number(body.overtimeAmount || 0);
+    const overtimeAmount = Number(body.overtimeAmount || body.extraPayment || 0);
     const updated = await tx.order.update({
       where: { id },
       data: {
@@ -345,9 +370,9 @@ const pickupOrder = async (user, id, body) => {
     }
     return { updated, closedDebt, debtPaidAmount };
   });
-  googleSheets.sendSafely(googleSheets.sendPickup(result.updated, { amount: result.updated.overtimeAmount || 0, currency: body.currency || result.updated.currency, paymentType: body.paymentType || "CASH" }), { action: "PICKUP", branchId: result.updated.branchId, entityType: "Order", entityId: id });
+  googleSheets.sendSafely(googleSheets.sendPickup(result.updated, { amount: result.updated.overtimeAmount || 0, currency: body.currency || result.updated.currency, paymentType: body.paymentType || "CASH" }), { action: "PICKUP", branchId: result.updated.branchId, userId: user.id, entityType: "Order", entityId: id });
   if (result.closedDebt) {
-    googleSheets.sendSafely(googleSheets.sendDebtClosed(result.closedDebt, { amount: result.debtPaidAmount, currency: body.currency || result.updated.currency, paymentType: body.paymentType || "CASH" }), { action: "DEBT_CLOSED", branchId: result.updated.branchId, entityType: "Debt", entityId: result.closedDebt.id });
+    googleSheets.sendSafely(googleSheets.sendDebtClosed(result.closedDebt, { amount: result.debtPaidAmount, currency: body.currency || result.updated.currency, paymentType: body.paymentType || "CASH" }), { action: "DEBT_CLOSED", branchId: result.updated.branchId, userId: user.id, entityType: "Debt", entityId: result.closedDebt.id });
   }
   return result.updated;
 };

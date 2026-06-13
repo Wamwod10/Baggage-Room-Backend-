@@ -36,7 +36,7 @@ const createInkassa = async (user, body) => {
     return inkassa;
   });
   telegram.sendSafely(telegram.sendInkassa(inkassa), { branchId, userId: user.id, entityType: "Inkassa", entityId: inkassa.id });
-  googleSheets.sendSafely(googleSheets.sendInkassa(inkassa), { action: "INKASSA", branchId, entityType: "Inkassa", entityId: inkassa.id });
+  googleSheets.sendSafely(googleSheets.sendInkassa(inkassa), { action: "INKASSA", branchId, userId: user.id, entityType: "Inkassa", entityId: inkassa.id });
   return inkassa;
 };
 

@@ -13,6 +13,7 @@ const ZERO_TARIFF = {
 };
 const BASE_BAGGAGE_SIZES = ["S", "M", "L"];
 const XL_BRANCH_CODES = new Set(["TSV", "TJV", "SVK"]);
+const MULTI_ORDER_LOCKER_BRANCH_CODES = XL_BRANCH_CODES;
 
 const calculatePrice = (tariff, hours) => {
   const h = Number(hours);
@@ -71,4 +72,11 @@ const updateTariff = async (user, id, data) => {
   return updated;
 };
 
-module.exports = { calculatePrice, listTariffs, updateTariff, sizesForBranch, XL_BRANCH_CODES };
+module.exports = {
+  calculatePrice,
+  listTariffs,
+  updateTariff,
+  sizesForBranch,
+  XL_BRANCH_CODES,
+  MULTI_ORDER_LOCKER_BRANCH_CODES,
+};

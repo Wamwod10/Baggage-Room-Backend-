@@ -37,6 +37,14 @@ const formatDate = (date) => {
   return formatTashkentDateTime(date);
 };
 
+const formatDateMinute = (date) => {
+  const value = formatDate(date);
+  const match = String(value).match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})/);
+  if (!match) return value;
+  const [, year, month, day, hour, minute] = match;
+  return `${day}.${month}.${year} ${hour}:${minute}`;
+};
+
 const formatPayment = (payment) => {
   switch (String(payment || "").toUpperCase()) {
     case "CASH":
@@ -174,15 +182,19 @@ const delayedBaggageMessage = (order = {}) => {
 };
 
 const overtimePaymentMessage = (order = {}) => [
-  "⏰ Overtime to'lovi",
+  "⏰ Kechikkan bagaj to'lovi",
   "",
-  line("🆔 Order", orderNumber(order)),
   line("🏢 Filial", formatBranch(order.branch || order.branchName)),
-  line("👤 Klient", order.clientName || order.client),
-  line("⌛ Ortiqcha vaqt", `${cleanText(order.overtimeHours || 0)} soat`),
-  line("💵 To'landi", formatMoney(order.overtimeAmount || 0, order.currency || "UZS")),
+  line("🧾 Buyurtma", orderNumber(order)),
+  line("👤 Mijoz", order.clientName || order.client),
+  line("📞 Telefon", order.phone),
+  "",
+  line("⌛ Kechikkan vaqt", `${cleanText(order.overtimeHours || 0)} soat`),
+  line("💰 Qo'shimcha summa", formatMoney(order.overtimeAmount || order.extraPayment || 0, order.currency || "UZS")),
   line("💳 To'lov", formatPayment(order.overtimePaymentType || order.paymentType)),
-  line("👤 Admin", formatAdmin(order.pickedUpBy || order.admin || order.createdBy)),
+  "",
+  line("👨‍💼 Admin", formatAdmin(order.pickedUpBy || order.admin || order.createdBy)),
+  line("📅 Sana", formatDateMinute(order.realPickupTime || order.updatedAt || new Date())),
 ].join("\n");
 
 const debtClosedMessage = (debt = {}) => [

@@ -27,10 +27,18 @@ const auditRoutes = require("./routes/audit.routes");
 
 const app = express();
 
-const allowedOrigins = (process.env.FRONTEND_URL || "")
-  .split(",")
-  .map((origin) => origin.trim())
-  .filter(Boolean);
+const productionFrontendOrigins = [
+  "https://qonoqbaggage.uz",
+  "https://www.qonoqbaggage.uz",
+];
+
+const allowedOrigins = [
+  ...(process.env.FRONTEND_URL || "")
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean),
+  ...productionFrontendOrigins,
+].filter((origin, index, list) => origin && list.indexOf(origin) === index);
 
 app.set("trust proxy", 1);
 app.use(helmet());

@@ -40,7 +40,7 @@ const createExpense = async (user, body) => {
     return expense;
   });
   telegram.sendSafely(telegram.sendExpense(expense), { branchId, userId: user.id, entityType: "Expense", entityId: expense.id });
-  googleSheets.sendSafely(googleSheets.sendExpense(expense), { action: "EXPENSE", branchId, entityType: "Expense", entityId: expense.id });
+  googleSheets.sendSafely(googleSheets.sendExpense(expense), { action: "EXPENSE", branchId, userId: user.id, entityType: "Expense", entityId: expense.id });
   return expense;
 };
 

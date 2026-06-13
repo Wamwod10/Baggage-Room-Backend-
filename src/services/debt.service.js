@@ -65,7 +65,7 @@ const closeDebt = async (user, id, body) => {
     });
     await audit({ tx, branchId: debt.branchId, userId: user.id, entityType: "Debt", entityId: id, action: "DEBT_CLOSE", oldValue: debt, newValue: updated, description: "Debt closed" });
     telegram.sendSafely(telegram.sendDebtClosed(updated), { branchId: debt.branchId, userId: user.id, entityType: "Debt", entityId: id });
-    googleSheets.sendSafely(googleSheets.sendDebtClosed(updated, { amount: paidAmount, currency: body.currency || debt.currency, paymentType: body.paymentType || "CASH" }), { action: "DEBT_CLOSED", branchId: debt.branchId, entityType: "Debt", entityId: id });
+    googleSheets.sendSafely(googleSheets.sendDebtClosed(updated, { amount: paidAmount, currency: body.currency || debt.currency, paymentType: body.paymentType || "CASH" }), { action: "DEBT_CLOSED", branchId: debt.branchId, userId: user.id, entityType: "Debt", entityId: id });
     return updated;
   });
 };

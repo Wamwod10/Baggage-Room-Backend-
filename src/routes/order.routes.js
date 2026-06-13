@@ -68,6 +68,7 @@ router.post(
       body: z.object({
         realPickupTime: z.string().datetime().optional(),
         overtimeAmount: amount.optional(),
+        extraPayment: amount.optional(),
         debtPaidAmount: amount.optional(),
         paymentType: paymentType.optional(),
         currency: currency.optional(),

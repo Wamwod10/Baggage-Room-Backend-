@@ -1,15 +1,17 @@
 const logger = require("../utils/logger");
+const prisma = require("../config/prisma");
 const { formatTashkentIso } = require("../utils/date");
 
 const TIMEOUT_MS = 5000;
 
 const branchNameByCode = {
-  TIA: "Toshkent aeroport",
-  TSV: "Shimoliy vokzal",
-  TJV: "Janubiy vokzal",
+  TIA: "Toshkent xalqaro aeroport",
+  TSV: "Toshkent Shimoliy vokzal",
+  TJV: "Toshkent Janubiy vokzal",
   SVK: "Samarqand vokzal",
-  SIA: "Samarqand aeroport",
+  SIA: "Samarqand xalqaro aeroport",
 };
+const allowedBranchCodes = new Set(Object.keys(branchNameByCode));
 
 const isEnabled = () => process.env.GOOGLE_SHEETS_ENABLED === "true" && Boolean(process.env.GOOGLE_SHEET_WEBHOOK);
 
@@ -24,6 +26,15 @@ const branchCode = (entity) => entity?.branch?.code || entity?.branchCode || nul
 const branchName = (entity) => {
   const code = branchCode(entity);
   return branchNameByCode[code] || entity?.branch?.name || entity?.branch || null;
+};
+
+const validateBranchCode = (payload) => {
+  if (!payload.branchCode) {
+    throw new Error(`Google Sheets payload is missing branchCode for ${payload.action || "UNKNOWN"}`);
+  }
+  if (!allowedBranchCodes.has(payload.branchCode)) {
+    throw new Error(`Unknown Google Sheets branchCode: ${payload.branchCode}`);
+  }
 };
 
 const lockerItems = (order) => {
@@ -78,6 +89,7 @@ const basePayload = (action, entity, overrides = {}) => ({
 
 const postWebhook = async (payload) => {
   if (!isEnabled()) return { skipped: true };
+  validateBranchCode(payload);
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
@@ -95,17 +107,40 @@ const postWebhook = async (payload) => {
       throw new Error(`Google Sheets webhook failed: ${response.status} ${body}`);
     }
 
-    return { ok: true };
+    const responseBody = await response.text().catch(() => "");
+    logger.info("Google Sheets delivery succeeded", {
+      action: payload.action,
+      branchCode: payload.branchCode,
+      orderNumber: payload.orderNumber,
+      response: responseBody.slice(0, 500),
+    });
+    return { ok: true, response: responseBody };
   } finally {
     clearTimeout(timeout);
   }
 };
 
-const sendSafely = async (promise, { action = "UNKNOWN", branchId = null, entityType = "GoogleSheets", entityId = "google-sheets" } = {}) => {
+const sendSafely = async (promise, { action = "UNKNOWN", branchId = null, userId = null, entityType = "GoogleSheets", entityId = "google-sheets" } = {}) => {
   try {
     return await promise;
   } catch (error) {
     logger.warn("Google Sheets delivery failed", { action, branchId, entityType, entityId, message: error.message });
+    await prisma.auditLog
+      .create({
+        data: {
+          branchId,
+          userId,
+          entityType,
+          entityId,
+          action: "GOOGLE_SHEETS_SEND_ERROR",
+          description: `${action}: ${error.message}`,
+          newValue: {
+            action,
+            message: error.message,
+          },
+        },
+      })
+      .catch((auditError) => logger.warn("Google Sheets audit write failed", { message: auditError.message }));
     return { skipped: true, error: error.message };
   }
 };
@@ -167,4 +202,10 @@ module.exports = {
   sendShiftOpen,
   sendShiftClose,
   sendSafely,
+  _internals: {
+    branchNameByCode,
+    orderPayload,
+    basePayload,
+    validateBranchCode,
+  },
 };
