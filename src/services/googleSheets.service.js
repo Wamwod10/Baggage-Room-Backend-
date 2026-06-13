@@ -13,7 +13,9 @@ const branchNameByCode = {
 };
 const allowedBranchCodes = new Set(Object.keys(branchNameByCode));
 
-const isEnabled = () => process.env.GOOGLE_SHEETS_ENABLED === "true" && Boolean(process.env.GOOGLE_SHEET_WEBHOOK);
+const enabledValue = () => process.env.GOOGLE_SHEETS_ENABLED || process.env.GOOGLE_SHEET_ENABLED || "";
+const getWebhookUrl = () => String(process.env.GOOGLE_SHEET_WEBHOOK || process.env.GOOGLE_SHEETS_WEBHOOK || "").trim();
+const isEnabled = () => ["true", "1", "yes", "on"].includes(String(enabledValue()).toLowerCase()) && Boolean(getWebhookUrl());
 
 const toIso = (value) => {
   if (!value) return null;
@@ -37,6 +39,15 @@ const validateBranchCode = (payload) => {
   }
 };
 
+const payloadEntityId = (payload) =>
+  payload.orderNumber || payload.orderId || payload.entityId || [payload.action, payload.branchCode, payload.createdAt].filter(Boolean).join(":");
+
+const withDeliveryMetadata = (payload) => ({
+  rowPolicy: "FIRST_EMPTY_ROW",
+  idempotencyKey: [payload.action || "UNKNOWN", payload.branchCode || "NO_BRANCH", payloadEntityId(payload)].filter(Boolean).join(":"),
+  ...payload,
+});
+
 const lockerItems = (order) => {
   if (!Array.isArray(order?.items)) return [];
   return order.items
@@ -50,9 +61,10 @@ const lockerItems = (order) => {
 
 const orderPayload = (action, order, overrides = {}) => {
   const lockers = lockerItems(order);
-  return {
+  return withDeliveryMetadata({
     branchCode: branchCode(order),
     branch: branchName(order),
+    orderId: order?.id || order?.orderId || order?.order?.id || null,
     orderNumber: order?.orderNumber || order?.order?.orderNumber || null,
     clientName: order?.clientName || null,
     phone: order?.phone || null,
@@ -66,36 +78,44 @@ const orderPayload = (action, order, overrides = {}) => {
     action,
     createdAt: toIso(order?.createdAt || new Date()),
     ...overrides,
-  };
+  });
 };
 
-const basePayload = (action, entity, overrides = {}) => ({
-  branchCode: branchCode(entity),
-  branch: branchName(entity),
-  orderNumber: entity?.orderNumber || entity?.order?.orderNumber || null,
-  clientName: entity?.clientName || entity?.receiverName || null,
-  phone: entity?.phone || null,
-  passport: entity?.passport || entity?.order?.passport || null,
-  lockers: [],
-  checkIn: toIso(entity?.checkIn || entity?.order?.checkIn || entity?.openedAt),
-  checkOut: toIso(entity?.closedAt || entity?.order?.realPickupTime || entity?.order?.plannedCheckOut),
-  amount: entity?.amount ?? entity?.closingCash ?? entity?.openingCash ?? null,
-  currency: entity?.currency || null,
-  paymentType: entity?.paymentType || null,
-  action,
-  createdAt: toIso(entity?.createdAt || entity?.openedAt || new Date()),
-  ...overrides,
-});
+const basePayload = (action, entity, overrides = {}) =>
+  withDeliveryMetadata({
+    branchCode: branchCode(entity),
+    branch: branchName(entity),
+    entityId: entity?.id || entity?.orderId || entity?.order?.id || null,
+    orderId: entity?.orderId || entity?.order?.id || null,
+    orderNumber: entity?.orderNumber || entity?.order?.orderNumber || null,
+    clientName: entity?.clientName || entity?.receiverName || null,
+    phone: entity?.phone || null,
+    passport: entity?.passport || entity?.order?.passport || null,
+    lockers: [],
+    checkIn: toIso(entity?.checkIn || entity?.order?.checkIn || entity?.openedAt),
+    checkOut: toIso(entity?.closedAt || entity?.order?.realPickupTime || entity?.order?.plannedCheckOut),
+    amount: entity?.amount ?? entity?.closingCash ?? entity?.openingCash ?? null,
+    currency: entity?.currency || null,
+    paymentType: entity?.paymentType || null,
+    action,
+    createdAt: toIso(entity?.createdAt || entity?.openedAt || new Date()),
+    ...overrides,
+  });
 
 const postWebhook = async (payload) => {
-  if (!isEnabled()) return { skipped: true };
+  if (!isEnabled()) {
+    return {
+      skipped: true,
+      reason: `Google Sheets disabled or webhook missing (GOOGLE_SHEETS_ENABLED=${enabledValue()})`,
+    };
+  }
   validateBranchCode(payload);
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
   try {
-    const response = await fetch(process.env.GOOGLE_SHEET_WEBHOOK, {
+    const response = await fetch(getWebhookUrl(), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -108,10 +128,20 @@ const postWebhook = async (payload) => {
     }
 
     const responseBody = await response.text().catch(() => "");
+    let json = null;
+    try {
+      json = responseBody ? JSON.parse(responseBody) : null;
+    } catch {
+      json = null;
+    }
+    if (json && (json.success === false || json.ok === false || json.error || ["error", "failed", "fail"].includes(String(json.status || "").toLowerCase()))) {
+      throw new Error(`Google Sheets webhook rejected payload: ${responseBody}`);
+    }
     logger.info("Google Sheets delivery succeeded", {
       action: payload.action,
       branchCode: payload.branchCode,
       orderNumber: payload.orderNumber,
+      idempotencyKey: payload.idempotencyKey,
       response: responseBody.slice(0, 500),
     });
     return { ok: true, response: responseBody };
@@ -120,9 +150,69 @@ const postWebhook = async (payload) => {
   }
 };
 
+const deliveryKey = ({ action, entityType, entityId }) => `${action}:${entityType}:${entityId}`;
+
+const wasDelivered = async ({ action, entityType, entityId }) => {
+  if (!entityId || entityId === "google-sheets") return false;
+  const existing = await prisma.auditLog.findFirst({
+    where: {
+      entityType,
+      entityId: String(entityId),
+      action: "GOOGLE_SHEETS_SENT",
+      description: deliveryKey({ action, entityType, entityId }),
+    },
+    select: { id: true },
+  });
+  return Boolean(existing);
+};
+
+const markDelivered = async ({ action, branchId, userId, entityType, entityId }, result) => {
+  if (!entityId || entityId === "google-sheets") return;
+  await prisma.auditLog
+    .create({
+      data: {
+        branchId,
+        userId,
+        entityType,
+        entityId: String(entityId),
+        action: "GOOGLE_SHEETS_SENT",
+        description: deliveryKey({ action, entityType, entityId }),
+        newValue: {
+          action,
+          response: result?.response || null,
+        },
+      },
+    })
+    .catch((auditError) => logger.warn("Google Sheets sent marker write failed", { message: auditError.message }));
+};
+
 const sendSafely = async (promise, { action = "UNKNOWN", branchId = null, userId = null, entityType = "GoogleSheets", entityId = "google-sheets" } = {}) => {
   try {
-    return await promise;
+    if (await wasDelivered({ action, entityType, entityId })) {
+      logger.info("Google Sheets duplicate delivery skipped", { action, branchId, entityType, entityId });
+      return { skipped: true, duplicate: true };
+    }
+    const result = await promise;
+    if (result?.skipped) {
+      logger.warn("Google Sheets delivery skipped", { action, branchId, entityType, entityId, reason: result.reason });
+      await prisma.auditLog
+        .create({
+          data: {
+            branchId,
+            userId,
+            entityType,
+            entityId,
+            action: "GOOGLE_SHEETS_SKIPPED",
+            description: `${action}: ${result.reason || "skipped"}`,
+            newValue: { action, reason: result.reason || "skipped" },
+          },
+        })
+        .catch((auditError) => logger.warn("Google Sheets audit write failed", { message: auditError.message }));
+    }
+    if (result?.ok) {
+      await markDelivered({ action, branchId, userId, entityType, entityId }, result);
+    }
+    return result;
   } catch (error) {
     logger.warn("Google Sheets delivery failed", { action, branchId, entityType, entityId, message: error.message });
     await prisma.auditLog
@@ -204,6 +294,8 @@ module.exports = {
   sendSafely,
   _internals: {
     branchNameByCode,
+    getWebhookUrl,
+    isEnabled,
     orderPayload,
     basePayload,
     validateBranchCode,

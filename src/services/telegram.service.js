@@ -7,6 +7,7 @@ const {
   delayedBaggageMessage,
   overtimePaymentMessage,
   debtClosedMessage,
+  debtPaymentMessage,
   inkassaMessage,
   expenseMessage,
   orderEditMessage,
@@ -58,7 +59,7 @@ const sendShiftClose = (shift) => sendBranchEvent(shift.branchId, "shiftClose", 
 const sendOrderCancel = (order) => sendBranchEvent(order.branchId, "orderCancel", orderCancelledMessage(order));
 const sendDelayedBaggage = (order) => sendBranchEvent(order.branchId, "delayedBaggage", delayedBaggageMessage(order));
 const sendOvertimePayment = (order) => sendBranchEvent(order.branchId, "overtimePayment", overtimePaymentMessage(order));
-const sendDebtClosed = (debt) => sendBranchEvent(debt.branchId, "debtClosed", debtClosedMessage(debt));
+const sendDebtClosed = (debt) => sendBranchEvent(debt.branchId, "debtClosed", debtPaymentMessage(debt) || debtClosedMessage(debt));
 const sendInkassa = (inkassa) => sendBranchEvent(inkassa.branchId, "inkassa", inkassaMessage(inkassa));
 const sendExpense = (expense) => sendBranchEvent(expense.branchId, "expense", expenseMessage(expense));
 const sendOrderEdit = (order, changes) => sendBranchEvent(order.branchId, "orderEdit", orderEditMessage(order, changes));

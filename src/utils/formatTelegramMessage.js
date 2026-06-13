@@ -209,6 +209,22 @@ const debtClosedMessage = (debt = {}) => [
   line("👤 Yopdi", formatAdmin(debt.closedBy || debt.admin || debt.closedByName)),
 ].join("\n");
 
+const debtPaymentMessage = (debt = {}) => [
+  "💳 Qarz to'lovi olindi",
+  "",
+  line("🧾 Buyurtma", debt.orderNumber || debt.order?.orderNumber),
+  line("🏢 Filial", formatBranch(debt.branch || debt.branchName)),
+  line("👤 Mijoz", debt.clientName || debt.client),
+  line("📞 Telefon", debt.phone),
+  "",
+  line("💰 Olingan summa", formatMoney(debt.paidAmount ?? debt.amount ?? 0, debt.currency || "UZS")),
+  line("📝 Qarz holati", debt.status === "CLOSED" ? "Yopildi" : "Qisman to'landi"),
+  line("💳 To'lov", formatPayment(debt.paymentType || debt.payment)),
+  "",
+  line("👨‍💼 Admin", formatAdmin(debt.closedBy || debt.admin || debt.closedByName)),
+  line("📅 Sana", formatDateMinute(debt.closedAt || debt.paidAt || new Date())),
+].join("\n");
+
 const inkassaMessage = (inkassa = {}) => [
   "🏦 Inkassa qilindi",
   "",
@@ -274,6 +290,7 @@ module.exports = {
   delayedBaggageMessage,
   overtimePaymentMessage,
   debtClosedMessage,
+  debtPaymentMessage,
   inkassaMessage,
   expenseMessage,
   orderEditMessage,

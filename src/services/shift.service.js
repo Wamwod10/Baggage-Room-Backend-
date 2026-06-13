@@ -21,7 +21,10 @@ const listShifts = async (user, query) => {
 const currentShift = async (user, query = {}) => {
   const branchId = getScopedBranchId(user, query.branchId || user.branchId);
   if (!branchId) return null;
-  return prisma.shift.findFirst({ where: { branchId, status: "OPEN" }, include, orderBy: { openedAt: "desc" } });
+  const shift = await prisma.shift.findFirst({ where: { branchId, status: "OPEN" }, include, orderBy: { openedAt: "desc" } });
+  if (!shift) return null;
+  const { ordersCount, ...report } = await computeShiftReport(prisma, shift);
+  return { ...shift, ...report, ordersCount };
 };
 
 const openShift = async (user, body) => {
@@ -42,7 +45,7 @@ const openShift = async (user, body) => {
   });
   await audit({ branchId, userId: user.id, entityType: "Shift", entityId: shift.id, action: "SHIFT_OPEN", newValue: shift, description: "Shift opened" });
   telegram.sendSafely(telegram.sendShiftOpen(shift), { branchId, userId: user.id, entityType: "Shift", entityId: shift.id });
-  googleSheets.sendSafely(googleSheets.sendShiftOpen(shift), { action: "SHIFT_OPEN", branchId, userId: user.id, entityType: "Shift", entityId: shift.id });
+  await googleSheets.sendSafely(googleSheets.sendShiftOpen(shift), { action: "SHIFT_OPEN", branchId, userId: user.id, entityType: "Shift", entityId: shift.id });
   return shift;
 };
 
@@ -92,7 +95,7 @@ const closeShift = async (user, id, body) => {
     return result;
   });
   telegram.sendSafely(telegram.sendShiftClose(result), { branchId: result.branchId, userId: user.id, entityType: "Shift", entityId: id });
-  googleSheets.sendSafely(googleSheets.sendShiftClose(result), { action: "SHIFT_CLOSE", branchId: result.branchId, userId: user.id, entityType: "Shift", entityId: id });
+  await googleSheets.sendSafely(googleSheets.sendShiftClose(result), { action: "SHIFT_CLOSE", branchId: result.branchId, userId: user.id, entityType: "Shift", entityId: id });
   return result;
 };
 

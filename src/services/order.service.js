@@ -247,7 +247,7 @@ const createOrder = async (user, body) => {
         data: { orderId: order.id, branchId, clientName: body.clientName, phone: body.phone, amount: finalAmount - realPaidAmount, currency },
       });
     }
-    if (realPaidAmount > 0 && body.paymentType !== "DEBT") {
+    if (realPaidAmount > 0) {
       await createCashMovement({
         tx,
         branchId,
@@ -257,7 +257,7 @@ const createOrder = async (user, body) => {
         direction: "IN",
         amount: realPaidAmount,
         currency,
-        paymentType: body.paymentType,
+        paymentType: body.paymentType === "DEBT" ? body.realPaidPaymentType || body.paidPaymentType || "CASH" : body.paymentType,
         note: `Order ${order.orderNumber}`,
         createdById: user.id,
       });
@@ -277,7 +277,7 @@ const createOrder = async (user, body) => {
   });
 
   telegram.sendSafely(telegram.sendNewOrder(created), { branchId, userId: user.id, entityType: "Order", entityId: created.id });
-  googleSheets.sendSafely(googleSheets.sendNewOrder(created), { action: "NEW_ORDER", branchId, userId: user.id, entityType: "Order", entityId: created.id });
+  await googleSheets.sendSafely(googleSheets.sendNewOrder(created), { action: "NEW_ORDER", branchId, userId: user.id, entityType: "Order", entityId: created.id });
   return { order: created, warnings };
 };
 
@@ -298,6 +298,7 @@ const pickupOrder = async (user, id, body) => {
     if (!order || !["ACTIVE", "DELAYED"].includes(order.status)) throw new AppError("Active order not found", 404);
     getScopedBranchId(user, order.branchId);
     let closedDebt = null;
+    let debtPayment = null;
     let debtPaidAmount = 0;
 
     const pickupTime = body.realPickupTime ? new Date(body.realPickupTime) : new Date();
@@ -336,6 +337,7 @@ const pickupOrder = async (user, id, body) => {
       debtPaidAmount = Number(body.debtPaidAmount);
       if (debtPaidAmount > order.debt.amount) throw new AppError("Debt payment cannot exceed open debt amount", 400);
       if (debtPaidAmount > 0) {
+        const remainingDebtAmount = order.debt.amount - debtPaidAmount;
         await createCashMovement({
           tx,
           branchId: order.branchId,
@@ -351,8 +353,28 @@ const pickupOrder = async (user, id, body) => {
         });
         await tx.debt.update({
           where: { id: order.debt.id },
-          data: { amount: order.debt.amount - debtPaidAmount },
+          data: { amount: remainingDebtAmount },
         });
+        debtPayment = {
+          ...order.debt,
+          amount: remainingDebtAmount,
+          paidAmount: debtPaidAmount,
+          paymentType: body.paymentType || "CASH",
+          currency: body.currency || order.currency,
+          status: remainingDebtAmount === 0 ? "CLOSED" : "OPEN",
+          paidAt: pickupTime,
+          closedAt: remainingDebtAmount === 0 ? pickupTime : null,
+          branch: order.branch,
+          order: {
+            id: order.id,
+            orderNumber: order.orderNumber,
+            passport: order.passport,
+            checkIn: order.checkIn,
+            plannedCheckOut: order.plannedCheckOut,
+            realPickupTime: pickupTime,
+          },
+          closedBy: user,
+        };
       }
       if (debtPaidAmount === order.debt.amount) {
         closedDebt = await tx.debt.update({
@@ -361,19 +383,31 @@ const pickupOrder = async (user, id, body) => {
           include: {
             branch: { select: { id: true, name: true, code: true } },
             order: { select: { id: true, orderNumber: true, passport: true, checkIn: true, plannedCheckOut: true, realPickupTime: true } },
+            closedBy: { select: { id: true, name: true, login: true } },
           },
         });
+        debtPayment = {
+          ...closedDebt,
+          paidAmount: debtPaidAmount,
+          paymentType: body.paymentType || "CASH",
+          currency: body.currency || order.currency,
+          closedBy: closedDebt.closedBy || user,
+          paidAt: closedDebt.closedAt || pickupTime,
+        };
       }
     }
     await audit({ tx, branchId: order.branchId, userId: user.id, entityType: "Order", entityId: id, action: "ORDER_PICKUP", oldValue: order, newValue: updated, description: "Order picked up" });
     if (overtimeAmount > 0) {
       telegram.sendSafely(telegram.sendOvertimePayment({ ...updated, overtimePaymentType: body.paymentType || "CASH" }), { branchId: order.branchId, userId: user.id, entityType: "Order", entityId: id });
     }
-    return { updated, closedDebt, debtPaidAmount };
+    return { updated, closedDebt, debtPayment, debtPaidAmount };
   });
-  googleSheets.sendSafely(googleSheets.sendPickup(result.updated, { amount: result.updated.overtimeAmount || 0, currency: body.currency || result.updated.currency, paymentType: body.paymentType || "CASH" }), { action: "PICKUP", branchId: result.updated.branchId, userId: user.id, entityType: "Order", entityId: id });
+  await googleSheets.sendSafely(googleSheets.sendPickup(result.updated, { amount: result.updated.overtimeAmount || 0, currency: body.currency || result.updated.currency, paymentType: body.paymentType || "CASH" }), { action: "PICKUP", branchId: result.updated.branchId, userId: user.id, entityType: "Order", entityId: id });
+  if (result.debtPayment) {
+    telegram.sendSafely(telegram.sendDebtClosed(result.debtPayment), { branchId: result.updated.branchId, userId: user.id, entityType: "Debt", entityId: result.debtPayment.id });
+  }
   if (result.closedDebt) {
-    googleSheets.sendSafely(googleSheets.sendDebtClosed(result.closedDebt, { amount: result.debtPaidAmount, currency: body.currency || result.updated.currency, paymentType: body.paymentType || "CASH" }), { action: "DEBT_CLOSED", branchId: result.updated.branchId, userId: user.id, entityType: "Debt", entityId: result.closedDebt.id });
+    await googleSheets.sendSafely(googleSheets.sendDebtClosed(result.closedDebt, { amount: result.debtPaidAmount, currency: body.currency || result.updated.currency, paymentType: body.paymentType || "CASH" }), { action: "DEBT_CLOSED", branchId: result.updated.branchId, userId: user.id, entityType: "Debt", entityId: result.closedDebt.id });
   }
   return result.updated;
 };

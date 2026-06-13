@@ -29,6 +29,20 @@ OVERDUE_JOB_INTERVAL_MS=300000
 
 `FRONTEND_URL` can contain comma-separated origins.
 
+## Google Sheets Webhook
+
+Enable Google Sheets delivery with:
+
+```env
+GOOGLE_SHEETS_ENABLED=true
+GOOGLE_SHEET_WEBHOOK="Google Apps Script Web App URL"
+```
+
+The Apps Script webhook template is in `scripts/googleSheetsAppsScript.js`.
+Use that version if rows are being written far below the existing data: it does
+not use `appendRow()`, writes to the first empty data row, and skips duplicate
+events by `idempotencyKey`.
+
 ## Local Run
 
 ```bash

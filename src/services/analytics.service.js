@@ -3,6 +3,7 @@ const { branchWhere, getScopedBranchId } = require("../utils/scope");
 const { dateRangeWhere, formatTashkentDateKey, getTashkentParts, startOfToday } = require("../utils/date");
 const { sum, byKeySum } = require("../utils/money");
 const { markDelayedOrders } = require("./order.service");
+const { computeShiftReport } = require("./shift.service");
 
 const asNumber = (value) => Number(value || 0);
 const dayKey = (date) => formatTashkentDateKey(date);
@@ -81,6 +82,12 @@ const dashboard = async (user, query) => {
     prisma.order.findMany({ where: { ...scope, createdAt: { gte: today } }, select: { id: true, branchId: true, status: true } }),
   ]);
 
+  const shiftStatus = await Promise.all(
+    shifts.map(async (shift) => {
+      const { ordersCount, ...report } = await computeShiftReport(prisma, shift);
+      return { ...shift, ...report, ordersCount };
+    }),
+  );
   const todayPayments = todayMovements.filter((movement) => movement.direction === "IN");
   const todayOut = todayMovements.filter((movement) => movement.direction === "OUT");
   const todayExpenses = todayOut.filter((movement) => movement.type === "EXPENSE");
@@ -114,7 +121,7 @@ const dashboard = async (user, query) => {
     paymentBreakdown: byKeySum(todayPayments, "paymentType"),
     currencyBreakdown: byKeySum(todayPayments, "currency"),
     branchSummary: buildBranchSummary({ branches, orders: todayOrders, lockers, movements: todayMovements }),
-    shiftStatus: shifts,
+    shiftStatus,
   };
 };
 
@@ -140,6 +147,14 @@ const reports = async (user, query) => {
     prisma.inkassa.findMany({ where: { ...scope, ...range }, include: { branch: true, createdBy: { select: { id: true, name: true, login: true } } } }),
     prisma.branch.findMany({ where: scope.branchId ? { id: scope.branchId } : {}, orderBy: { name: "asc" } }),
   ]);
+
+  const shiftsWithReports = await Promise.all(
+    shifts.map(async (shift) => {
+      if (shift.status !== "OPEN") return shift;
+      const { ordersCount, ...report } = await computeShiftReport(prisma, shift);
+      return { ...shift, ...report, ordersCount };
+    }),
+  );
 
   const inMovements = movements.filter((m) => m.direction === "IN");
   const outMovements = movements.filter((m) => m.direction === "OUT");
@@ -205,22 +220,21 @@ const reports = async (user, query) => {
   );
 
   const adminPerformanceMap = {};
-  for (const order of orders) {
-    const key = userName(order.createdBy);
+  for (const movement of inMovements) {
+    const key = userName(movement.createdBy);
     if (!adminPerformanceMap[key]) adminPerformanceMap[key] = { admin: key, orders: 0, revenue: 0, profit: 0, shifts: 0 };
-    adminPerformanceMap[key].orders += 1;
-    adminPerformanceMap[key].revenue += asNumber(order.realPaidAmount);
+    if (["ORDER_PAYMENT", "DEBT_CLOSE"].includes(movement.type)) adminPerformanceMap[key].orders += 1;
+    adminPerformanceMap[key].revenue += asNumber(movement.amount);
+    adminPerformanceMap[key].profit += asNumber(movement.amount);
   }
-  for (const shift of shifts) {
+  for (const shift of shiftsWithReports) {
     const key = userName(shift.openedBy);
     if (!adminPerformanceMap[key]) adminPerformanceMap[key] = { admin: key, orders: 0, revenue: 0, profit: 0, shifts: 0 };
     adminPerformanceMap[key].shifts += 1;
-    adminPerformanceMap[key].revenue += asNumber(shift.totalRevenue);
-    adminPerformanceMap[key].profit += asNumber(shift.totalRevenue) - asNumber(shift.expenseAmount);
   }
 
-  const shiftRevenueTotal = sum(shifts, (shift) => shift.totalRevenue);
-  const bestShift = shifts
+  const shiftRevenueTotal = sum(shiftsWithReports, (shift) => shift.totalRevenue);
+  const bestShift = shiftsWithReports
     .slice()
     .sort((a, b) => asNumber(b.totalRevenue) - asNumber(a.totalRevenue))[0];
 
@@ -238,7 +252,7 @@ const reports = async (user, query) => {
       netProfit: totalRevenue - totalExpenses,
       profitMargin: percent(totalRevenue - totalExpenses, totalRevenue),
       averageOrder: totalOrders ? Math.round(totalRevenue / totalOrders) : 0,
-      averageShiftRevenue: shifts.length ? Math.round(shiftRevenueTotal / shifts.length) : 0,
+      averageShiftRevenue: shiftsWithReports.length ? Math.round(shiftRevenueTotal / shiftsWithReports.length) : 0,
       expenseRatio: percent(totalExpenses, totalRevenue),
       inkassa: totalInkassa,
     },
@@ -273,12 +287,12 @@ const reports = async (user, query) => {
       profit: admin.profit || admin.revenue,
     })),
     shiftAnalytics: {
-      total: shifts.length,
-      open: shifts.filter((shift) => shift.status === "OPEN").length,
-      closed: shifts.filter((shift) => shift.status === "CLOSED").length,
-      twelveHour: shifts.filter((shift) => String(shift.shiftTime || "").includes("12")).length,
-      twentyFourHour: shifts.filter((shift) => String(shift.shiftTime || "").includes("24")).length,
-      averageRevenue: shifts.length ? Math.round(shiftRevenueTotal / shifts.length) : 0,
+      total: shiftsWithReports.length,
+      open: shiftsWithReports.filter((shift) => shift.status === "OPEN").length,
+      closed: shiftsWithReports.filter((shift) => shift.status === "CLOSED").length,
+      twelveHour: shiftsWithReports.filter((shift) => String(shift.shiftTime || "").includes("12")).length,
+      twentyFourHour: shiftsWithReports.filter((shift) => String(shift.shiftTime || "").includes("24")).length,
+      averageRevenue: shiftsWithReports.length ? Math.round(shiftRevenueTotal / shiftsWithReports.length) : 0,
       bestShift: bestShift
         ? {
             id: bestShift.id,
@@ -300,7 +314,7 @@ const reports = async (user, query) => {
     cashMovement: movements,
     expenses,
     inkassa,
-    shifts,
+    shifts: shiftsWithReports,
     peakHours,
     adminActivity: auditLogs,
   };
