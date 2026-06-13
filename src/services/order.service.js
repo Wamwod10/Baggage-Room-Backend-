@@ -133,6 +133,7 @@ const createOrder = async (user, body) => {
     const tariffs = await tx.tariff.findMany({ where: { branchId } });
     const tariffsBySize = Object.fromEntries(tariffs.map((tariff) => [tariff.size, tariff]));
     const allowedSizes = new Set(sizesForBranch(branch));
+    const isCustomTariff = body.customHours !== undefined && body.customHours !== null;
     const tariffHours = Number(body.customHours || body.tariffHours);
     if (!Number.isFinite(tariffHours) || tariffHours <= 0) {
       throw new AppError("tariffHours is required", 400, [
@@ -177,7 +178,7 @@ const createOrder = async (user, body) => {
         ]);
       }
       const count = Number.isFinite(Number(item.count)) ? Math.max(1, Number(item.count)) : 1;
-      const unitPriceUZS = calculatePrice(tariff, itemTariffHours);
+      const unitPriceUZS = calculatePrice(tariff, itemTariffHours, { isCustom: isCustomTariff });
       const unitPrice = convertUzsToCurrencyMinor(unitPriceUZS, currency, exchangeRate);
       const originalPrice = unitPrice * count;
       const discountAmount = Number(item.discountAmount || 0);

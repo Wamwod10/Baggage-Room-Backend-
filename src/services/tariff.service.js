@@ -15,8 +15,9 @@ const BASE_BAGGAGE_SIZES = ["S", "M", "L"];
 const XL_BRANCH_CODES = new Set(["TSV", "TJV", "SVK"]);
 const MULTI_ORDER_LOCKER_BRANCH_CODES = XL_BRANCH_CODES;
 
-const calculatePrice = (tariff, hours) => {
+const calculatePrice = (tariff, hours, options = {}) => {
   const h = Number(hours);
+  if (options.isCustom) return Number(tariff.price1h || 0) * Math.max(1, Math.ceil(h || 1));
   if (h <= 1) return tariff.price1h;
   if (h <= 12) return tariff.price12h;
   if (h <= 24) return tariff.price24h;
