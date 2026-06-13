@@ -271,6 +271,18 @@ const sendInkassa = (inkassa) =>
       sheetSection: "INKASSA",
       rowType: "OUT",
       displayName: "Inkassa",
+      operationName: "INKASSA",
+      legacySheetTarget: {
+        amountColumnByCurrency: {
+          UZS: 15,
+          USD: 16,
+          EUR: 17,
+          RUB: 18,
+          KZT: 19,
+          TJS: 20,
+        },
+        nameColumn: 22,
+      },
     }),
   );
 

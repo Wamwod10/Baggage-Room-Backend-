@@ -71,12 +71,18 @@ function doPost(e) {
     }
 
     const sheet = getOrCreateSheet_(sheetName);
-    ensureHeaders_(sheet);
 
     const idempotencyKey = String(payload.idempotencyKey || buildIdempotencyKey_(payload));
     if (hasDuplicate_(sheet, idempotencyKey)) {
       return json_({ ok: true, duplicate: true, idempotencyKey });
     }
+
+    if (isLegacyQonoqSheet_(sheet) && String(payload.action || "").toUpperCase() === "INKASSA") {
+      const targetRow = writeLegacyInkassaRow_(sheet, payload, idempotencyKey);
+      return json_({ ok: true, row: targetRow, idempotencyKey, legacy: true });
+    }
+
+    ensureHeaders_(sheet);
 
     const row = buildRow_(payload, idempotencyKey);
     const targetRow = firstEmptyRowByColumn_(sheet, 1);
@@ -96,6 +102,7 @@ function getOrCreateSheet_(name) {
 }
 
 function ensureHeaders_(sheet) {
+  ensureColumns_(sheet, HEADERS.length);
   if (sheet.getLastRow() === 0) {
     sheet.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]);
     return;
@@ -108,27 +115,56 @@ function ensureHeaders_(sheet) {
   }
 }
 
+function ensureColumns_(sheet, minColumns) {
+  const currentColumns = sheet.getMaxColumns();
+  if (currentColumns < minColumns) {
+    sheet.insertColumnsAfter(currentColumns, minColumns - currentColumns);
+  }
+}
+
 function firstEmptyRowByColumn_(sheet, column) {
-  const maxRows = Math.max(sheet.getMaxRows(), 2);
-  const values = sheet.getRange(2, column, maxRows - 1, 1).getDisplayValues();
+  return firstDataRowAfterContent_(sheet, 2, [column]);
+}
+
+function firstDataRowAfterContent_(sheet, startRow, columns) {
+  const maxRows = Math.max(sheet.getMaxRows(), startRow);
+  const minCol = Math.min.apply(null, columns);
+  const maxCol = Math.max.apply(null, columns);
+  const values = sheet.getRange(startRow, minCol, maxRows - startRow + 1, maxCol - minCol + 1).getDisplayValues();
 
   for (let index = 0; index < values.length; index += 1) {
-    if (!String(values[index][0] || "").trim()) {
-      return index + 2;
+    const rowNumber = startRow + index;
+    if (isHiddenRow_(sheet, rowNumber)) continue;
+    const hasContent = columns.some((column) => String(values[index][column - minCol] || "").trim());
+    if (!hasContent) {
+      return rowNumber;
     }
   }
 
-  sheet.insertRowsAfter(maxRows, 20);
-  return maxRows + 1;
+  const nextRow = maxRows + 1;
+  if (nextRow > sheet.getMaxRows()) sheet.insertRowsAfter(sheet.getMaxRows(), 20);
+  return nextRow;
+}
+
+function isHiddenRow_(sheet, row) {
+  try {
+    return sheet.isRowHiddenByUser(row) || sheet.isRowHiddenByFilter(row);
+  } catch (error) {
+    return false;
+  }
 }
 
 function hasDuplicate_(sheet, idempotencyKey) {
   if (!idempotencyKey) return false;
 
   const maxRows = Math.max(sheet.getMaxRows(), 2);
-  const idempotencyColumn = HEADERS.indexOf("Idempotency Key") + 1;
-  const values = sheet.getRange(2, idempotencyColumn, maxRows - 1, 1).getDisplayValues();
-  return values.some((row) => String(row[0] || "").trim() === idempotencyKey);
+  const candidateColumns = [HEADERS.indexOf("Idempotency Key") + 1, 23].filter((column, index, list) => column > 0 && list.indexOf(column) === index);
+
+  return candidateColumns.some((column) => {
+    if (column > sheet.getMaxColumns()) return false;
+    const values = sheet.getRange(2, column, maxRows - 1, 1).getDisplayValues();
+    return values.some((row) => String(row[0] || "").trim() === idempotencyKey);
+  });
 }
 
 function buildRow_(payload, idempotencyKey) {
@@ -155,6 +191,53 @@ function buildRow_(payload, idempotencyKey) {
     payload.sheetSection || action || "",
     idempotencyKey || "",
   ];
+}
+
+function isLegacyQonoqSheet_(sheet) {
+  const rows = Math.min(sheet.getMaxRows(), 8);
+  const cols = Math.min(sheet.getMaxColumns(), 25);
+  const text = sheet.getRange(1, 1, rows, cols).getDisplayValues().flat().join(" ").toLowerCase();
+  return text.indexOf("наименование") !== -1 || text.indexOf("инкасса") !== -1 || text.indexOf("остаток uzs") !== -1;
+}
+
+function legacyDataStartRow_(sheet) {
+  const rows = Math.min(sheet.getMaxRows(), 12);
+  const values = sheet.getRange(1, 1, rows, Math.min(sheet.getMaxColumns(), 25)).getDisplayValues();
+  for (let index = 0; index < values.length; index += 1) {
+    const rowText = values[index].join(" ").toLowerCase();
+    if (rowText.indexOf("наименование") !== -1 || rowText.indexOf("период хранения") !== -1) {
+      return index + 2;
+    }
+  }
+  return 5;
+}
+
+function writeLegacyInkassaRow_(sheet, payload, idempotencyKey) {
+  const currency = String(payload.currency || "UZS").toUpperCase();
+  const amountColumns = (payload.legacySheetTarget && payload.legacySheetTarget.amountColumnByCurrency) || {};
+  const amountColumn = Number(amountColumns[currency] || amountColumns.UZS || 15);
+  const nameColumn = Number(payload.legacySheetTarget && payload.legacySheetTarget.nameColumn || 22);
+  const width = Math.max(nameColumn, amountColumn, 23);
+  const startRow = legacyDataStartRow_(sheet);
+  const targetRow = firstDataRowAfterContent_(sheet, startRow, [1, 2, 4, 6, 15, 16, 17, 18, 19, 20, 21, 22]);
+  const row = new Array(width).fill("");
+  ensureColumns_(sheet, width);
+
+  row[0] = formatSheetDate_(payload.createdAt || new Date());
+  row[1] = payload.recipientName || payload.clientName || "INKASSA";
+  row[amountColumn - 1] = payload.amount === null || payload.amount === undefined ? "" : payload.amount;
+  row[nameColumn - 1] = payload.recipientName || payload.clientName || payload.note || "INKASSA";
+  row[22] = idempotencyKey;
+
+  sheet.getRange(targetRow, 1, 1, row.length).setValues([row]);
+  sheet.getRange(targetRow, 1, 1, row.length).setBackground("#fce4d6").setFontColor("#7f1d1d").setFontWeight("bold");
+  return targetRow;
+}
+
+function formatSheetDate_(dateValue) {
+  const date = dateValue instanceof Date ? dateValue : new Date(dateValue);
+  if (Number.isNaN(date.getTime())) return dateValue || "";
+  return Utilities.formatDate(date, "Asia/Tashkent", "dd.MM.yyyy");
 }
 
 function styleRow_(sheet, row, action, width) {

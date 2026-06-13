@@ -1,4 +1,4 @@
-﻿const { currencyFractionDigits } = require("./money");
+const { currencyFractionDigits } = require("./money");
 const { formatTashkentDateTime } = require("./date");
 
 const safe = (value, fallback = "-") => {
@@ -95,75 +95,75 @@ const orderMessage = (order = {}) => {
   const count = Object.values(sizeCounts).reduce((total, value) => total + value, 0) || Number(order.count || 0);
 
   return [
-    "рџ“¦ Yangi baggage qabul qilindi",
+    "📦 Yangi baggage qabul qilindi",
     "",
-    line("рџЏў Filial", formatBranch(order.branch || order.branchName)),
-    line("рџ‘¤ Klient", order.clientName || order.client),
-    line("рџ“ћ Telefon", order.phone),
-    line("рџЄЄ Passport", order.passport),
+    line("🏢 Filial", formatBranch(order.branch || order.branchName)),
+    line("👤 Klient", order.clientName || order.client),
+    line("📞 Telefon", order.phone),
+    line("🪪 Passport", order.passport),
     "",
-    line("рџ§і Size", sizes.join(", ") || "-"),
-    line("рџ”ў Soni", `${count} ta`),
+    line("🧳 Size", sizes.join(", ") || "-"),
+    line("🔢 Soni", `${count} ta`),
     "",
-    line("рџ•’ Check-in", formatDate(order.checkIn || order.createdAt)),
-    line("рџ• Check-out", formatDate(order.plannedCheckOut)),
+    line("🕒 Check-in", formatDate(order.checkIn || order.createdAt)),
+    line("🕘 Check-out", formatDate(order.plannedCheckOut)),
     "",
-    line("рџ’і To'lov", formatPayment(order.paymentType)),
-    line("рџ’° Summa", formatMoney(order.realPaidAmount || order.finalAmount || 0, order.currency)),
+    line("💳 To'lov", formatPayment(order.paymentType)),
+    line("💰 Summa", formatMoney(order.realPaidAmount || order.finalAmount || 0, order.currency)),
     "",
-    line("рџ†” Order", orderNumber(order)),
-    line("рџ“… Sana", formatDate(order.createdAt || order.checkIn)),
+    line("🆔 Order", orderNumber(order)),
+    line("📅 Sana", formatDate(order.createdAt || order.checkIn)),
   ].join("\n");
 };
 
 const shiftOpenedMessage = (shift = {}) => [
-  "рџџў Kassa ochildi",
+  "🟢 Kassa ochildi",
   "",
-  line("рџЏў Filial", formatBranch(shift.branch || shift.branchName)),
-  line("рџ‘¤ Admin", formatAdmin(shift.openedBy || shift.admin || shift.openedByName)),
-  ...(shift.shiftTime ? [line("рџ• Shift", shift.shiftTime), ""] : [""]),
-  line("рџ•’ Ochildi", formatDate(shift.openedAt || shift.createdAt)),
-  line("рџ’µ Opening cash", formatMoney(shift.openingCash || 0, shift.currency || "UZS")),
-  line("рџ’° Qabul qilingan", formatMoney(shift.acceptedCash || 0, shift.currency || "UZS")),
-  line("рџ“… Sana", formatDate(shift.openedAt || shift.createdAt)),
+  line("🏢 Filial", formatBranch(shift.branch || shift.branchName)),
+  line("👤 Admin", formatAdmin(shift.openedBy || shift.admin || shift.openedByName)),
+  ...(shift.shiftTime ? [line("🕘 Shift", shift.shiftTime), ""] : [""]),
+  line("🕒 Ochildi", formatDate(shift.openedAt || shift.createdAt)),
+  line("💵 Opening cash", formatMoney(shift.openingCash || 0, shift.currency || "UZS")),
+  line("💰 Qabul qilingan", formatMoney(shift.acceptedCash || 0, shift.currency || "UZS")),
+  line("📅 Sana", formatDate(shift.openedAt || shift.createdAt)),
 ].join("\n");
 
 const shiftClosedMessage = (shift = {}) => [
-  "рџ”ґ Smena yopildi",
+  "🔴 Smena yopildi",
   "",
-  line("рџЏў Filial", formatBranch(shift.branch || shift.branchName)),
-  line("рџ‘¤ Topshirgan", formatAdmin(shift.openedBy || shift.admin || shift.openedByName)),
-  line("рџ‘¤ Yopgan", formatAdmin(shift.closedBy || shift.closedByName)),
-  ...(shift.shiftTime ? [line("рџ• Shift", shift.shiftTime)] : []),
+  line("🏢 Filial", formatBranch(shift.branch || shift.branchName)),
+  line("👤 Topshirgan", formatAdmin(shift.openedBy || shift.admin || shift.openedByName)),
+  line("👤 Yopgan", formatAdmin(shift.closedBy || shift.closedByName)),
+  ...(shift.shiftTime ? [line("🕘 Shift", shift.shiftTime)] : []),
   "",
-  line("рџ“¦ Buyurtmalar", `${Number(shift.ordersCount || shift.orders || 0)} ta`),
-  line("рџ’° Umumiy tushum", formatMoney(shift.totalRevenue || 0, shift.currency || "UZS")),
-  line("рџ’µ Naqd", formatMoney(shift.cashRevenue || 0, shift.currency || "UZS")),
-  line("рџ’і Karta", formatMoney(shift.cardRevenue || 0, shift.currency || "UZS")),
-  line("рџЏ¦ O'tkazma", formatMoney(shift.transferRevenue || 0, shift.currency || "UZS")),
+  line("📦 Buyurtmalar", `${Number(shift.ordersCount || shift.orders || 0)} ta`),
+  line("💰 Umumiy tushum", formatMoney(shift.totalRevenue || 0, shift.currency || "UZS")),
+  line("💵 Naqd", formatMoney(shift.cashRevenue || 0, shift.currency || "UZS")),
+  line("💳 Karta", formatMoney(shift.cardRevenue || 0, shift.currency || "UZS")),
+  line("🏦 O'tkazma", formatMoney(shift.transferRevenue || 0, shift.currency || "UZS")),
   "",
-  line("рџ’ё Xarajat", formatMoney(shift.expenseAmount || 0, shift.currency || "UZS")),
-  line("рџЏ¦ Inkassa", formatMoney(shift.inkassaAmount || 0, shift.currency || "UZS")),
-  line("рџ“ќ Ochiq qarz", formatMoney(shift.debtAmount || 0, shift.currency || "UZS")),
-  line("рџ’° Kassada qolgan", formatMoney(shiftCashLeft(shift), shift.currency || "UZS")),
+  line("💸 Xarajat", formatMoney(shift.expenseAmount || 0, shift.currency || "UZS")),
+  line("🏦 Inkassa", formatMoney(shift.inkassaAmount || 0, shift.currency || "UZS")),
+  line("📝 Ochiq qarz", formatMoney(shift.debtAmount || 0, shift.currency || "UZS")),
+  line("💰 Kassada qolgan", formatMoney(shiftCashLeft(shift), shift.currency || "UZS")),
   "",
-  line("рџ• Yopildi", formatDate(shift.closedAt || new Date())),
-  line("рџ“… Sana", formatDate(shift.closedAt || new Date())),
+  line("🕘 Yopildi", formatDate(shift.closedAt || new Date())),
+  line("📅 Sana", formatDate(shift.closedAt || new Date())),
 ].join("\n");
 
 const orderCancelledMessage = (order = {}) => {
   const firstItem = Array.isArray(order.items) ? order.items[0] : null;
 
   return [
-    "вќЊ Buyurtma bekor qilindi",
+    "❌ Buyurtma bekor qilindi",
     "",
-    line("рџ†” Order", orderNumber(order)),
-    line("рџЏў Filial", formatBranch(order.branch || order.branchName)),
-    line("рџ‘¤ Klient", order.clientName || order.client),
-    line("рџ”ђ Yacheyka", formatLockerNumber(firstItem?.lockerNumber || firstItem?.locker?.number || order.lockerNumber)),
-    line("рџ“ќ Sabab", order.cancelReason || order.cancellationReason || order.reason),
-    line("рџ‘¤ Bekor qildi", formatAdmin(order.cancelledBy || order.cancelledByName || order.admin || order.createdBy)),
-    line("рџ• Vaqt", formatDate(order.cancelledAt || order.updatedAt || order.createdAt)),
+    line("🆔 Order", orderNumber(order)),
+    line("🏢 Filial", formatBranch(order.branch || order.branchName)),
+    line("👤 Klient", order.clientName || order.client),
+    line("🔐 Yacheyka", formatLockerNumber(firstItem?.lockerNumber || firstItem?.locker?.number || order.lockerNumber)),
+    line("📝 Sabab", order.cancelReason || order.cancellationReason || order.reason),
+    line("👤 Bekor qildi", formatAdmin(order.cancelledBy || order.cancelledByName || order.admin || order.createdBy)),
+    line("🕘 Vaqt", formatDate(order.cancelledAt || order.updatedAt || order.createdAt)),
   ].join("\n");
 };
 
@@ -171,117 +171,117 @@ const delayedBaggageMessage = (order = {}) => {
   const firstItem = Array.isArray(order.items) ? order.items[0] : null;
 
   return [
-    "вљ пёЏ Kechikkan bagaj",
+    "⚠️ Kechikkan bagaj",
     "",
-    line("рџ†” Order", orderNumber(order)),
-    line("рџЏў Filial", formatBranch(order.branch || order.branchName)),
-    line("рџ‘¤ Klient", order.clientName || order.client),
-    line("рџ“ћ Telefon", order.phone),
-    line("рџ”ђ Yacheyka", formatLockerNumber(firstItem?.lockerNumber || firstItem?.locker?.number || order.lockerNumber)),
-    line("вЏ° Tugashi kerak edi", formatDate(order.plannedCheckOut)),
-    line("рџ’° Qo'shimcha hisob", formatMoney(order.overtimeAmount || order.extraCharge || 0, order.currency || "UZS")),
+    line("🆔 Order", orderNumber(order)),
+    line("🏢 Filial", formatBranch(order.branch || order.branchName)),
+    line("👤 Klient", order.clientName || order.client),
+    line("📞 Telefon", order.phone),
+    line("🔐 Yacheyka", formatLockerNumber(firstItem?.lockerNumber || firstItem?.locker?.number || order.lockerNumber)),
+    line("⏰ Tugashi kerak edi", formatDate(order.plannedCheckOut)),
+    line("💰 Qo'shimcha hisob", formatMoney(order.overtimeAmount || order.extraCharge || 0, order.currency || "UZS")),
   ].join("\n");
 };
 
 const overtimePaymentMessage = (order = {}) => [
-  "вЏ° Kechikkan bagaj to'lovi",
+  "⏰ Kechikkan bagaj to'lovi",
   "",
-  line("рџЏў Filial", formatBranch(order.branch || order.branchName)),
-  line("рџ§ѕ Buyurtma", orderNumber(order)),
-  line("рџ‘¤ Mijoz", order.clientName || order.client),
-  line("рџ“ћ Telefon", order.phone),
+  line("🏢 Filial", formatBranch(order.branch || order.branchName)),
+  line("🧾 Buyurtma", orderNumber(order)),
+  line("👤 Mijoz", order.clientName || order.client),
+  line("📞 Telefon", order.phone),
   "",
-  line("вЊ› Kechikkan vaqt", `${cleanText(order.overtimeHours || 0)} soat`),
-  line("рџ’° Qo'shimcha summa", formatMoney(order.overtimeAmount || order.extraPayment || 0, order.currency || "UZS")),
-  line("рџ’і To'lov", formatPayment(order.overtimePaymentType || order.paymentType)),
+  line("⌛ Kechikkan vaqt", `${cleanText(order.overtimeHours || 0)} soat`),
+  line("💰 Qo'shimcha summa", formatMoney(order.overtimeAmount || order.extraPayment || 0, order.currency || "UZS")),
+  line("💳 To'lov", formatPayment(order.overtimePaymentType || order.paymentType)),
   "",
-  line("рџ‘ЁвЂЌрџ’ј Admin", formatAdmin(order.pickedUpBy || order.admin || order.createdBy)),
-  line("рџ“… Sana", formatDateMinute(order.realPickupTime || order.updatedAt || new Date())),
+  line("👨‍💼 Admin", formatAdmin(order.pickedUpBy || order.admin || order.createdBy)),
+  line("📅 Sana", formatDateMinute(order.realPickupTime || order.updatedAt || new Date())),
 ].join("\n");
 
 const debtClosedMessage = (debt = {}) => [
-  "вњ… Qarz yopildi",
+  "✅ Qarz yopildi",
   "",
-  line("рџ†” Order", debt.orderNumber || debt.order?.orderNumber),
-  line("рџЏў Filial", formatBranch(debt.branch || debt.branchName)),
-  line("рџ‘¤ Klient", debt.clientName || debt.client),
-  line("рџ“ћ Telefon", debt.phone),
-  line("рџ’° Qarz summa", formatMoney(debt.amount || 0, debt.currency || "UZS")),
-  line("рџ’і To'lov", formatPayment(debt.paymentType || debt.payment)),
-  line("рџ‘¤ Yopdi", formatAdmin(debt.closedBy || debt.admin || debt.closedByName)),
+  line("🆔 Order", debt.orderNumber || debt.order?.orderNumber),
+  line("🏢 Filial", formatBranch(debt.branch || debt.branchName)),
+  line("👤 Klient", debt.clientName || debt.client),
+  line("📞 Telefon", debt.phone),
+  line("💰 Qarz summa", formatMoney(debt.amount || 0, debt.currency || "UZS")),
+  line("💳 To'lov", formatPayment(debt.paymentType || debt.payment)),
+  line("👤 Yopdi", formatAdmin(debt.closedBy || debt.admin || debt.closedByName)),
 ].join("\n");
 
 const debtPaymentMessage = (debt = {}) => [
-  "рџ’і Qarz to'lovi olindi",
+  "💳 Qarz to'lovi olindi",
   "",
-  line("рџ§ѕ Buyurtma", debt.orderNumber || debt.order?.orderNumber),
-  line("рџЏў Filial", formatBranch(debt.branch || debt.branchName)),
-  line("рџ‘¤ Mijoz", debt.clientName || debt.client),
-  line("рџ“ћ Telefon", debt.phone),
+  line("🧾 Buyurtma", debt.orderNumber || debt.order?.orderNumber),
+  line("🏢 Filial", formatBranch(debt.branch || debt.branchName)),
+  line("👤 Mijoz", debt.clientName || debt.client),
+  line("📞 Telefon", debt.phone),
   "",
-  line("рџ’° Olingan summa", formatMoney(debt.paidAmount ?? debt.amount ?? 0, debt.currency || "UZS")),
-  line("рџ“ќ Qarz holati", debt.status === "CLOSED" ? "Yopildi" : "Qisman to'landi"),
-  line("рџ’і To'lov", formatPayment(debt.paymentType || debt.payment)),
+  line("💰 Olingan summa", formatMoney(debt.paidAmount ?? debt.amount ?? 0, debt.currency || "UZS")),
+  line("📝 Qarz holati", debt.status === "CLOSED" ? "Yopildi" : "Qisman to'landi"),
+  line("💳 To'lov", formatPayment(debt.paymentType || debt.payment)),
   "",
-  line("рџ‘ЁвЂЌрџ’ј Admin", formatAdmin(debt.closedBy || debt.admin || debt.closedByName)),
-  line("рџ“… Sana", formatDateMinute(debt.closedAt || debt.paidAt || new Date())),
+  line("👨‍💼 Admin", formatAdmin(debt.closedBy || debt.admin || debt.closedByName)),
+  line("📅 Sana", formatDateMinute(debt.closedAt || debt.paidAt || new Date())),
 ].join("\n");
 
 const inkassaMessage = (inkassa = {}) => [
-  "рџЏ¦ Inkassa qilindi",
+  "🏦 Inkassa qilindi",
   "",
-  line("рџЏў Filial", formatBranch(inkassa.branch || inkassa.branchName)),
-  line("рџ‘¤ Kimga", inkassa.receiverName || inkassa.receiver || inkassa.recipient),
-  line("рџ’° Summa", formatMoney(inkassa.amount || 0, inkassa.currency || "UZS")),
-  line("рџ“ќ Izoh", inkassa.note || inkassa.description),
-  line("рџ‘¤ Admin", formatAdmin(inkassa.createdBy || inkassa.admin || inkassa.adminName)),
-  line("рџ• Sana", formatDate(inkassa.createdAt || new Date())),
+  line("🏢 Filial", formatBranch(inkassa.branch || inkassa.branchName)),
+  line("👤 Kimga", inkassa.receiverName || inkassa.receiver || inkassa.recipient),
+  line("💰 Summa", formatMoney(inkassa.amount || 0, inkassa.currency || "UZS")),
+  line("📝 Izoh", inkassa.note || inkassa.description),
+  line("👤 Admin", formatAdmin(inkassa.createdBy || inkassa.admin || inkassa.adminName)),
+  line("🕘 Sana", formatDate(inkassa.createdAt || new Date())),
 ].join("\n");
 
 const expenseMessage = (expense = {}) => [
-  "рџ’ё Xarajat qo'shildi",
+  "💸 Xarajat qo'shildi",
   "",
-  line("рџЏў Filial", formatBranch(expense.branch || expense.branchName)),
-  line("рџ“‚ Turi", expense.category || expense.type),
-  line("рџ’° Summa", formatMoney(expense.amount || 0, expense.currency || "UZS")),
-  line("рџ“ќ Sabab", expense.reason || expense.note || expense.description),
-  line("рџ‘¤ Admin", formatAdmin(expense.createdBy || expense.admin || expense.adminName)),
+  line("🏢 Filial", formatBranch(expense.branch || expense.branchName)),
+  line("📂 Turi", expense.category || expense.type),
+  line("💰 Summa", formatMoney(expense.amount || 0, expense.currency || "UZS")),
+  line("📝 Sabab", expense.reason || expense.note || expense.description),
+  line("👤 Admin", formatAdmin(expense.createdBy || expense.admin || expense.adminName)),
 ].join("\n");
 
 const orderEditMessage = (order = {}, changes = {}) => {
   const lines = Object.entries(changes || {})
     .filter(([, value]) => value !== undefined)
-    .map(([key, value]) => `вЂў ${key}: ${cleanText(value)}`);
+    .map(([key, value]) => `• ${key}: ${cleanText(value)}`);
 
   return [
-    "вњЏпёЏ Buyurtma o'zgartirildi",
+    "✏️ Buyurtma o'zgartirildi",
     "",
-    line("рџ†” Order", orderNumber(order)),
-    line("рџЏў Filial", formatBranch(order.branch || order.branchName)),
-    line("рџ‘¤ Admin", formatAdmin(order.updatedBy || order.admin || order.createdBy)),
-    line("рџ“ќ O'zgargan", lines.length ? lines.join("; ") : "-"),
-    line("рџ• Sana", formatDate(order.updatedAt || new Date())),
+    line("🆔 Order", orderNumber(order)),
+    line("🏢 Filial", formatBranch(order.branch || order.branchName)),
+    line("👤 Admin", formatAdmin(order.updatedBy || order.admin || order.createdBy)),
+    line("📝 O'zgargan", lines.length ? lines.join("; ") : "-"),
+    line("🕘 Sana", formatDate(order.updatedAt || new Date())),
   ].join("\n");
 };
 
 const lockerTransferMessage = (payload = {}, transfer = {}) => [
-  "рџ”„ Yacheyka almashtirildi",
+  "🔄 Yacheyka almashtirildi",
   "",
-  line("рџЏў Filial", formatBranch(payload.branch || payload.branchName)),
-  line("рџ†” Order", payload.orderNumber || payload.order),
+  line("🏢 Filial", formatBranch(payload.branch || payload.branchName)),
+  line("🆔 Order", payload.orderNumber || payload.order),
   line("Eski", formatLockerNumber(transfer.from?.number || payload.from)),
   line("Yangi", formatLockerNumber(transfer.to?.number || payload.to)),
-  line("рџ“ќ Sabab", transfer.reason || payload.reason || payload.note),
-  line("рџ‘¤ Admin", formatAdmin(transfer.admin || payload.admin || payload.createdBy)),
+  line("📝 Sabab", transfer.reason || payload.reason || payload.note),
+  line("👤 Admin", formatAdmin(transfer.admin || payload.admin || payload.createdBy)),
 ].join("\n");
 
 const lockerServiceMessage = (payload = {}) => [
-  payload.status === "EMPTY" ? "вњ… Yacheyka servisdan chiqarildi" : "рџ”’ Yacheyka servisga olindi",
+  payload.status === "EMPTY" ? "✅ Yacheyka servisdan chiqarildi" : "🔒 Yacheyka servisga olindi",
   "",
-  line("рџЏў Filial", formatBranch(payload.branch || payload.branchName)),
-  line("рџ”ђ Yacheyka", formatLockerNumber(payload.locker || payload.lockerNumber)),
-  line("рџ“ќ Sabab", payload.reason || payload.note),
-  line("рџ‘¤ Admin", formatAdmin(payload.admin || payload.createdBy)),
+  line("🏢 Filial", formatBranch(payload.branch || payload.branchName)),
+  line("🔐 Yacheyka", formatLockerNumber(payload.locker || payload.lockerNumber)),
+  line("📝 Sabab", payload.reason || payload.note),
+  line("👤 Admin", formatAdmin(payload.admin || payload.createdBy)),
 ].join("\n");
 
 module.exports = {
@@ -299,4 +299,3 @@ module.exports = {
   lockerTransferMessage,
   lockerServiceMessage,
 };
-
