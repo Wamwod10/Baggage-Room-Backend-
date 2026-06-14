@@ -46,12 +46,12 @@ const HEADERS = [
 ];
 
 const ACTION_STYLE = {
-  INKASSA: {
-    background: "#fce4d6",
-    fontColor: "#7f1d1d",
-  },
   EXPENSE: {
     background: "#f4cccc",
+    fontColor: "#7f1d1d",
+  },
+  SALARY: {
+    background: "#fce4d6",
     fontColor: "#7f1d1d",
   },
   DEBT_CLOSED: {
@@ -60,13 +60,15 @@ const ACTION_STYLE = {
   },
 };
 
+const WRITABLE_ACTIONS = new Set(["NEW_ORDER", "EXPENSE", "SALARY"]);
+
 function doPost(e) {
   try {
     const payload = JSON.parse((e && e.postData && e.postData.contents) || "{}");
     const action = String(payload.action || "").toUpperCase();
 
-    if (action !== "NEW_ORDER") {
-      return json_({ ok: true, skipped: true, reason: "Google Sheets only accepts NEW_ORDER events" });
+    if (!WRITABLE_ACTIONS.has(action)) {
+      return json_({ ok: true, skipped: true, reason: "Google Sheets only accepts NEW_ORDER, EXPENSE, SALARY events" });
     }
 
     const branchCode = String(payload.branchCode || "").trim();
@@ -83,11 +85,12 @@ function doPost(e) {
       return json_({ ok: true, duplicate: true, idempotencyKey });
     }
 
-    if (!isLegacyQonoqSheet_(sheet)) {
+    const isLegacy = isLegacyQonoqSheet_(sheet);
+    if (!isLegacy) {
       ensureHeaders_(sheet);
     }
 
-    const row = buildRow_(payload, idempotencyKey);
+    const row = isLegacy ? buildLegacyRow_(payload, idempotencyKey) : buildRow_(payload, idempotencyKey);
     const targetRow = findNextOrderRow(sheet);
     sheet.getRange(targetRow, 1, 1, row.length).setValues([row]);
     styleRow_(sheet, targetRow, payload.action, row.length);
@@ -210,27 +213,91 @@ function hasDuplicate_(sheet, idempotencyKey) {
 function buildRow_(payload, idempotencyKey) {
   const action = String(payload.action || "");
   const recipient = payload.recipientName || (action === "INKASSA" ? payload.clientName : "");
+  const amount = amountForAction_(payload);
 
   return [
     payload.createdAt || new Date(),
     actionLabel_(action),
     payload.branchCode || "",
-    payload.branch || "",
-    payload.orderNumber || "",
-    payload.clientName || "",
+    payload.branchName || payload.branch || "",
+    payload.orderNumber || payload.checkNumber || "",
+    payload.clientName || fioForAction_(payload),
     payload.phone || "",
     payload.passport || "",
     formatLockers_(payload.lockers),
     payload.checkIn || "",
     payload.checkOut || "",
-    payload.amount === null || payload.amount === undefined ? "" : payload.amount,
+    amount === null || amount === undefined ? "" : amount,
     payload.currency || "",
     payload.paymentType || "",
     recipient || "",
-    payload.note || "",
+    payload.note || payload.reason || payload.category || "",
     payload.sheetSection || action || "",
     idempotencyKey || "",
   ];
+}
+
+function buildLegacyRow_(payload, idempotencyKey) {
+  const action = String(payload.action || "").toUpperCase();
+  const currency = String(payload.currency || "UZS").toUpperCase();
+  const amountColumn = amountColumnForCurrency_(currency);
+  const width = Math.max(amountColumn, 23);
+  const row = new Array(width).fill("");
+
+  row[0] = formatSheetDate_(payload.createdAt || new Date());
+  row[1] = fioForAction_(payload);
+  row[3] = checkLabelForAction_(payload);
+  row[5] = periodForAction_(payload);
+
+  const amount = amountForAction_(payload);
+  if (amount !== null && amount !== undefined && amount !== "") {
+    row[amountColumn - 1] = amount;
+  }
+
+  row[22] = idempotencyKey;
+  return row;
+}
+
+function amountColumnForCurrency_(currency) {
+  const columns = {
+    UZS: 15,
+    USD: 16,
+    EUR: 17,
+    RUB: 18,
+    KZT: 19,
+    TJS: 20,
+  };
+  return columns[currency] || columns.UZS;
+}
+
+function amountForAction_(payload) {
+  const action = String(payload.action || "").toUpperCase();
+  const value = action === "SALARY" ? payload.salaryAmount : payload.amount;
+  if (value === null || value === undefined || value === "") return "";
+  const number = Math.abs(Number(value || 0));
+  if (!Number.isFinite(number)) return value;
+  return ["EXPENSE", "SALARY"].includes(action) ? -number : number;
+}
+
+function fioForAction_(payload) {
+  const action = String(payload.action || "").toUpperCase();
+  if (action === "EXPENSE") return "RASXOD";
+  if (action === "SALARY") return ["OYLIK", payload.salaryReceiver].filter(Boolean).join(" - ");
+  return payload.clientName || payload.recipientName || "";
+}
+
+function checkLabelForAction_(payload) {
+  const action = String(payload.action || "").toUpperCase();
+  if (action === "EXPENSE") return "Xarajat";
+  if (action === "SALARY") return "Oylik";
+  return payload.orderNumber || payload.checkNumber || "";
+}
+
+function periodForAction_(payload) {
+  const action = String(payload.action || "").toUpperCase();
+  if (action === "EXPENSE") return payload.period || payload.category || payload.reason || "Xarajat";
+  if (action === "SALARY") return payload.period || "Oylik";
+  return payload.tariffHours || payload.period || "";
 }
 
 function isLegacyQonoqSheet_(sheet) {
@@ -288,7 +355,7 @@ function styleRow_(sheet, row, action, width) {
   range.setBackground(style.background);
   range.setFontColor(style.fontColor);
 
-  if (String(action || "").toUpperCase() === "INKASSA") {
+  if (["EXPENSE", "SALARY"].includes(String(action || "").toUpperCase())) {
     range.setFontWeight("bold");
   }
 }
@@ -299,6 +366,8 @@ function actionLabel_(action) {
       return "Inkassa";
     case "EXPENSE":
       return "Xarajat";
+    case "SALARY":
+      return "Oylik";
     case "DEBT_CLOSED":
       return "Qarz yopildi";
     case "NEW_ORDER":

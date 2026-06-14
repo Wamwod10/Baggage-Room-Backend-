@@ -16,7 +16,8 @@ const allowedBranchCodes = new Set(Object.keys(branchNameByCode));
 const enabledValue = () => process.env.GOOGLE_SHEETS_ENABLED || process.env.GOOGLE_SHEET_ENABLED || "";
 const getWebhookUrl = () => String(process.env.GOOGLE_SHEET_WEBHOOK || process.env.GOOGLE_SHEETS_WEBHOOK || "").trim();
 const isEnabled = () => ["true", "1", "yes", "on"].includes(String(enabledValue()).toLowerCase()) && Boolean(getWebhookUrl());
-const shouldDeliver = (payload) => String(payload?.action || "").toUpperCase() === "NEW_ORDER";
+const DELIVERABLE_ACTIONS = new Set(["NEW_ORDER", "EXPENSE", "SALARY"]);
+const shouldDeliver = (payload) => DELIVERABLE_ACTIONS.has(String(payload?.action || "").toUpperCase());
 
 const toIso = (value) => {
   if (!value) return null;
@@ -28,7 +29,7 @@ const branchCode = (entity) => entity?.branch?.code || entity?.branchCode || nul
 
 const branchName = (entity) => {
   const code = branchCode(entity);
-  return branchNameByCode[code] || entity?.branch?.name || entity?.branch || null;
+  return branchNameByCode[code] || entity?.branchName || entity?.branch?.name || entity?.branch || null;
 };
 
 const validateBranchCode = (payload) => {
@@ -109,7 +110,7 @@ const postWebhook = async (payload) => {
   if (!shouldDeliver(payload)) {
     return {
       skipped: true,
-      reason: `Google Sheets only accepts NEW_ORDER events (received ${payload.action || "UNKNOWN"})`,
+      reason: `Google Sheets only accepts NEW_ORDER, EXPENSE, SALARY events (received ${payload.action || "UNKNOWN"})`,
     };
   }
   if (!isEnabled()) {
@@ -246,6 +247,40 @@ const sendSafely = async (promise, { action = "UNKNOWN", branchId = null, userId
 
 const sendNewOrder = (order) => postWebhook(orderPayload("NEW_ORDER", order, { amount: order?.finalAmount ?? null }));
 
+const expensePayload = (expense) =>
+  withDeliveryMetadata({
+    action: "EXPENSE",
+    branchCode: branchCode(expense),
+    branchName: branchName(expense),
+    branch: branchName(expense),
+    entityId: expense?.id || null,
+    checkNumber: "Xarajat",
+    category: expense?.category || null,
+    reason: expense?.reason || expense?.note || null,
+    period: expense?.category || expense?.reason || expense?.note || "Xarajat",
+    amount: expense?.amount ?? null,
+    currency: expense?.currency || "UZS",
+    adminName: expense?.createdBy?.name || expense?.createdBy?.login || expense?.adminName || null,
+    createdAt: toIso(expense?.createdAt || new Date()),
+  });
+
+const salaryPayload = (salary) =>
+  withDeliveryMetadata({
+    action: "SALARY",
+    branchCode: branchCode(salary),
+    branchName: branchName(salary),
+    branch: branchName(salary),
+    entityId: salary?.salaryEntityId || salary?.id || null,
+    checkNumber: "Oylik",
+    salaryReceiver: salary?.salaryReceiver || null,
+    salaryAmount: salary?.salaryAmount ?? null,
+    period: "Oylik",
+    amount: salary?.salaryAmount ?? null,
+    currency: salary?.currency || "UZS",
+    adminName: salary?.closedBy?.name || salary?.closedBy?.login || salary?.adminName || null,
+    createdAt: toIso(salary?.closedAt || salary?.createdAt || new Date()),
+  });
+
 const sendPickup = (order, extra = {}) =>
   postWebhook(
     orderPayload("PICKUP", order, {
@@ -267,7 +302,9 @@ const sendDebtClosed = (debt, extra = {}) =>
     }),
   );
 
-const sendExpense = (expense) => postWebhook(basePayload("EXPENSE", expense));
+const sendExpense = (expense) => postWebhook(expensePayload(expense));
+
+const sendSalary = (salary) => postWebhook(salaryPayload(salary));
 
 const sendInkassa = (inkassa) =>
   postWebhook(
@@ -319,6 +356,7 @@ module.exports = {
   sendPickup,
   sendDebtClosed,
   sendExpense,
+  sendSalary,
   sendInkassa,
   sendShiftOpen,
   sendShiftClose,
@@ -329,6 +367,8 @@ module.exports = {
     isEnabled,
     orderPayload,
     basePayload,
+    expensePayload,
+    salaryPayload,
     validateBranchCode,
     shouldDeliver,
   },

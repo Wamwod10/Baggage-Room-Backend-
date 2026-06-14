@@ -5,6 +5,7 @@ const { dateRangeWhere } = require("../utils/date");
 const { sum } = require("../utils/money");
 const { audit } = require("./activity.service");
 const telegram = require("./telegram.service");
+const googleSheets = require("./googleSheets.service");
 const { createCashMovement } = require("./cashMovement.service");
 
 const include = {
@@ -131,6 +132,15 @@ const closeShift = async (user, id, body) => {
     return result;
   });
   telegram.sendSafely(telegram.sendShiftClose(result), { branchId: result.branchId, userId: user.id, entityType: "Shift", entityId: id });
+  if (result.salaryReceiver && Number(result.salaryAmount || 0) > 0) {
+    googleSheets.sendSafely(
+      googleSheets.sendSalary({
+        ...result,
+        salaryEntityId: `${id}:salary`,
+      }),
+      { action: "SALARY", branchId: result.branchId, userId: user.id, entityType: "ShiftSalary", entityId: `${id}:salary` },
+    );
+  }
   return result;
 };
 

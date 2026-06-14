@@ -5,6 +5,7 @@ const { AppError } = require("../utils/response");
 const { audit } = require("./activity.service");
 const { findOpenShift, createCashMovement } = require("./cashMovement.service");
 const telegram = require("./telegram.service");
+const googleSheets = require("./googleSheets.service");
 
 const includeExpense = {
   branch: { select: { id: true, name: true, code: true } },
@@ -39,6 +40,7 @@ const createExpense = async (user, body) => {
     return expense;
   });
   telegram.sendSafely(telegram.sendExpense(expense), { branchId, userId: user.id, entityType: "Expense", entityId: expense.id });
+  googleSheets.sendSafely(googleSheets.sendExpense(expense), { action: "EXPENSE", branchId, userId: user.id, entityType: "Expense", entityId: expense.id });
   return expense;
 };
 
