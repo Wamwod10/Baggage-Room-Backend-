@@ -5,7 +5,6 @@ const { dateRangeWhere } = require("../utils/date");
 const { audit } = require("./activity.service");
 const { findOpenShift, createCashMovement } = require("./cashMovement.service");
 const telegram = require("./telegram.service");
-const googleSheets = require("./googleSheets.service");
 
 const includeDebt = {
   order: { select: { id: true, orderNumber: true, status: true, passport: true, checkIn: true, plannedCheckOut: true, realPickupTime: true } },
@@ -75,7 +74,6 @@ const closeDebt = async (user, id, body) => {
       }),
       { branchId: debt.branchId, userId: user.id, entityType: "Debt", entityId: id },
     );
-    await googleSheets.sendSafely(googleSheets.sendDebtClosed(updated, { amount: paidAmount, currency: body.currency || debt.currency, paymentType: body.paymentType || "CASH" }), { action: "DEBT_CLOSED", branchId: debt.branchId, userId: user.id, entityType: "Debt", entityId: id });
     return updated;
   });
 };

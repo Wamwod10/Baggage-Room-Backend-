@@ -10,6 +10,10 @@ router.post(
   validate(z.object({ body: z.object({ branchId: z.string().optional(), openingCash: amount.default(0), acceptedCash: amount.default(0), acceptedFromName: z.string().optional(), handoverToName: z.string().optional() }) })),
   shiftController.open
 );
-router.post("/:id/close", validate(idParam.extend({ body: z.object({ closingCash: amount.optional(), handoverToName: z.string().optional() }) })), shiftController.close);
+router.post(
+  "/:id/close",
+  validate(idParam.extend({ body: z.object({ closingCash: amount.optional(), handoverToName: z.string().optional(), salaryAmount: amount.optional(), salaryReceiver: z.string().optional() }) })),
+  shiftController.close
+);
 
 module.exports = router;

@@ -402,12 +402,8 @@ const pickupOrder = async (user, id, body) => {
     }
     return { updated, closedDebt, debtPayment, debtPaidAmount };
   });
-  await googleSheets.sendSafely(googleSheets.sendPickup(result.updated, { amount: result.updated.overtimeAmount || 0, currency: body.currency || result.updated.currency, paymentType: body.paymentType || "CASH" }), { action: "PICKUP", branchId: result.updated.branchId, userId: user.id, entityType: "Order", entityId: id });
   if (result.debtPayment) {
     telegram.sendSafely(telegram.sendDebtClosed(result.debtPayment), { branchId: result.updated.branchId, userId: user.id, entityType: "Debt", entityId: result.debtPayment.id });
-  }
-  if (result.closedDebt) {
-    await googleSheets.sendSafely(googleSheets.sendDebtClosed(result.closedDebt, { amount: result.debtPaidAmount, currency: body.currency || result.updated.currency, paymentType: body.paymentType || "CASH" }), { action: "DEBT_CLOSED", branchId: result.updated.branchId, userId: user.id, entityType: "Debt", entityId: result.closedDebt.id });
   }
   return result.updated;
 };

@@ -16,6 +16,7 @@ const allowedBranchCodes = new Set(Object.keys(branchNameByCode));
 const enabledValue = () => process.env.GOOGLE_SHEETS_ENABLED || process.env.GOOGLE_SHEET_ENABLED || "";
 const getWebhookUrl = () => String(process.env.GOOGLE_SHEET_WEBHOOK || process.env.GOOGLE_SHEETS_WEBHOOK || "").trim();
 const isEnabled = () => ["true", "1", "yes", "on"].includes(String(enabledValue()).toLowerCase()) && Boolean(getWebhookUrl());
+const shouldDeliver = (payload) => String(payload?.action || "").toUpperCase() === "NEW_ORDER";
 
 const toIso = (value) => {
   if (!value) return null;
@@ -105,6 +106,12 @@ const basePayload = (action, entity, overrides = {}) =>
   });
 
 const postWebhook = async (payload) => {
+  if (!shouldDeliver(payload)) {
+    return {
+      skipped: true,
+      reason: `Google Sheets only accepts NEW_ORDER events (received ${payload.action || "UNKNOWN"})`,
+    };
+  }
   if (!isEnabled()) {
     return {
       skipped: true,
@@ -323,5 +330,6 @@ module.exports = {
     orderPayload,
     basePayload,
     validateBranchCode,
+    shouldDeliver,
   },
 };

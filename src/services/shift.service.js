@@ -5,13 +5,17 @@ const { dateRangeWhere } = require("../utils/date");
 const { sum } = require("../utils/money");
 const { audit } = require("./activity.service");
 const telegram = require("./telegram.service");
-const googleSheets = require("./googleSheets.service");
+const { createCashMovement } = require("./cashMovement.service");
 
 const include = {
   branch: { select: { id: true, name: true, code: true } },
   openedBy: { select: { id: true, name: true, login: true } },
   closedBy: { select: { id: true, name: true, login: true } },
 };
+
+const SALARY_NOTE_PREFIX = "Oylik:";
+
+const isSalaryMovement = (movement) => movement.type === "EXPENSE" && String(movement.note || "").startsWith(SALARY_NOTE_PREFIX);
 
 const listShifts = async (user, query) => {
   const where = { ...branchWhere(user, query.branchId), ...dateRangeWhere(query.dateFrom, query.dateTo, "openedAt"), ...(query.status ? { status: query.status } : {}) };
@@ -45,7 +49,6 @@ const openShift = async (user, body) => {
   });
   await audit({ branchId, userId: user.id, entityType: "Shift", entityId: shift.id, action: "SHIFT_OPEN", newValue: shift, description: "Shift opened" });
   telegram.sendSafely(telegram.sendShiftOpen(shift), { branchId, userId: user.id, entityType: "Shift", entityId: shift.id });
-  await googleSheets.sendSafely(googleSheets.sendShiftOpen(shift), { action: "SHIFT_OPEN", branchId, userId: user.id, entityType: "Shift", entityId: shift.id });
   return shift;
 };
 
@@ -61,13 +64,14 @@ const computeShiftReport = async (tx, shift) => {
   const cardRevenue = sum(inMovements.filter((item) => item.paymentType === "CARD"));
   const transferRevenue = sum(inMovements.filter((item) => item.paymentType === "TRANSFER"));
   const expenseAmount = sum(outMovements.filter((item) => item.type === "EXPENSE"));
+  const salaryAmount = sum(outMovements.filter(isSalaryMovement));
   const inkassaAmount = sum(outMovements.filter((item) => item.type === "INKASSA"));
   const debtAmount = sum(debts.filter((item) => item.status === "OPEN"));
   const manualIn = sum(inMovements.filter((item) => item.type === "MANUAL_CORRECTION"));
   const manualOut = sum(outMovements.filter((item) => item.type === "MANUAL_CORRECTION"));
   const systemExpectedCash = shift.openingCash + totalRevenue + manualIn - expenseAmount - inkassaAmount - manualOut;
 
-  return { totalRevenue, cashRevenue, cardRevenue, transferRevenue, debtAmount, expenseAmount, inkassaAmount, systemExpectedCash, ordersCount };
+  return { totalRevenue, cashRevenue, cardRevenue, transferRevenue, debtAmount, expenseAmount, salaryAmount, inkassaAmount, systemExpectedCash, ordersCount };
 };
 
 const closeShift = async (user, id, body) => {
@@ -75,14 +79,46 @@ const closeShift = async (user, id, body) => {
     const shift = await tx.shift.findUnique({ where: { id } });
     if (!shift || shift.status !== "OPEN") throw new AppError("Bu filialda ochiq smena yo'q", 404);
     getScopedBranchId(user, shift.branchId);
+    const salaryAmount = Number(body.salaryAmount || 0);
+    const salaryReceiver = String(body.salaryReceiver || "").trim();
+
+    if (salaryAmount < 0) throw new AppError("Oylik summasi manfiy bo'lishi mumkin emas", 400);
+    if (salaryAmount > 0 && !salaryReceiver) throw new AppError("Oylik uchun kimga berilganini kiriting", 400);
+
+    if (salaryAmount > 0) {
+      await tx.expense.create({
+        data: {
+          branchId: shift.branchId,
+          shiftId: shift.id,
+          category: "Oylik",
+          reason: salaryReceiver,
+          amount: salaryAmount,
+          currency: "UZS",
+          createdById: user.id,
+        },
+      });
+      await createCashMovement({
+        tx,
+        branchId: shift.branchId,
+        shiftId: shift.id,
+        type: "EXPENSE",
+        direction: "OUT",
+        amount: salaryAmount,
+        currency: "UZS",
+        note: `${SALARY_NOTE_PREFIX} ${salaryReceiver}`,
+        createdById: user.id,
+      });
+    }
+
     const { ordersCount, ...report } = await computeShiftReport(tx, shift);
-    const closingCash = body.closingCash ?? report.systemExpectedCash;
+    const { salaryAmount: reportSalaryAmount, ...shiftReport } = report;
+    const closingCash = body.closingCash ?? shiftReport.systemExpectedCash;
     const updated = await tx.shift.update({
       where: { id },
       data: {
-        ...report,
+        ...shiftReport,
         closingCash,
-        difference: closingCash - report.systemExpectedCash,
+        difference: closingCash - shiftReport.systemExpectedCash,
         closedById: user.id,
         closedAt: new Date(),
         status: "CLOSED",
@@ -90,12 +126,11 @@ const closeShift = async (user, id, body) => {
       },
       include,
     });
-    const result = { ...updated, ordersCount };
+    const result = { ...updated, ...report, salaryAmount: reportSalaryAmount, ordersCount, salaryReceiver: salaryAmount > 0 ? salaryReceiver : null };
     await audit({ tx, branchId: shift.branchId, userId: user.id, entityType: "Shift", entityId: id, action: "SHIFT_CLOSE", oldValue: shift, newValue: result, description: "Shift closed" });
     return result;
   });
   telegram.sendSafely(telegram.sendShiftClose(result), { branchId: result.branchId, userId: user.id, entityType: "Shift", entityId: id });
-  await googleSheets.sendSafely(googleSheets.sendShiftClose(result), { action: "SHIFT_CLOSE", branchId: result.branchId, userId: user.id, entityType: "Shift", entityId: id });
   return result;
 };
 

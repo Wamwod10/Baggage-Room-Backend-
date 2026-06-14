@@ -73,6 +73,7 @@ const formatAdmin = (user) => {
 };
 
 const shiftCashLeft = (shift = {}) => shift.systemExpectedCash ?? shift.closingCash ?? 0;
+const shiftRegularExpense = (shift = {}) => Math.max(Number(shift.expenseAmount || 0) - Number(shift.salaryAmount || 0), 0);
 
 const formatLockerNumber = (value) => {
   const number = cleanText(value);
@@ -142,7 +143,9 @@ const shiftClosedMessage = (shift = {}) => [
   line("💳 Karta", formatMoney(shift.cardRevenue || 0, shift.currency || "UZS")),
   line("🏦 O'tkazma", formatMoney(shift.transferRevenue || 0, shift.currency || "UZS")),
   "",
-  line("💸 Xarajat", formatMoney(shift.expenseAmount || 0, shift.currency || "UZS")),
+  line("💸 Xarajat", formatMoney(shiftRegularExpense(shift), shift.currency || "UZS")),
+  line("💵 Oylik", formatMoney(shift.salaryAmount || 0, shift.currency || "UZS")),
+  ...(shift.salaryReceiver ? [line("👤 Oylik kimga", shift.salaryReceiver)] : []),
   line("🏦 Inkassa", formatMoney(shift.inkassaAmount || 0, shift.currency || "UZS")),
   line("📝 Ochiq qarz", formatMoney(shift.debtAmount || 0, shift.currency || "UZS")),
   line("💰 Kassada qolgan", formatMoney(shiftCashLeft(shift), shift.currency || "UZS")),

@@ -4,7 +4,7 @@
  * Why this version exists:
  * - appendRow() and getLastRow() can write far below real data when the sheet has
  *   formatting, filters, or old blank rows.
- * - This script writes to the first truly empty row by checking a key column.
+ * - This script writes after the last real order row instead of using appendRow().
  * - idempotencyKey prevents the same backend event from being written twice.
  *
  * Deploy:
@@ -63,6 +63,12 @@ const ACTION_STYLE = {
 function doPost(e) {
   try {
     const payload = JSON.parse((e && e.postData && e.postData.contents) || "{}");
+    const action = String(payload.action || "").toUpperCase();
+
+    if (action !== "NEW_ORDER") {
+      return json_({ ok: true, skipped: true, reason: "Google Sheets only accepts NEW_ORDER events" });
+    }
+
     const branchCode = String(payload.branchCode || "").trim();
     const sheetName = SHEET_BY_BRANCH_CODE[branchCode];
 
@@ -77,15 +83,12 @@ function doPost(e) {
       return json_({ ok: true, duplicate: true, idempotencyKey });
     }
 
-    if (isLegacyQonoqSheet_(sheet) && String(payload.action || "").toUpperCase() === "INKASSA") {
-      const targetRow = writeLegacyInkassaRow_(sheet, payload, idempotencyKey);
-      return json_({ ok: true, row: targetRow, idempotencyKey, legacy: true });
+    if (!isLegacyQonoqSheet_(sheet)) {
+      ensureHeaders_(sheet);
     }
 
-    ensureHeaders_(sheet);
-
     const row = buildRow_(payload, idempotencyKey);
-    const targetRow = firstEmptyRowByColumn_(sheet, 1);
+    const targetRow = findNextOrderRow(sheet);
     sheet.getRange(targetRow, 1, 1, row.length).setValues([row]);
     styleRow_(sheet, targetRow, payload.action, row.length);
 
@@ -124,6 +127,43 @@ function ensureColumns_(sheet, minColumns) {
 
 function firstEmptyRowByColumn_(sheet, column) {
   return firstDataRowAfterContent_(sheet, 2, [column]);
+}
+
+function findNextOrderRow(sheet) {
+  const startRow = isLegacyQonoqSheet_(sheet) ? legacyDataStartRow_(sheet) : 2;
+  ensureColumns_(sheet, 6);
+  const maxRows = Math.max(sheet.getMaxRows(), startRow);
+  const scanWidth = 6;
+  const values = sheet.getRange(startRow, 1, maxRows - startRow + 1, scanWidth).getDisplayValues();
+  let lastOrderRow = startRow - 1;
+
+  for (let index = values.length - 1; index >= 0; index -= 1) {
+    const row = values[index];
+    const hasDate = String(row[0] || "").trim();
+    const hasCheckNumber = String(row[3] || "").trim();
+    const hasAnyOrderData = row.slice(0, Math.min(row.length, 6)).some((value) => String(value || "").trim());
+
+    if ((hasDate || hasCheckNumber) && hasAnyOrderData) {
+      lastOrderRow = startRow + index;
+      break;
+    }
+  }
+
+  let targetRow = Math.max(startRow, lastOrderRow + 1);
+  if (targetRow > sheet.getMaxRows()) {
+    sheet.insertRowsAfter(sheet.getMaxRows(), 20);
+  }
+
+  if (rowHasFormulas_(sheet, targetRow, scanWidth)) {
+    sheet.insertRowBefore(targetRow);
+  }
+
+  return targetRow;
+}
+
+function rowHasFormulas_(sheet, row, width) {
+  if (row > sheet.getMaxRows()) return false;
+  return sheet.getRange(row, 1, 1, width).getFormulas()[0].some((formula) => String(formula || "").trim());
 }
 
 function firstDataRowAfterContent_(sheet, startRow, columns) {
