@@ -90,7 +90,7 @@ function doPost(e) {
       ensureHeaders_(sheet);
     }
 
-    const row = isLegacy ? buildLegacyRow_(payload, idempotencyKey) : buildRow_(payload, idempotencyKey);
+    const row = isLegacy ? buildLegacyRow_(sheet, payload, idempotencyKey) : buildRow_(payload, idempotencyKey);
     const targetRow = findNextOrderRow(sheet);
     sheet.getRange(targetRow, 1, 1, row.length).setValues([row]);
     styleRow_(sheet, targetRow, payload.action, row.length);
@@ -237,37 +237,80 @@ function buildRow_(payload, idempotencyKey) {
   ];
 }
 
-function buildLegacyRow_(payload, idempotencyKey) {
+function buildLegacyRow_(sheet, payload, idempotencyKey) {
   const action = String(payload.action || "").toUpperCase();
   const currency = String(payload.currency || "UZS").toUpperCase();
-  const amountColumn = amountColumnForCurrency_(currency);
-  const width = Math.max(amountColumn, 23);
+  const columns = detectLegacyColumns_(sheet);
+  const amountColumn = columns.amountByCurrency[currency] || columns.amountByCurrency.UZS;
+  const width = Math.max(amountColumn, columns.idempotency);
   const row = new Array(width).fill("");
 
-  row[0] = formatSheetDate_(payload.createdAt || new Date());
-  row[1] = fioForAction_(payload);
-  row[3] = checkLabelForAction_(payload);
-  row[5] = periodForAction_(payload);
+  row[columns.date - 1] = formatSheetDate_(payload.createdAt || new Date());
+  row[columns.fio - 1] = fioForAction_(payload);
+  row[columns.check - 1] = checkLabelForAction_(payload);
+  row[columns.period - 1] = periodForAction_(payload);
 
   const amount = amountForAction_(payload);
   if (amount !== null && amount !== undefined && amount !== "") {
     row[amountColumn - 1] = amount;
   }
 
-  row[22] = idempotencyKey;
+  row[columns.idempotency - 1] = idempotencyKey;
   return row;
 }
 
-function amountColumnForCurrency_(currency) {
-  const columns = {
-    UZS: 15,
-    USD: 16,
-    EUR: 17,
-    RUB: 18,
-    KZT: 19,
-    TJS: 20,
+function detectLegacyColumns_(sheet) {
+  const fallback = {
+    date: 1,
+    fio: 2,
+    count: 3,
+    check: 4,
+    period: 5,
+    amountByCurrency: {
+      UZS: 6,
+      USD: 7,
+      EUR: 8,
+      RUB: 9,
+      TJS: 10,
+      KZT: 10,
+    },
+    idempotency: 23,
   };
-  return columns[currency] || columns.UZS;
+
+  const rows = Math.min(sheet.getMaxRows(), 8);
+  const cols = Math.min(sheet.getMaxColumns(), 25);
+  const values = sheet.getRange(1, 1, rows, cols).getDisplayValues();
+  const found = JSON.parse(JSON.stringify(fallback));
+
+  for (let rowIndex = 0; rowIndex < values.length; rowIndex += 1) {
+    for (let colIndex = 0; colIndex < values[rowIndex].length; colIndex += 1) {
+      const text = normalizeHeader_(values[rowIndex][colIndex]);
+      const column = colIndex + 1;
+
+      if (text === "дата" || text === "data") found.date = column;
+      if (text.indexOf("ф.и.о") !== -1 || text.indexOf("fio") !== -1) found.fio = column;
+      if (text.indexOf("кол-во") !== -1 || text.indexOf("кол во") !== -1) found.count = column;
+      if (text.indexOf("чек") !== -1) found.check = column;
+      if (text.indexOf("период") !== -1 || text.indexOf("хранения") !== -1) found.period = column;
+      if (text === "uzs") found.amountByCurrency.UZS = column;
+      if (text === "$" || text === "usd") found.amountByCurrency.USD = column;
+      if (text === "€" || text === "eur") found.amountByCurrency.EUR = column;
+      if (text === "₽" || text === "руб" || text === "rub") found.amountByCurrency.RUB = column;
+      if (text === "т" || text === "t" || text === "tjs" || text === "kzt") {
+        found.amountByCurrency.TJS = column;
+        found.amountByCurrency.KZT = column;
+      }
+    }
+  }
+
+  return found;
+}
+
+function normalizeHeader_(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
 }
 
 function amountForAction_(payload) {
