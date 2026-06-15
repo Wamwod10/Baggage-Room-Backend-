@@ -251,13 +251,19 @@ function buildLegacyRow_(sheet, payload, idempotencyKey) {
   const currency = String(payload.currency || "UZS").toUpperCase();
   const columns = detectLegacyColumns_(sheet);
   const amountColumn = columns.amountByCurrency[currency] || columns.amountByCurrency.UZS;
-  const width = Math.max(amountColumn, columns.idempotency);
+  const configuredNameColumn = Number(payload.legacySheetTarget && payload.legacySheetTarget.nameColumn || payload.nameColumn || 22);
+  const nameValue = nameForAction_(payload);
+  const nameColumn = nameValue ? configuredNameColumn : 0;
+  const width = Math.max(amountColumn, columns.idempotency, nameColumn);
   const row = new Array(width).fill("");
 
   row[columns.date - 1] = formatSheetDate_(payload.createdAt || new Date());
   row[columns.fio - 1] = fioForAction_(payload);
   row[columns.check - 1] = checkLabelForAction_(payload);
   row[columns.period - 1] = periodForAction_(payload);
+  if (nameValue) {
+    row[nameColumn - 1] = nameValue;
+  }
 
   const amount = amountForAction_(payload);
   if (amount !== null && amount !== undefined && amount !== "") {
@@ -354,6 +360,14 @@ function fioForAction_(payload) {
   return payload.fio || payload.clientName || payload.recipientName || "";
 }
 
+function nameForAction_(payload) {
+  const action = String(payload.action || "").toUpperCase();
+  if (action === "EXPENSE") return payload.naimenovanie || payload.name || payload.itemName || payload.category || "";
+  if (action === "INKASSA") return payload.naimenovanie || payload.name || payload.itemName || payload.receiverName || payload.recipientName || "";
+  if (action === "SALARY") return payload.naimenovanie || payload.name || payload.itemName || payload.salaryReceiver || "";
+  return payload.naimenovanie || payload.name || payload.itemName || "";
+}
+
 function checkLabelForAction_(payload) {
   const action = String(payload.action || "").toUpperCase();
   if (action === "EXPENSE") return "XARAJAT";
@@ -416,7 +430,7 @@ function writeLegacyInkassaRow_(sheet, payload, idempotencyKey) {
   ensureColumns_(sheet, width);
 
   row[0] = formatSheetDate_(payload.createdAt || new Date());
-  row[1] = "ИНКАССАЦИЯ";
+  row[1] = payload.rowLabel || "ИНКАССАЦИЯ";
   row[amountColumn - 1] = amount === "" ? "" : Math.abs(Number(amount || 0));
   row[nameColumn - 1] = payload.receiverName || payload.recipientName || payload.note || "INKASSA";
   row[22] = idempotencyKey;

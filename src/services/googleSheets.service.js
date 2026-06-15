@@ -98,6 +98,8 @@ const positiveMoneyFields = (amount) => {
   };
 };
 
+const INKASSA_ROW_LABEL = "INKASSA";
+
 const lockerItems = (order) => {
   if (!Array.isArray(order?.items)) return [];
   return order.items
@@ -300,32 +302,41 @@ const sendSafely = async (delivery, { action = "UNKNOWN", branchId = null, userI
 const sendNewOrder = (order) => postWebhook(orderPayload("NEW_ORDER", order, { amount: order?.finalAmount ?? null }));
 
 const expensePayload = (expense) =>
-  withDeliveryMetadata({
-    action: "EXPENSE",
-    branchCode: branchCode(expense),
-    branchName: branchName(expense),
-    branch: branchName(expense),
-    entityId: expense?.id || null,
-    orderNumber: "XARAJAT",
-    checkNumber: "XARAJAT",
-    checkNo: "XARAJAT",
-    receiptNumber: "XARAJAT",
-    clientName: ["RASXOD", expense?.category].filter(Boolean).join(" - "),
-    fio: ["RASXOD", expense?.category].filter(Boolean).join(" - "),
-    fullName: ["RASXOD", expense?.category].filter(Boolean).join(" - "),
-    displayName: ["RASXOD", expense?.category].filter(Boolean).join(" - "),
-    recipientName: ["RASXOD", expense?.category].filter(Boolean).join(" - "),
-    category: expense?.category || null,
-    reason: expense?.reason || expense?.note || null,
-    period: expense?.reason || expense?.note || "Xarajat",
-    tariffHours: expense?.reason || expense?.note || "Xarajat",
-    storagePeriod: expense?.reason || expense?.note || "Xarajat",
-    ...negativeMoneyFields(expense?.amount ?? null),
-    currency: expense?.currency || "UZS",
-    paymentType: "CASH",
-    adminName: expense?.createdBy?.name || expense?.createdBy?.login || expense?.adminName || null,
-    createdAt: toIso(expense?.createdAt || new Date()),
-  });
+  (() => {
+    const expenseName = expense?.category || "Xarajat";
+    return withDeliveryMetadata({
+      action: "EXPENSE",
+      branchCode: branchCode(expense),
+      branchName: branchName(expense),
+      branch: branchName(expense),
+      entityId: expense?.id || null,
+      orderNumber: "XARAJAT",
+      checkNumber: "XARAJAT",
+      checkNo: "XARAJAT",
+      receiptNumber: "XARAJAT",
+      clientName: expenseName,
+      fio: expenseName,
+      fullName: expenseName,
+      displayName: expenseName,
+      recipientName: expenseName,
+      name: expenseName,
+      itemName: expenseName,
+      naimenovanie: expenseName,
+      category: expense?.category || null,
+      reason: expense?.reason || expense?.note || null,
+      period: expense?.reason || expense?.note || "Xarajat",
+      tariffHours: expense?.reason || expense?.note || "Xarajat",
+      storagePeriod: expense?.reason || expense?.note || "Xarajat",
+      ...negativeMoneyFields(expense?.amount ?? null),
+      currency: expense?.currency || "UZS",
+      paymentType: "CASH",
+      legacySheetTarget: {
+        nameColumn: 22,
+      },
+      adminName: expense?.createdBy?.name || expense?.createdBy?.login || expense?.adminName || null,
+      createdAt: toIso(expense?.createdAt || new Date()),
+    });
+  })();
 
 const salaryPayload = (salary) =>
   withDeliveryMetadata({
@@ -380,8 +391,10 @@ const sendExpense = (expense) => postWebhook(expensePayload(expense));
 
 const sendSalary = (salary) => postWebhook(salaryPayload(salary));
 
-const inkassaPayload = (inkassa) =>
-  withDeliveryMetadata({
+const inkassaPayload = (inkassa) => {
+  const receiver = inkassa?.receiverName || inkassa?.recipientName || null;
+
+  return withDeliveryMetadata({
     action: "INKASSA",
     branchCode: branchCode(inkassa),
     branchName: branchName(inkassa),
@@ -391,12 +404,16 @@ const inkassaPayload = (inkassa) =>
     checkNumber: "INKASSA",
     checkNo: "INKASSA",
     receiptNumber: "INKASSA",
-    receiverName: inkassa?.receiverName || inkassa?.recipientName || null,
-    recipientName: inkassa?.receiverName || inkassa?.recipientName || null,
-    clientName: "ИНКАССАЦИЯ",
-    fio: "ИНКАССАЦИЯ",
-    fullName: "ИНКАССАЦИЯ",
-    displayName: "ИНКАССАЦИЯ",
+    receiverName: receiver,
+    recipientName: receiver,
+    rowLabel: INKASSA_ROW_LABEL,
+    clientName: INKASSA_ROW_LABEL,
+    fio: INKASSA_ROW_LABEL,
+    fullName: INKASSA_ROW_LABEL,
+    displayName: INKASSA_ROW_LABEL,
+    name: receiver,
+    itemName: receiver,
+    naimenovanie: receiver,
     ...positiveMoneyFields(inkassa?.amount ?? null),
     currency: inkassa?.currency || "UZS",
     note: inkassa?.note || "Inkassa",
@@ -431,6 +448,7 @@ const inkassaPayload = (inkassa) =>
     adminName: inkassa?.createdBy?.name || inkassa?.createdBy?.login || inkassa?.adminName || null,
     createdAt: toIso(inkassa?.createdAt || new Date()),
   });
+};
 
 const sendInkassa = (inkassa) =>
   postWebhook(inkassaPayload(inkassa));
