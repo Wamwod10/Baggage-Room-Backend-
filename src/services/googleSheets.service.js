@@ -16,7 +16,7 @@ const allowedBranchCodes = new Set(Object.keys(branchNameByCode));
 const enabledValue = () => process.env.GOOGLE_SHEETS_ENABLED || process.env.GOOGLE_SHEET_ENABLED || "";
 const getWebhookUrl = () => String(process.env.GOOGLE_SHEET_WEBHOOK || process.env.GOOGLE_SHEETS_WEBHOOK || "").trim();
 const isEnabled = () => ["true", "1", "yes", "on"].includes(String(enabledValue()).toLowerCase()) && Boolean(getWebhookUrl());
-const DELIVERABLE_ACTIONS = new Set(["NEW_ORDER", "EXPENSE", "SALARY"]);
+const DELIVERABLE_ACTIONS = new Set(["NEW_ORDER", "EXPENSE", "INKASSA", "SALARY"]);
 const shouldDeliver = (payload) => DELIVERABLE_ACTIONS.has(String(payload?.action || "").toUpperCase());
 
 const toIso = (value) => {
@@ -48,6 +48,14 @@ const withDeliveryMetadata = (payload) => ({
   rowPolicy: "FIRST_EMPTY_ROW",
   idempotencyKey: [payload.action || "UNKNOWN", payload.branchCode || "NO_BRANCH", payloadEntityId(payload)].filter(Boolean).join(":"),
   ...payload,
+});
+
+const deliveryLogMeta = (payload, extra = {}) => ({
+  action: payload?.action,
+  branchCode: payload?.branchCode,
+  amount: payload?.amount ?? payload?.salaryAmount ?? payload?.finalAmount ?? null,
+  orderNumber: payload?.orderNumber || null,
+  ...extra,
 });
 
 const lockerItems = (order) => {
@@ -107,24 +115,27 @@ const basePayload = (action, entity, overrides = {}) =>
   });
 
 const postWebhook = async (payload) => {
-  if (!shouldDeliver(payload)) {
-    return {
-      skipped: true,
-      reason: `Google Sheets only accepts NEW_ORDER, EXPENSE, SALARY events (received ${payload.action || "UNKNOWN"})`,
-    };
-  }
-  if (!isEnabled()) {
-    return {
-      skipped: true,
-      reason: `Google Sheets disabled or webhook missing (GOOGLE_SHEETS_ENABLED=${enabledValue()})`,
-    };
-  }
-  validateBranchCode(payload);
-
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  let timeout = null;
 
   try {
+    if (!shouldDeliver(payload)) {
+      return {
+        skipped: true,
+        reason: `Google Sheets only accepts NEW_ORDER, EXPENSE, INKASSA, SALARY events (received ${payload.action || "UNKNOWN"})`,
+      };
+    }
+    if (!isEnabled()) {
+      return {
+        skipped: true,
+        reason: `Google Sheets disabled or webhook missing (GOOGLE_SHEETS_ENABLED=${enabledValue()})`,
+      };
+    }
+    validateBranchCode(payload);
+
+    logger.info("[GoogleSheets] sending", deliveryLogMeta(payload));
+    timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
+
     const response = await fetch(getWebhookUrl(), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -147,16 +158,17 @@ const postWebhook = async (payload) => {
     if (json && (json.success === false || json.ok === false || json.error || ["error", "failed", "fail"].includes(String(json.status || "").toLowerCase()))) {
       throw new Error(`Google Sheets webhook rejected payload: ${responseBody}`);
     }
-    logger.info("Google Sheets delivery succeeded", {
-      action: payload.action,
-      branchCode: payload.branchCode,
-      orderNumber: payload.orderNumber,
+    logger.info("[GoogleSheets] success", deliveryLogMeta(payload, {
+      status: response.status,
       idempotencyKey: payload.idempotencyKey,
       response: responseBody.slice(0, 500),
-    });
+    }));
     return { ok: true, response: responseBody };
+  } catch (error) {
+    logger.warn("[GoogleSheets] failed", deliveryLogMeta(payload, { error: error.message }));
+    throw error;
   } finally {
-    clearTimeout(timeout);
+    if (timeout) clearTimeout(timeout);
   }
 };
 
@@ -196,13 +208,13 @@ const markDelivered = async ({ action, branchId, userId, entityType, entityId },
     .catch((auditError) => logger.warn("Google Sheets sent marker write failed", { message: auditError.message }));
 };
 
-const sendSafely = async (promise, { action = "UNKNOWN", branchId = null, userId = null, entityType = "GoogleSheets", entityId = "google-sheets" } = {}) => {
+const sendSafely = async (delivery, { action = "UNKNOWN", branchId = null, userId = null, entityType = "GoogleSheets", entityId = "google-sheets" } = {}) => {
   try {
     if (await wasDelivered({ action, entityType, entityId })) {
       logger.info("Google Sheets duplicate delivery skipped", { action, branchId, entityType, entityId });
       return { skipped: true, duplicate: true };
     }
-    const result = await promise;
+    const result = await (typeof delivery === "function" ? delivery() : delivery);
     if (result?.skipped) {
       logger.warn("Google Sheets delivery skipped", { action, branchId, entityType, entityId, reason: result.reason });
       await prisma.auditLog
@@ -254,10 +266,10 @@ const expensePayload = (expense) =>
     branchName: branchName(expense),
     branch: branchName(expense),
     entityId: expense?.id || null,
-    checkNumber: "Xarajat",
+    checkNumber: "XARAJAT",
     category: expense?.category || null,
     reason: expense?.reason || expense?.note || null,
-    period: expense?.category || expense?.reason || expense?.note || "Xarajat",
+    period: expense?.reason || expense?.note || "Xarajat",
     amount: expense?.amount ?? null,
     currency: expense?.currency || "UZS",
     adminName: expense?.createdBy?.name || expense?.createdBy?.login || expense?.adminName || null,
@@ -271,7 +283,7 @@ const salaryPayload = (salary) =>
     branchName: branchName(salary),
     branch: branchName(salary),
     entityId: salary?.salaryEntityId || salary?.id || null,
-    checkNumber: "Oylik",
+    checkNumber: "OYLIK",
     salaryReceiver: salary?.salaryReceiver || null,
     salaryAmount: salary?.salaryAmount ?? null,
     period: "Oylik",
@@ -306,29 +318,27 @@ const sendExpense = (expense) => postWebhook(expensePayload(expense));
 
 const sendSalary = (salary) => postWebhook(salaryPayload(salary));
 
+const inkassaPayload = (inkassa) =>
+  withDeliveryMetadata({
+    action: "INKASSA",
+    branchCode: branchCode(inkassa),
+    branchName: branchName(inkassa),
+    branch: branchName(inkassa),
+    entityId: inkassa?.id || null,
+    checkNumber: "INKASSA",
+    receiverName: inkassa?.receiverName || inkassa?.recipientName || null,
+    recipientName: inkassa?.receiverName || inkassa?.recipientName || null,
+    clientName: inkassa?.receiverName || inkassa?.recipientName || null,
+    amount: inkassa?.amount ?? null,
+    currency: inkassa?.currency || "UZS",
+    note: inkassa?.note || "Inkassa",
+    period: inkassa?.note || "Inkassa",
+    adminName: inkassa?.createdBy?.name || inkassa?.createdBy?.login || inkassa?.adminName || null,
+    createdAt: toIso(inkassa?.createdAt || new Date()),
+  });
+
 const sendInkassa = (inkassa) =>
-  postWebhook(
-    basePayload("INKASSA", inkassa, {
-      clientName: inkassa?.receiverName || inkassa?.recipientName || null,
-      recipientName: inkassa?.receiverName || inkassa?.recipientName || null,
-      note: inkassa?.note || null,
-      sheetSection: "INKASSA",
-      rowType: "OUT",
-      displayName: "Inkassa",
-      operationName: "INKASSA",
-      legacySheetTarget: {
-        amountColumnByCurrency: {
-          UZS: 15,
-          USD: 16,
-          EUR: 17,
-          RUB: 18,
-          KZT: 19,
-          TJS: 20,
-        },
-        nameColumn: 22,
-      },
-    }),
-  );
+  postWebhook(inkassaPayload(inkassa));
 
 const sendShiftOpen = (shift) =>
   postWebhook(
@@ -351,6 +361,99 @@ const sendShiftClose = (shift) =>
     }),
   );
 
+const testPayload = (action, branchCodeValue, branch, user) => {
+  const createdAt = toIso(new Date());
+  const entityId = `test:${action}:${branchCodeValue}:${Date.now()}`;
+  const common = {
+    branchCode: branchCodeValue,
+    branchName: branch?.name || branchNameByCode[branchCodeValue] || null,
+    branch: branch?.name || branchNameByCode[branchCodeValue] || null,
+    entityId,
+    currency: "UZS",
+    adminName: user?.name || user?.login || "SUPER_ADMIN",
+    createdAt,
+  };
+
+  if (action === "NEW_ORDER") {
+    return orderPayload(
+      "NEW_ORDER",
+      {
+        id: entityId,
+        branch: { code: branchCodeValue, name: common.branchName },
+        orderNumber: `TEST-${branchCodeValue}-${Date.now()}`,
+        clientName: "GOOGLE SHEETS TEST",
+        phone: "",
+        passport: "",
+        items: [],
+        checkIn: new Date(),
+        plannedCheckOut: new Date(),
+        finalAmount: 1000,
+        currency: "UZS",
+        paymentType: "CASH",
+        createdAt: new Date(),
+      },
+      { entityId },
+    );
+  }
+
+  if (action === "EXPENSE") {
+    return expensePayload({
+      id: entityId,
+      branch: { code: branchCodeValue, name: common.branchName },
+      category: "TEST",
+      reason: "Google Sheets test expense",
+      amount: 1000,
+      currency: "UZS",
+      adminName: common.adminName,
+      createdAt: new Date(),
+    });
+  }
+
+  if (action === "INKASSA") {
+    return inkassaPayload({
+      id: entityId,
+      branch: { code: branchCodeValue, name: common.branchName },
+      receiverName: "Google Sheets test",
+      amount: 1000,
+      currency: "UZS",
+      note: "Google Sheets test inkassa",
+      adminName: common.adminName,
+      createdAt: new Date(),
+    });
+  }
+
+  return salaryPayload({
+    salaryEntityId: entityId,
+    branch: { code: branchCodeValue, name: common.branchName },
+    salaryReceiver: "Google Sheets test",
+    salaryAmount: 1000,
+    currency: "UZS",
+    adminName: common.adminName,
+    createdAt: new Date(),
+  });
+};
+
+const sendTestEvent = async (user, body) => {
+  const action = String(body.action || "").toUpperCase();
+  const code = String(body.branchCode || "").trim().toUpperCase();
+  const branch = await prisma.branch.findUnique({ where: { code }, select: { id: true, name: true, code: true } }).catch(() => null);
+  const payload = testPayload(action, code, branch, user);
+  const result = await sendSafely(() => postWebhook(payload), {
+    action,
+    branchId: branch?.id || null,
+    userId: user?.id || null,
+    entityType: "GoogleSheetsTest",
+    entityId: payload.entityId,
+  });
+  return {
+    action,
+    branchCode: code,
+    sent: Boolean(result?.ok),
+    result,
+    idempotencyKey: payload.idempotencyKey,
+  };
+};
+
 module.exports = {
   sendNewOrder,
   sendPickup,
@@ -358,6 +461,7 @@ module.exports = {
   sendExpense,
   sendSalary,
   sendInkassa,
+  sendTestEvent,
   sendShiftOpen,
   sendShiftClose,
   sendSafely,
@@ -368,6 +472,7 @@ module.exports = {
     orderPayload,
     basePayload,
     expensePayload,
+    inkassaPayload,
     salaryPayload,
     validateBranchCode,
     shouldDeliver,

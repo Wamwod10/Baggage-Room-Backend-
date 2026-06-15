@@ -25,6 +25,7 @@ const telegramRoutes = require("./routes/telegram.routes");
 const exportRoutes = require("./routes/export.routes");
 const auditRoutes = require("./routes/audit.routes");
 const systemRoutes = require("./routes/system.routes");
+const googleSheetsRoutes = require("./routes/googleSheets.routes");
 
 const app = express();
 
@@ -92,6 +93,7 @@ app.use("/api/analytics", analyticsRoutes);
 app.use("/api/export", exportRoutes);
 app.use("/api/audit", auditRoutes);
 app.use("/api/system", systemRoutes);
+app.use("/api/google-sheets", googleSheetsRoutes);
 
 app.use(notFound);
 app.use(errorMiddleware);

@@ -277,7 +277,7 @@ const createOrder = async (user, body) => {
   });
 
   telegram.sendSafely(telegram.sendNewOrder(created), { branchId, userId: user.id, entityType: "Order", entityId: created.id });
-  googleSheets.sendSafely(googleSheets.sendNewOrder(created), { action: "NEW_ORDER", branchId, userId: user.id, entityType: "Order", entityId: created.id });
+  googleSheets.sendSafely(() => googleSheets.sendNewOrder(created), { action: "NEW_ORDER", branchId, userId: user.id, entityType: "Order", entityId: created.id });
   return { order: created, warnings };
 };
 

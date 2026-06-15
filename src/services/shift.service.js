@@ -134,7 +134,7 @@ const closeShift = async (user, id, body) => {
   telegram.sendSafely(telegram.sendShiftClose(result), { branchId: result.branchId, userId: user.id, entityType: "Shift", entityId: id });
   if (result.salaryReceiver && Number(result.salaryAmount || 0) > 0) {
     googleSheets.sendSafely(
-      googleSheets.sendSalary({
+      () => googleSheets.sendSalary({
         ...result,
         salaryEntityId: `${id}:salary`,
       }),

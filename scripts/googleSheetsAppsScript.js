@@ -54,13 +54,17 @@ const ACTION_STYLE = {
     background: "#fce4d6",
     fontColor: "#7f1d1d",
   },
+  INKASSA: {
+    background: "#fce4d6",
+    fontColor: "#7f1d1d",
+  },
   DEBT_CLOSED: {
     background: "#d9ead3",
     fontColor: "#274e13",
   },
 };
 
-const WRITABLE_ACTIONS = new Set(["NEW_ORDER", "EXPENSE", "SALARY"]);
+const WRITABLE_ACTIONS = new Set(["NEW_ORDER", "EXPENSE", "INKASSA", "SALARY"]);
 
 function doPost(e) {
   try {
@@ -68,7 +72,7 @@ function doPost(e) {
     const action = String(payload.action || "").toUpperCase();
 
     if (!WRITABLE_ACTIONS.has(action)) {
-      return json_({ ok: true, skipped: true, reason: "Google Sheets only accepts NEW_ORDER, EXPENSE, SALARY events" });
+      return json_({ ok: true, skipped: true, reason: "Google Sheets only accepts NEW_ORDER, EXPENSE, INKASSA, SALARY events" });
     }
 
     const branchCode = String(payload.branchCode || "").trim();
@@ -319,26 +323,29 @@ function amountForAction_(payload) {
   if (value === null || value === undefined || value === "") return "";
   const number = Math.abs(Number(value || 0));
   if (!Number.isFinite(number)) return value;
-  return ["EXPENSE", "SALARY"].includes(action) ? -number : number;
+  return ["EXPENSE", "INKASSA", "SALARY"].includes(action) ? -number : number;
 }
 
 function fioForAction_(payload) {
   const action = String(payload.action || "").toUpperCase();
-  if (action === "EXPENSE") return "RASXOD";
+  if (action === "EXPENSE") return ["RASXOD", payload.category].filter(Boolean).join(" - ");
+  if (action === "INKASSA") return ["INKASSA", payload.receiverName || payload.recipientName || payload.clientName].filter(Boolean).join(" - ");
   if (action === "SALARY") return ["OYLIK", payload.salaryReceiver].filter(Boolean).join(" - ");
   return payload.clientName || payload.recipientName || "";
 }
 
 function checkLabelForAction_(payload) {
   const action = String(payload.action || "").toUpperCase();
-  if (action === "EXPENSE") return "Xarajat";
-  if (action === "SALARY") return "Oylik";
+  if (action === "EXPENSE") return "XARAJAT";
+  if (action === "INKASSA") return "INKASSA";
+  if (action === "SALARY") return "OYLIK";
   return payload.orderNumber || payload.checkNumber || "";
 }
 
 function periodForAction_(payload) {
   const action = String(payload.action || "").toUpperCase();
-  if (action === "EXPENSE") return payload.period || payload.category || payload.reason || "Xarajat";
+  if (action === "EXPENSE") return payload.period || payload.reason || "Xarajat";
+  if (action === "INKASSA") return payload.period || payload.note || "Inkassa";
   if (action === "SALARY") return payload.period || "Oylik";
   return payload.tariffHours || payload.period || "";
 }
@@ -375,7 +382,7 @@ function writeLegacyInkassaRow_(sheet, payload, idempotencyKey) {
 
   row[0] = formatSheetDate_(payload.createdAt || new Date());
   row[1] = payload.recipientName || payload.clientName || "INKASSA";
-  row[amountColumn - 1] = payload.amount === null || payload.amount === undefined ? "" : payload.amount;
+  row[amountColumn - 1] = payload.amount === null || payload.amount === undefined ? "" : -Math.abs(Number(payload.amount || 0));
   row[nameColumn - 1] = payload.recipientName || payload.clientName || payload.note || "INKASSA";
   row[22] = idempotencyKey;
 
@@ -398,7 +405,7 @@ function styleRow_(sheet, row, action, width) {
   range.setBackground(style.background);
   range.setFontColor(style.fontColor);
 
-  if (["EXPENSE", "SALARY"].includes(String(action || "").toUpperCase())) {
+  if (["EXPENSE", "INKASSA", "SALARY"].includes(String(action || "").toUpperCase())) {
     range.setFontWeight("bold");
   }
 }
