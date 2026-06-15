@@ -94,6 +94,11 @@ function doPost(e) {
       ensureHeaders_(sheet);
     }
 
+    if (isLegacy && action === "INKASSA") {
+      const targetRow = writeLegacyInkassaRow_(sheet, payload, idempotencyKey);
+      return json_({ ok: true, row: targetRow, idempotencyKey });
+    }
+
     const row = isLegacy ? buildLegacyRow_(sheet, payload, idempotencyKey) : buildRow_(payload, idempotencyKey);
     const targetRow = findNextOrderRow(sheet);
     sheet.getRange(targetRow, 1, 1, row.length).setValues([row]);
@@ -225,7 +230,7 @@ function buildRow_(payload, idempotencyKey) {
     payload.branchCode || "",
     payload.branchName || payload.branch || "",
     payload.orderNumber || payload.checkNumber || "",
-    payload.clientName || fioForAction_(payload),
+    fioForAction_(payload),
     payload.phone || "",
     payload.passport || "",
     formatLockers_(payload.lockers),
@@ -291,6 +296,18 @@ function detectLegacyColumns_(sheet) {
       const text = normalizeHeader_(values[rowIndex][colIndex]);
       const column = colIndex + 1;
 
+      if (text === "дата" || text === "data" || text === "sana") found.date = column;
+      if (text.indexOf("ф.и.о") !== -1 || text.indexOf("fio") !== -1 || text.indexOf("f.i.o") !== -1) found.fio = column;
+      if (text.indexOf("кол-во") !== -1 || text.indexOf("кол во") !== -1 || text.indexOf("место") !== -1) found.count = column;
+      if (text.indexOf("чек") !== -1 || text.indexOf("chek") !== -1) found.check = column;
+      if (text.indexOf("период") !== -1 || text.indexOf("хранения") !== -1 || text.indexOf("saqlash") !== -1) found.period = column;
+      if (text === "€" || text === "eur") found.amountByCurrency.EUR = column;
+      if (text === "₽" || text === "руб" || text === "rub") found.amountByCurrency.RUB = column;
+      if (text === "т" || text === "t" || text === "tjs" || text === "kzt") {
+        found.amountByCurrency.TJS = column;
+        found.amountByCurrency.KZT = column;
+      }
+
       if (text === "дата" || text === "data") found.date = column;
       if (text.indexOf("ф.и.о") !== -1 || text.indexOf("fio") !== -1) found.fio = column;
       if (text.indexOf("кол-во") !== -1 || text.indexOf("кол во") !== -1) found.count = column;
@@ -319,7 +336,10 @@ function normalizeHeader_(value) {
 
 function amountForAction_(payload) {
   const action = String(payload.action || "").toUpperCase();
-  const value = action === "SALARY" ? payload.salaryAmount : payload.amount;
+  const value =
+    action === "SALARY"
+      ? firstValue_(payload.salaryAmount, payload.amount, payload.finalAmount, payload.amountUzs, payload.cashUzs)
+      : firstValue_(payload.amount, payload.finalAmount, payload.amountUzs, payload.amountUZS, payload.cashUzs, payload.uzsAmount, payload.cashierUzs);
   if (value === null || value === undefined || value === "") return "";
   const number = Math.abs(Number(value || 0));
   if (!Number.isFinite(number)) return value;
@@ -328,10 +348,10 @@ function amountForAction_(payload) {
 
 function fioForAction_(payload) {
   const action = String(payload.action || "").toUpperCase();
-  if (action === "EXPENSE") return ["RASXOD", payload.category].filter(Boolean).join(" - ");
-  if (action === "INKASSA") return ["INKASSA", payload.receiverName || payload.recipientName || payload.clientName].filter(Boolean).join(" - ");
-  if (action === "SALARY") return ["OYLIK", payload.salaryReceiver].filter(Boolean).join(" - ");
-  return payload.clientName || payload.recipientName || "";
+  if (action === "EXPENSE") return payload.fio || payload.displayName || ["RASXOD", payload.category].filter(Boolean).join(" - ");
+  if (action === "INKASSA") return payload.fio || payload.displayName || ["INKASSA", payload.receiverName || payload.recipientName || payload.clientName].filter(Boolean).join(" - ");
+  if (action === "SALARY") return payload.fio || payload.displayName || ["OYLIK", payload.salaryReceiver].filter(Boolean).join(" - ");
+  return payload.fio || payload.clientName || payload.recipientName || "";
 }
 
 function checkLabelForAction_(payload) {
@@ -350,10 +370,21 @@ function periodForAction_(payload) {
   return payload.tariffHours || payload.period || "";
 }
 
+function firstValue_() {
+  for (let index = 0; index < arguments.length; index += 1) {
+    const value = arguments[index];
+    if (value !== null && value !== undefined && value !== "") return value;
+  }
+  return "";
+}
+
 function isLegacyQonoqSheet_(sheet) {
   const rows = Math.min(sheet.getMaxRows(), 8);
   const cols = Math.min(sheet.getMaxColumns(), 25);
   const text = sheet.getRange(1, 1, rows, cols).getDisplayValues().flat().join(" ").toLowerCase();
+  if (text.indexOf("наименование") !== -1 || text.indexOf("инкасса") !== -1 || text.indexOf("остаток uzs") !== -1 || text.indexOf("ф.и.о") !== -1) {
+    return true;
+  }
   return text.indexOf("наименование") !== -1 || text.indexOf("инкасса") !== -1 || text.indexOf("остаток uzs") !== -1;
 }
 
@@ -362,6 +393,9 @@ function legacyDataStartRow_(sheet) {
   const values = sheet.getRange(1, 1, rows, Math.min(sheet.getMaxColumns(), 25)).getDisplayValues();
   for (let index = 0; index < values.length; index += 1) {
     const rowText = values[index].join(" ").toLowerCase();
+    if (rowText.indexOf("наименование") !== -1 || rowText.indexOf("период хранения") !== -1 || rowText.indexOf("ф.и.о") !== -1) {
+      return index + 2;
+    }
     if (rowText.indexOf("наименование") !== -1 || rowText.indexOf("период хранения") !== -1) {
       return index + 2;
     }
@@ -378,16 +412,17 @@ function writeLegacyInkassaRow_(sheet, payload, idempotencyKey) {
   const startRow = legacyDataStartRow_(sheet);
   const targetRow = firstDataRowAfterContent_(sheet, startRow, [1, 2, 4, 6, 15, 16, 17, 18, 19, 20, 21, 22]);
   const row = new Array(width).fill("");
+  const amount = amountForAction_(payload);
   ensureColumns_(sheet, width);
 
   row[0] = formatSheetDate_(payload.createdAt || new Date());
-  row[1] = payload.recipientName || payload.clientName || "INKASSA";
-  row[amountColumn - 1] = payload.amount === null || payload.amount === undefined ? "" : -Math.abs(Number(payload.amount || 0));
-  row[nameColumn - 1] = payload.recipientName || payload.clientName || payload.note || "INKASSA";
+  row[1] = "ИНКАССАЦИЯ";
+  row[amountColumn - 1] = amount === "" ? "" : Math.abs(Number(amount || 0));
+  row[nameColumn - 1] = payload.receiverName || payload.recipientName || payload.note || "INKASSA";
   row[22] = idempotencyKey;
 
   sheet.getRange(targetRow, 1, 1, row.length).setValues([row]);
-  sheet.getRange(targetRow, 1, 1, row.length).setBackground("#fce4d6").setFontColor("#7f1d1d").setFontWeight("bold");
+  sheet.getRange(targetRow, 1, 1, Math.min(row.length, 22)).setBackground("#fce4d6").setFontColor("#000000").setFontWeight("bold");
   return targetRow;
 }
 
