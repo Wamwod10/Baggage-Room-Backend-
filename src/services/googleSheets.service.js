@@ -78,6 +78,26 @@ const negativeMoneyFields = (amount) => {
   };
 };
 
+const positiveMoneyFields = (amount) => {
+  const number = Number(amount || 0);
+  const signed = Number.isFinite(number) ? Math.abs(number) : amount;
+  return {
+    amount: signed,
+    finalAmount: signed,
+    totalAmount: signed,
+    paidAmount: signed,
+    realPaidAmount: signed,
+    cashAmount: signed,
+    cashUzs: signed,
+    amountUzs: signed,
+    amountUZS: signed,
+    uzsAmount: signed,
+    uzs: signed,
+    cashierUzs: signed,
+    signedAmount: signed,
+  };
+};
+
 const lockerItems = (order) => {
   if (!Array.isArray(order?.items)) return [];
   return order.items
@@ -373,17 +393,30 @@ const inkassaPayload = (inkassa) =>
     receiptNumber: "INKASSA",
     receiverName: inkassa?.receiverName || inkassa?.recipientName || null,
     recipientName: inkassa?.receiverName || inkassa?.recipientName || null,
-    clientName: ["INKASSA", inkassa?.receiverName || inkassa?.recipientName].filter(Boolean).join(" - "),
-    fio: ["INKASSA", inkassa?.receiverName || inkassa?.recipientName].filter(Boolean).join(" - "),
-    fullName: ["INKASSA", inkassa?.receiverName || inkassa?.recipientName].filter(Boolean).join(" - "),
-    displayName: ["INKASSA", inkassa?.receiverName || inkassa?.recipientName].filter(Boolean).join(" - "),
-    ...negativeMoneyFields(inkassa?.amount ?? null),
+    clientName: "ИНКАССАЦИЯ",
+    fio: "ИНКАССАЦИЯ",
+    fullName: "ИНКАССАЦИЯ",
+    displayName: "ИНКАССАЦИЯ",
+    ...positiveMoneyFields(inkassa?.amount ?? null),
     currency: inkassa?.currency || "UZS",
     note: inkassa?.note || "Inkassa",
     period: inkassa?.note || "Inkassa",
     tariffHours: inkassa?.note || "Inkassa",
     storagePeriod: inkassa?.note || "Inkassa",
     paymentType: "CASH",
+    sheetSection: "INKASSA",
+    rowType: "OUT",
+    operationName: "INKASSA",
+    amountColumn: 15,
+    nameColumn: 22,
+    amountColumnByCurrency: {
+      UZS: 15,
+      USD: 16,
+      EUR: 17,
+      RUB: 18,
+      KZT: 19,
+      TJS: 20,
+    },
     legacySheetTarget: {
       amountColumnByCurrency: {
         UZS: 15,
