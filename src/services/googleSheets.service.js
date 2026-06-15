@@ -393,6 +393,7 @@ const sendSalary = (salary) => postWebhook(salaryPayload(salary));
 
 const inkassaPayload = (inkassa) => {
   const receiver = inkassa?.receiverName || inkassa?.recipientName || null;
+  const receiverLabel = receiver || INKASSA_ROW_LABEL;
 
   return withDeliveryMetadata({
     action: "INKASSA",
@@ -406,11 +407,11 @@ const inkassaPayload = (inkassa) => {
     receiptNumber: "INKASSA",
     receiverName: receiver,
     recipientName: receiver,
-    rowLabel: INKASSA_ROW_LABEL,
-    clientName: INKASSA_ROW_LABEL,
-    fio: INKASSA_ROW_LABEL,
-    fullName: INKASSA_ROW_LABEL,
-    displayName: INKASSA_ROW_LABEL,
+    rowLabel: receiverLabel,
+    clientName: receiverLabel,
+    fio: receiverLabel,
+    fullName: receiverLabel,
+    displayName: receiverLabel,
     name: receiver,
     itemName: receiver,
     naimenovanie: receiver,
