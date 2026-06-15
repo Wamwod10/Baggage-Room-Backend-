@@ -1,16 +1,9 @@
 /*
  * Google Apps Script webhook for Qonoq Baggage Google Sheets.
  *
- * Why this version exists:
- * - appendRow() and getLastRow() can write far below real data when the sheet has
- *   formatting, filters, or old blank rows.
- * - This script writes after the last real order row instead of using appendRow().
- * - idempotencyKey prevents the same backend event from being written twice.
- *
  * Deploy:
  * 1. Open the Google Sheet -> Extensions -> Apps Script.
- * 2. Replace the current webhook code with this file contents, or copy the helper
- *    functions into the current doPost flow.
+ * 2. Replace the current webhook code with this file contents.
  * 3. Deploy -> Manage deployments -> Edit -> New version.
  * 4. Keep backend GOOGLE_SHEET_WEBHOOK / GOOGLE_SHEETS_WEBHOOK pointed to the
  *    Apps Script Web App URL.
@@ -24,47 +17,58 @@ const SHEET_BY_BRANCH_CODE = {
   SIA: "SIA",
 };
 
-const HEADERS = [
-  "Created At",
-  "Action",
-  "Branch Code",
-  "Branch",
-  "Order Number",
-  "Client",
-  "Phone",
-  "Passport",
-  "Lockers",
-  "Check In",
-  "Check Out",
-  "Amount",
-  "Currency",
-  "Payment Type",
-  "Recipient",
-  "Note",
-  "Section",
-  "Idempotency Key",
-];
+const WRITABLE_ACTIONS = new Set(["NEW_ORDER", "EXPENSE", "INKASSA", "SALARY"]);
+const LEGACY_WIDTH = 22; // A:V
+const IDEMPOTENCY_COLUMN = 23; // hidden/helper column W
 
-const ACTION_STYLE = {
-  EXPENSE: {
-    background: "#f4cccc",
-    fontColor: "#7f1d1d",
-  },
-  SALARY: {
-    background: "#fce4d6",
-    fontColor: "#7f1d1d",
-  },
-  INKASSA: {
-    background: "#fce4d6",
-    fontColor: "#7f1d1d",
-  },
-  DEBT_CLOSED: {
-    background: "#d9ead3",
-    fontColor: "#274e13",
-  },
+const COLUMN = {
+  DATE: 1,
+  FIO: 2,
+  PLACE: 3,
+  CHECK: 4,
+  PERIOD: 5,
+  CASH_UZS: 6,
+  CASH_USD: 7,
+  CASH_EUR: 8,
+  CASH_RUB: 9,
+  CASH_KZT: 10,
+  CASH_TJS: 11,
+  CLICK: 12,
+  PAYME: 13,
+  TERMINAL: 14,
+  BALANCE_UZS: 15,
+  BALANCE_USD: 16,
+  BALANCE_EUR: 17,
+  BALANCE_RUB: 18,
+  BALANCE_KZT: 19,
+  BALANCE_TJS: 20,
+  EXPENSE: 21,
+  NAME: 22,
 };
 
-const WRITABLE_ACTIONS = new Set(["NEW_ORDER", "EXPENSE", "INKASSA", "SALARY"]);
+const CASH_COLUMN_BY_CURRENCY = {
+  UZS: COLUMN.CASH_UZS,
+  USD: COLUMN.CASH_USD,
+  EUR: COLUMN.CASH_EUR,
+  RUB: COLUMN.CASH_RUB,
+  KZT: COLUMN.CASH_KZT,
+  TJS: COLUMN.CASH_TJS,
+};
+
+const BALANCE_COLUMN_BY_CURRENCY = {
+  UZS: COLUMN.BALANCE_UZS,
+  USD: COLUMN.BALANCE_USD,
+  EUR: COLUMN.BALANCE_EUR,
+  RUB: COLUMN.BALANCE_RUB,
+  KZT: COLUMN.BALANCE_KZT,
+  TJS: COLUMN.BALANCE_TJS,
+};
+
+const ACTION_STYLE = {
+  EXPENSE: { background: "#f4cccc", fontColor: "#7f1d1d" },
+  SALARY: { background: "#f4cccc", fontColor: "#7f1d1d" },
+  INKASSA: { background: "#fce4d6", fontColor: "#000000" },
+};
 
 function doPost(e) {
   try {
@@ -72,37 +76,26 @@ function doPost(e) {
     const action = String(payload.action || "").toUpperCase();
 
     if (!WRITABLE_ACTIONS.has(action)) {
-      return json_({ ok: true, skipped: true, reason: "Google Sheets only accepts NEW_ORDER, EXPENSE, INKASSA, SALARY events" });
+      return json_({ ok: true, skipped: true, reason: "Unsupported action: " + action });
     }
 
     const branchCode = String(payload.branchCode || "").trim();
     const sheetName = SHEET_BY_BRANCH_CODE[branchCode];
-
-    if (!sheetName) {
-      throw new Error("Unknown branchCode: " + branchCode);
-    }
+    if (!sheetName) throw new Error("Unknown branchCode: " + branchCode);
 
     const sheet = getOrCreateSheet_(sheetName);
+    ensureColumns_(sheet, IDEMPOTENCY_COLUMN);
 
     const idempotencyKey = String(payload.idempotencyKey || buildIdempotencyKey_(payload));
     if (hasDuplicate_(sheet, idempotencyKey)) {
       return json_({ ok: true, duplicate: true, idempotencyKey });
     }
 
-    const isLegacy = isLegacyQonoqSheet_(sheet);
-    if (!isLegacy) {
-      ensureHeaders_(sheet);
-    }
-
-    if (isLegacy && action === "INKASSA") {
-      const targetRow = writeLegacyInkassaRow_(sheet, payload, idempotencyKey);
-      return json_({ ok: true, row: targetRow, idempotencyKey });
-    }
-
-    const row = isLegacy ? buildLegacyRow_(sheet, payload, idempotencyKey) : buildRow_(payload, idempotencyKey);
+    const row = buildLegacyRow_(payload);
     const targetRow = findNextOrderRow(sheet);
-    sheet.getRange(targetRow, 1, 1, row.length).setValues([row]);
-    styleRow_(sheet, targetRow, payload.action, row.length);
+    sheet.getRange(targetRow, 1, 1, LEGACY_WIDTH).setValues([row]);
+    sheet.getRange(targetRow, IDEMPOTENCY_COLUMN).setValue(idempotencyKey);
+    styleRow_(sheet, targetRow, action);
 
     return json_({ ok: true, row: targetRow, idempotencyKey });
   } catch (error) {
@@ -116,20 +109,6 @@ function getOrCreateSheet_(name) {
   return spreadsheet.getSheetByName(name) || spreadsheet.insertSheet(name);
 }
 
-function ensureHeaders_(sheet) {
-  ensureColumns_(sheet, HEADERS.length);
-  if (sheet.getLastRow() === 0) {
-    sheet.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]);
-    return;
-  }
-
-  const firstRow = sheet.getRange(1, 1, 1, HEADERS.length).getDisplayValues()[0];
-  const hasHeader = firstRow.some((value) => String(value || "").trim());
-  if (!hasHeader) {
-    sheet.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]);
-  }
-}
-
 function ensureColumns_(sheet, minColumns) {
   const currentColumns = sheet.getMaxColumns();
   if (currentColumns < minColumns) {
@@ -137,39 +116,39 @@ function ensureColumns_(sheet, minColumns) {
   }
 }
 
-function firstEmptyRowByColumn_(sheet, column) {
-  return firstDataRowAfterContent_(sheet, 2, [column]);
-}
-
 function findNextOrderRow(sheet) {
-  const startRow = isLegacyQonoqSheet_(sheet) ? legacyDataStartRow_(sheet) : 2;
-  ensureColumns_(sheet, 6);
-  const maxRows = Math.max(sheet.getMaxRows(), startRow);
-  const scanWidth = 6;
-  const values = sheet.getRange(startRow, 1, maxRows - startRow + 1, scanWidth).getDisplayValues();
-  let lastOrderRow = startRow - 1;
+  const startRow = legacyDataStartRow_(sheet);
+  ensureColumns_(sheet, IDEMPOTENCY_COLUMN);
 
+  const maxRows = Math.max(sheet.getMaxRows(), startRow);
+  const watchedColumns = [
+    COLUMN.DATE,
+    COLUMN.FIO,
+    COLUMN.CHECK,
+    COLUMN.BALANCE_UZS,
+    COLUMN.EXPENSE,
+  ];
+  const minColumn = Math.min.apply(null, watchedColumns);
+  const maxColumn = Math.max.apply(null, watchedColumns);
+  const values = sheet.getRange(startRow, minColumn, maxRows - startRow + 1, maxColumn - minColumn + 1).getDisplayValues();
+
+  let lastDataRow = startRow - 1;
   for (let index = values.length - 1; index >= 0; index -= 1) {
     const row = values[index];
-    const hasDate = String(row[0] || "").trim();
-    const hasCheckNumber = String(row[3] || "").trim();
-    const hasAnyOrderData = row.slice(0, Math.min(row.length, 6)).some((value) => String(value || "").trim());
-
-    if ((hasDate || hasCheckNumber) && hasAnyOrderData) {
-      lastOrderRow = startRow + index;
+    const hasData = watchedColumns.some((column) => String(row[column - minColumn] || "").trim());
+    if (hasData) {
+      lastDataRow = startRow + index;
       break;
     }
   }
 
-  let targetRow = Math.max(startRow, lastOrderRow + 1);
+  let targetRow = Math.max(startRow, lastDataRow + 1);
   if (targetRow > sheet.getMaxRows()) {
     sheet.insertRowsAfter(sheet.getMaxRows(), 20);
   }
-
-  if (rowHasFormulas_(sheet, targetRow, scanWidth)) {
+  if (rowHasFormulas_(sheet, targetRow, LEGACY_WIDTH)) {
     sheet.insertRowBefore(targetRow);
   }
-
   return targetRow;
 }
 
@@ -178,210 +157,99 @@ function rowHasFormulas_(sheet, row, width) {
   return sheet.getRange(row, 1, 1, width).getFormulas()[0].some((formula) => String(formula || "").trim());
 }
 
-function firstDataRowAfterContent_(sheet, startRow, columns) {
-  const maxRows = Math.max(sheet.getMaxRows(), startRow);
-  const minCol = Math.min.apply(null, columns);
-  const maxCol = Math.max.apply(null, columns);
-  const values = sheet.getRange(startRow, minCol, maxRows - startRow + 1, maxCol - minCol + 1).getDisplayValues();
-
+function legacyDataStartRow_(sheet) {
+  const rows = Math.min(sheet.getMaxRows(), 12);
+  const values = sheet.getRange(1, 1, rows, Math.min(sheet.getMaxColumns(), LEGACY_WIDTH)).getDisplayValues();
   for (let index = 0; index < values.length; index += 1) {
-    const rowNumber = startRow + index;
-    if (isHiddenRow_(sheet, rowNumber)) continue;
-    const hasContent = columns.some((column) => String(values[index][column - minCol] || "").trim());
-    if (!hasContent) {
-      return rowNumber;
+    const text = values[index].join(" ").toLowerCase();
+    if (
+      text.indexOf("ф.и.о") !== -1 ||
+      text.indexOf("период хранения") !== -1 ||
+      text.indexOf("наименование") !== -1 ||
+      text.indexOf("№ чек") !== -1
+    ) {
+      return index + 2;
     }
   }
-
-  const nextRow = maxRows + 1;
-  if (nextRow > sheet.getMaxRows()) sheet.insertRowsAfter(sheet.getMaxRows(), 20);
-  return nextRow;
-}
-
-function isHiddenRow_(sheet, row) {
-  try {
-    return sheet.isRowHiddenByUser(row) || sheet.isRowHiddenByFilter(row);
-  } catch (error) {
-    return false;
-  }
+  return 5;
 }
 
 function hasDuplicate_(sheet, idempotencyKey) {
-  if (!idempotencyKey) return false;
-
+  if (!idempotencyKey || IDEMPOTENCY_COLUMN > sheet.getMaxColumns()) return false;
   const maxRows = Math.max(sheet.getMaxRows(), 2);
-  const candidateColumns = [HEADERS.indexOf("Idempotency Key") + 1, 23].filter((column, index, list) => column > 0 && list.indexOf(column) === index);
-
-  return candidateColumns.some((column) => {
-    if (column > sheet.getMaxColumns()) return false;
-    const values = sheet.getRange(2, column, maxRows - 1, 1).getDisplayValues();
-    return values.some((row) => String(row[0] || "").trim() === idempotencyKey);
-  });
+  const values = sheet.getRange(2, IDEMPOTENCY_COLUMN, maxRows - 1, 1).getDisplayValues();
+  return values.some((row) => String(row[0] || "").trim() === idempotencyKey);
 }
 
-function buildRow_(payload, idempotencyKey) {
-  const action = String(payload.action || "");
-  const recipient = payload.recipientName || (action === "INKASSA" ? payload.clientName : "");
-  const amount = amountForAction_(payload);
-
-  return [
-    payload.createdAt || new Date(),
-    actionLabel_(action),
-    payload.branchCode || "",
-    payload.branchName || payload.branch || "",
-    payload.orderNumber || payload.checkNumber || "",
-    fioForAction_(payload),
-    payload.phone || "",
-    payload.passport || "",
-    formatLockers_(payload.lockers),
-    payload.checkIn || "",
-    payload.checkOut || "",
-    amount === null || amount === undefined ? "" : amount,
-    payload.currency || "",
-    payload.paymentType || "",
-    recipient || "",
-    payload.note || payload.reason || payload.category || "",
-    payload.sheetSection || action || "",
-    idempotencyKey || "",
-  ];
-}
-
-function buildLegacyRow_(sheet, payload, idempotencyKey) {
+function buildLegacyRow_(payload) {
   const action = String(payload.action || "").toUpperCase();
-  const currency = String(payload.currency || "UZS").toUpperCase();
-  const columns = detectLegacyColumns_(sheet);
-  const amountColumn = columns.amountByCurrency[currency] || columns.amountByCurrency.UZS;
-  const configuredNameColumn = Number(payload.legacySheetTarget && payload.legacySheetTarget.nameColumn || payload.nameColumn || 22);
-  const nameValue = nameForAction_(payload);
-  const nameColumn = nameValue ? configuredNameColumn : 0;
-  const width = Math.max(amountColumn, columns.idempotency, nameColumn);
-  const row = new Array(width).fill("");
+  const row = new Array(LEGACY_WIDTH).fill("");
 
-  row[columns.date - 1] = formatSheetDate_(payload.createdAt || new Date());
-  row[columns.fio - 1] = fioForAction_(payload);
-  row[columns.check - 1] = checkLabelForAction_(payload);
-  row[columns.period - 1] = periodForAction_(payload);
-  if (nameValue) {
-    row[nameColumn - 1] = nameValue;
+  row[COLUMN.DATE - 1] = formatSheetDate_(payload.createdAt || new Date());
+
+  if (action === "NEW_ORDER") {
+    fillNewOrderRow_(row, payload);
+  } else if (action === "EXPENSE") {
+    fillExpenseRow_(row, payload);
+  } else if (action === "SALARY") {
+    fillSalaryRow_(row, payload);
+  } else if (action === "INKASSA") {
+    fillInkassaRow_(row, payload);
   }
 
-  const amount = amountForAction_(payload);
-  if (amount !== null && amount !== undefined && amount !== "") {
-    row[amountColumn - 1] = amount;
-  }
-
-  row[columns.idempotency - 1] = idempotencyKey;
   return row;
 }
 
-function detectLegacyColumns_(sheet) {
-  const fallback = {
-    date: 1,
-    fio: 2,
-    count: 3,
-    check: 4,
-    period: 5,
-    amountByCurrency: {
-      UZS: 6,
-      USD: 7,
-      EUR: 8,
-      RUB: 9,
-      TJS: 10,
-      KZT: 10,
-    },
-    idempotency: 23,
-  };
+function fillNewOrderRow_(row, payload) {
+  row[COLUMN.FIO - 1] = payload.clientName || payload.fio || "";
+  row[COLUMN.PLACE - 1] = formatPlaces_(payload);
+  row[COLUMN.CHECK - 1] = payload.orderNumber || payload.checkNumber || "";
+  row[COLUMN.PERIOD - 1] = payload.period || payload.tariffHours || payload.storagePeriod || "";
 
-  const rows = Math.min(sheet.getMaxRows(), 8);
-  const cols = Math.min(sheet.getMaxColumns(), 25);
-  const values = sheet.getRange(1, 1, rows, cols).getDisplayValues();
-  const found = JSON.parse(JSON.stringify(fallback));
+  const amount = amountAbs_(firstValue_(payload.amount, payload.finalAmount, payload.realPaidAmount, payload.paidAmount));
+  if (amount === "") return;
 
-  for (let rowIndex = 0; rowIndex < values.length; rowIndex += 1) {
-    for (let colIndex = 0; colIndex < values[rowIndex].length; colIndex += 1) {
-      const text = normalizeHeader_(values[rowIndex][colIndex]);
-      const column = colIndex + 1;
-
-      if (text === "дата" || text === "data" || text === "sana") found.date = column;
-      if (text.indexOf("ф.и.о") !== -1 || text.indexOf("fio") !== -1 || text.indexOf("f.i.o") !== -1) found.fio = column;
-      if (text.indexOf("кол-во") !== -1 || text.indexOf("кол во") !== -1 || text.indexOf("место") !== -1) found.count = column;
-      if (text.indexOf("чек") !== -1 || text.indexOf("chek") !== -1) found.check = column;
-      if (text.indexOf("период") !== -1 || text.indexOf("хранения") !== -1 || text.indexOf("saqlash") !== -1) found.period = column;
-      if (text === "€" || text === "eur") found.amountByCurrency.EUR = column;
-      if (text === "₽" || text === "руб" || text === "rub") found.amountByCurrency.RUB = column;
-      if (text === "т" || text === "t" || text === "tjs" || text === "kzt") {
-        found.amountByCurrency.TJS = column;
-        found.amountByCurrency.KZT = column;
-      }
-
-      if (text === "дата" || text === "data") found.date = column;
-      if (text.indexOf("ф.и.о") !== -1 || text.indexOf("fio") !== -1) found.fio = column;
-      if (text.indexOf("кол-во") !== -1 || text.indexOf("кол во") !== -1) found.count = column;
-      if (text.indexOf("чек") !== -1) found.check = column;
-      if (text.indexOf("период") !== -1 || text.indexOf("хранения") !== -1) found.period = column;
-      if (text === "uzs") found.amountByCurrency.UZS = column;
-      if (text === "$" || text === "usd") found.amountByCurrency.USD = column;
-      if (text === "€" || text === "eur") found.amountByCurrency.EUR = column;
-      if (text === "₽" || text === "руб" || text === "rub") found.amountByCurrency.RUB = column;
-      if (text === "т" || text === "t" || text === "tjs" || text === "kzt") {
-        found.amountByCurrency.TJS = column;
-        found.amountByCurrency.KZT = column;
-      }
-    }
+  const paymentType = String(payload.paymentType || "CASH").toUpperCase();
+  const currency = String(payload.currency || "UZS").toUpperCase();
+  if (paymentType === "CLICK") {
+    row[COLUMN.CLICK - 1] = amount;
+  } else if (paymentType === "PAYME") {
+    row[COLUMN.PAYME - 1] = amount;
+  } else if (paymentType === "CARD" || paymentType === "TERMINAL") {
+    row[COLUMN.TERMINAL - 1] = amount;
+  } else {
+    row[(CASH_COLUMN_BY_CURRENCY[currency] || COLUMN.CASH_UZS) - 1] = amount;
   }
-
-  return found;
 }
 
-function normalizeHeader_(value) {
-  return String(value || "")
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, " ");
+function fillExpenseRow_(row, payload) {
+  const category = payload.category || payload.fio || payload.clientName || "Xarajat";
+  const reason = payload.reason || payload.note || "";
+  row[COLUMN.FIO - 1] = category;
+  row[COLUMN.EXPENSE - 1] = amountAbs_(firstValue_(payload.expenseAmount, payload.amount, payload.finalAmount, payload.amountUzs));
+  row[COLUMN.NAME - 1] = [category, reason].filter(Boolean).join(" - ");
 }
 
-function amountForAction_(payload) {
-  const action = String(payload.action || "").toUpperCase();
-  const value =
-    action === "SALARY"
-      ? firstValue_(payload.salaryAmount, payload.amount, payload.finalAmount, payload.amountUzs, payload.cashUzs)
-      : firstValue_(payload.amount, payload.finalAmount, payload.amountUzs, payload.amountUZS, payload.cashUzs, payload.uzsAmount, payload.cashierUzs);
+function fillSalaryRow_(row, payload) {
+  const receiver = payload.salaryReceiver || payload.recipientName || payload.adminName || "";
+  row[COLUMN.FIO - 1] = receiver || payload.adminName || "Oylik";
+  row[COLUMN.EXPENSE - 1] = amountAbs_(firstValue_(payload.salaryAmount, payload.amount, payload.finalAmount, payload.amountUzs));
+  row[COLUMN.NAME - 1] = ["Oylik", receiver].filter(Boolean).join(" - ");
+}
+
+function fillInkassaRow_(row, payload) {
+  const receiver = payload.receiverName || payload.recipientName || payload.clientName || "";
+  const note = payload.note || "";
+  const currency = String(payload.currency || "UZS").toUpperCase();
+  row[COLUMN.FIO - 1] = receiver;
+  row[(BALANCE_COLUMN_BY_CURRENCY[currency] || COLUMN.BALANCE_UZS) - 1] = amountAbs_(firstValue_(payload.inkassaAmount, payload.amount, payload.finalAmount, payload.amountUzs));
+  row[COLUMN.NAME - 1] = ["Inkassa", note].filter(Boolean).join(" - ");
+}
+
+function amountAbs_(value) {
   if (value === null || value === undefined || value === "") return "";
   const number = Math.abs(Number(value || 0));
-  if (!Number.isFinite(number)) return value;
-  return ["EXPENSE", "INKASSA", "SALARY"].includes(action) ? -number : number;
-}
-
-function fioForAction_(payload) {
-  const action = String(payload.action || "").toUpperCase();
-  if (action === "EXPENSE") return payload.fio || payload.displayName || ["RASXOD", payload.category].filter(Boolean).join(" - ");
-  if (action === "INKASSA") return payload.fio || payload.displayName || ["INKASSA", payload.receiverName || payload.recipientName || payload.clientName].filter(Boolean).join(" - ");
-  if (action === "SALARY") return payload.fio || payload.displayName || ["OYLIK", payload.salaryReceiver].filter(Boolean).join(" - ");
-  return payload.fio || payload.clientName || payload.recipientName || "";
-}
-
-function nameForAction_(payload) {
-  const action = String(payload.action || "").toUpperCase();
-  if (action === "EXPENSE") return payload.naimenovanie || payload.name || payload.itemName || payload.category || "";
-  if (action === "INKASSA") return payload.naimenovanie || payload.name || payload.itemName || payload.receiverName || payload.recipientName || "";
-  if (action === "SALARY") return payload.naimenovanie || payload.name || payload.itemName || payload.salaryReceiver || "";
-  return payload.naimenovanie || payload.name || payload.itemName || "";
-}
-
-function checkLabelForAction_(payload) {
-  const action = String(payload.action || "").toUpperCase();
-  if (action === "EXPENSE") return "XARAJAT";
-  if (action === "INKASSA") return "INKASSA";
-  if (action === "SALARY") return "OYLIK";
-  return payload.orderNumber || payload.checkNumber || "";
-}
-
-function periodForAction_(payload) {
-  const action = String(payload.action || "").toUpperCase();
-  if (action === "EXPENSE") return payload.period || payload.reason || "Xarajat";
-  if (action === "INKASSA") return payload.period || payload.note || "Inkassa";
-  if (action === "SALARY") return payload.period || "Oylik";
-  return payload.tariffHours || payload.period || "";
+  return Number.isFinite(number) ? number : value;
 }
 
 function firstValue_() {
@@ -392,52 +260,12 @@ function firstValue_() {
   return "";
 }
 
-function isLegacyQonoqSheet_(sheet) {
-  const rows = Math.min(sheet.getMaxRows(), 8);
-  const cols = Math.min(sheet.getMaxColumns(), 25);
-  const text = sheet.getRange(1, 1, rows, cols).getDisplayValues().flat().join(" ").toLowerCase();
-  if (text.indexOf("наименование") !== -1 || text.indexOf("инкасса") !== -1 || text.indexOf("остаток uzs") !== -1 || text.indexOf("ф.и.о") !== -1) {
-    return true;
-  }
-  return text.indexOf("наименование") !== -1 || text.indexOf("инкасса") !== -1 || text.indexOf("остаток uzs") !== -1;
-}
-
-function legacyDataStartRow_(sheet) {
-  const rows = Math.min(sheet.getMaxRows(), 12);
-  const values = sheet.getRange(1, 1, rows, Math.min(sheet.getMaxColumns(), 25)).getDisplayValues();
-  for (let index = 0; index < values.length; index += 1) {
-    const rowText = values[index].join(" ").toLowerCase();
-    if (rowText.indexOf("наименование") !== -1 || rowText.indexOf("период хранения") !== -1 || rowText.indexOf("ф.и.о") !== -1) {
-      return index + 2;
-    }
-    if (rowText.indexOf("наименование") !== -1 || rowText.indexOf("период хранения") !== -1) {
-      return index + 2;
-    }
-  }
-  return 5;
-}
-
-function writeLegacyInkassaRow_(sheet, payload, idempotencyKey) {
-  const currency = String(payload.currency || "UZS").toUpperCase();
-  const amountColumns = (payload.legacySheetTarget && payload.legacySheetTarget.amountColumnByCurrency) || {};
-  const amountColumn = Number(amountColumns[currency] || amountColumns.UZS || 15);
-  const nameColumn = Number(payload.legacySheetTarget && payload.legacySheetTarget.nameColumn || 22);
-  const width = Math.max(nameColumn, amountColumn, 23);
-  const startRow = legacyDataStartRow_(sheet);
-  const targetRow = firstDataRowAfterContent_(sheet, startRow, [1, 2, 4, 6, 15, 16, 17, 18, 19, 20, 21, 22]);
-  const row = new Array(width).fill("");
-  const amount = amountForAction_(payload);
-  ensureColumns_(sheet, width);
-
-  row[0] = formatSheetDate_(payload.createdAt || new Date());
-  row[1] = payload.rowLabel || "ИНКАССАЦИЯ";
-  row[amountColumn - 1] = amount === "" ? "" : Math.abs(Number(amount || 0));
-  row[nameColumn - 1] = payload.receiverName || payload.recipientName || payload.note || "INKASSA";
-  row[22] = idempotencyKey;
-
-  sheet.getRange(targetRow, 1, 1, row.length).setValues([row]);
-  sheet.getRange(targetRow, 1, 1, Math.min(row.length, 22)).setBackground("#fce4d6").setFontColor("#000000").setFontWeight("bold");
-  return targetRow;
+function formatPlaces_(payload) {
+  if (payload.place || payload.places || payload.lockerNumber) return payload.place || payload.places || payload.lockerNumber;
+  if (!Array.isArray(payload.lockers)) return "";
+  return payload.lockers
+    .map((locker) => [locker.number, locker.size, locker.count ? "x" + locker.count : ""].filter(Boolean).join(" "))
+    .join(",");
 }
 
 function formatSheetDate_(dateValue) {
@@ -446,53 +274,19 @@ function formatSheetDate_(dateValue) {
   return Utilities.formatDate(date, "Asia/Tashkent", "dd.MM.yyyy");
 }
 
-function styleRow_(sheet, row, action, width) {
+function styleRow_(sheet, row, action) {
   const style = ACTION_STYLE[String(action || "").toUpperCase()];
   if (!style) return;
-
-  const range = sheet.getRange(row, 1, 1, width);
+  const range = sheet.getRange(row, 1, 1, LEGACY_WIDTH);
   range.setBackground(style.background);
   range.setFontColor(style.fontColor);
-
-  if (["EXPENSE", "INKASSA", "SALARY"].includes(String(action || "").toUpperCase())) {
-    range.setFontWeight("bold");
-  }
-}
-
-function actionLabel_(action) {
-  switch (String(action || "").toUpperCase()) {
-    case "INKASSA":
-      return "Inkassa";
-    case "EXPENSE":
-      return "Xarajat";
-    case "SALARY":
-      return "Oylik";
-    case "DEBT_CLOSED":
-      return "Qarz yopildi";
-    case "NEW_ORDER":
-      return "Yangi order";
-    case "PICKUP":
-      return "Pickup";
-    case "SHIFT_OPEN":
-      return "Smena ochildi";
-    case "SHIFT_CLOSE":
-      return "Smena yopildi";
-    default:
-      return action || "";
-  }
+  range.setFontWeight("bold");
 }
 
 function buildIdempotencyKey_(payload) {
   return [payload.action || "UNKNOWN", payload.branchCode || "NO_BRANCH", payload.orderNumber || payload.orderId || payload.entityId || payload.createdAt]
     .filter(Boolean)
     .join(":");
-}
-
-function formatLockers_(lockers) {
-  if (!Array.isArray(lockers)) return "";
-  return lockers
-    .map((locker) => [locker.number, locker.size, locker.count ? "x" + locker.count : ""].filter(Boolean).join(" "))
-    .join(", ");
 }
 
 function json_(body) {
