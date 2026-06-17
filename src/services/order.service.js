@@ -267,8 +267,8 @@ const createOrder = async (user, body) => {
       tx,
       branchId,
       type: "SUCCESS",
-      title: "New order",
-      message: `${order.orderNumber} created for ${order.clientName}`,
+      title: "Yangi buyurtma",
+      message: `${order.orderNumber} ${order.clientName} uchun yaratildi`,
       priority: 1,
       relatedOrderId: order.id,
     });
@@ -423,8 +423,8 @@ const cancelOrder = async (user, id, body) => {
       tx,
       branchId: order.branchId,
       type: "WARNING",
-      title: "Order cancelled",
-      message: `${order.orderNumber} cancelled`,
+      title: "Buyurtma bekor qilindi",
+      message: `${order.orderNumber} bekor qilindi`,
       priority: 2,
       relatedOrderId: order.id,
     });
@@ -451,8 +451,8 @@ const markDelayedOrders = async (branchId = undefined) => {
         tx,
         branchId: order.branchId,
         type: "DANGER",
-        title: "Delayed baggage",
-        message: `${order.orderNumber} planned checkout time passed`,
+        title: "Kechikkan bagaj",
+        message: `${order.orderNumber} olib ketish vaqtidan o'tdi`,
         priority: 3,
         relatedOrderId: order.id,
       });

@@ -85,7 +85,7 @@ const line = (label, value) => `${label}: ${cleanText(value)}`;
 
 const orderMessage = (order = {}) => {
   const items = Array.isArray(order.items) ? order.items : [];
-  const sizeLabel = { S: "Small", M: "Medium", L: "Large", XL: "XL" };
+  const sizeLabel = { S: "Kichik", M: "O'rta", L: "Katta", XL: "Juda katta" };
   const sizeCounts = items.reduce((acc, item) => {
     const size = sizeLabel[item.size] || cleanText(item.size);
     if (!size || size === "-") return acc;
@@ -96,23 +96,23 @@ const orderMessage = (order = {}) => {
   const count = Object.values(sizeCounts).reduce((total, value) => total + value, 0) || Number(order.count || 0);
 
   return [
-    "📦 Yangi baggage qabul qilindi",
+    "📦 Yangi bagaj qabul qilindi",
     "",
     line("🏢 Filial", formatBranch(order.branch || order.branchName)),
-    line("👤 Klient", order.clientName || order.client),
+    line("👤 Mijoz", order.clientName || order.client),
     line("📞 Telefon", order.phone),
     line("🪪 Passport", order.passport),
     "",
-    line("🧳 Size", sizes.join(", ") || "-"),
+    line("🧳 O'lcham", sizes.join(", ") || "-"),
     line("🔢 Soni", `${count} ta`),
     "",
-    line("🕒 Check-in", formatDate(order.checkIn || order.createdAt)),
-    line("🕘 Check-out", formatDate(order.plannedCheckOut)),
+    line("🕒 Qabul vaqti", formatDate(order.checkIn || order.createdAt)),
+    line("🕘 Olib ketish vaqti", formatDate(order.plannedCheckOut)),
     "",
     line("💳 To'lov", formatPayment(order.paymentType)),
     line("💰 Summa", formatMoney(order.realPaidAmount || order.finalAmount || 0, order.currency)),
     "",
-    line("🆔 Order", orderNumber(order)),
+    line("🆔 Buyurtma", orderNumber(order)),
     line("📅 Sana", formatDate(order.createdAt || order.checkIn)),
   ].join("\n");
 };
@@ -122,9 +122,9 @@ const shiftOpenedMessage = (shift = {}) => [
   "",
   line("🏢 Filial", formatBranch(shift.branch || shift.branchName)),
   line("👤 Admin", formatAdmin(shift.openedBy || shift.admin || shift.openedByName)),
-  ...(shift.shiftTime ? [line("🕘 Shift", shift.shiftTime), ""] : [""]),
+  ...(shift.shiftTime ? [line("🕘 Smena", shift.shiftTime), ""] : [""]),
   line("🕒 Ochildi", formatDate(shift.openedAt || shift.createdAt)),
-  line("💵 Opening cash", formatMoney(shift.openingCash || 0, shift.currency || "UZS")),
+  line("💵 Boshlang'ich kassa", formatMoney(shift.openingCash || 0, shift.currency || "UZS")),
   line("💰 Qabul qilingan", formatMoney(shift.acceptedCash || 0, shift.currency || "UZS")),
   line("📅 Sana", formatDate(shift.openedAt || shift.createdAt)),
 ].join("\n");
@@ -135,7 +135,7 @@ const shiftClosedMessage = (shift = {}) => [
   line("🏢 Filial", formatBranch(shift.branch || shift.branchName)),
   line("👤 Topshirgan", formatAdmin(shift.openedBy || shift.admin || shift.openedByName)),
   line("👤 Yopgan", formatAdmin(shift.closedBy || shift.closedByName)),
-  ...(shift.shiftTime ? [line("🕘 Shift", shift.shiftTime)] : []),
+  ...(shift.shiftTime ? [line("🕘 Smena", shift.shiftTime)] : []),
   "",
   line("📦 Buyurtmalar", `${Number(shift.ordersCount || shift.orders || 0)} ta`),
   line("💰 Umumiy tushum", formatMoney(shift.totalRevenue || 0, shift.currency || "UZS")),
@@ -160,9 +160,9 @@ const orderCancelledMessage = (order = {}) => {
   return [
     "❌ Buyurtma bekor qilindi",
     "",
-    line("🆔 Order", orderNumber(order)),
+    line("🆔 Buyurtma", orderNumber(order)),
     line("🏢 Filial", formatBranch(order.branch || order.branchName)),
-    line("👤 Klient", order.clientName || order.client),
+    line("👤 Mijoz", order.clientName || order.client),
     line("🔐 Yacheyka", formatLockerNumber(firstItem?.lockerNumber || firstItem?.locker?.number || order.lockerNumber)),
     line("📝 Sabab", order.cancelReason || order.cancellationReason || order.reason),
     line("👤 Bekor qildi", formatAdmin(order.cancelledBy || order.cancelledByName || order.admin || order.createdBy)),
@@ -176,9 +176,9 @@ const delayedBaggageMessage = (order = {}) => {
   return [
     "⚠️ Kechikkan bagaj",
     "",
-    line("🆔 Order", orderNumber(order)),
+    line("🆔 Buyurtma", orderNumber(order)),
     line("🏢 Filial", formatBranch(order.branch || order.branchName)),
-    line("👤 Klient", order.clientName || order.client),
+    line("👤 Mijoz", order.clientName || order.client),
     line("📞 Telefon", order.phone),
     line("🔐 Yacheyka", formatLockerNumber(firstItem?.lockerNumber || firstItem?.locker?.number || order.lockerNumber)),
     line("⏰ Tugashi kerak edi", formatDate(order.plannedCheckOut)),
@@ -205,9 +205,9 @@ const overtimePaymentMessage = (order = {}) => [
 const debtClosedMessage = (debt = {}) => [
   "✅ Qarz yopildi",
   "",
-  line("🆔 Order", debt.orderNumber || debt.order?.orderNumber),
+  line("🆔 Buyurtma", debt.orderNumber || debt.order?.orderNumber),
   line("🏢 Filial", formatBranch(debt.branch || debt.branchName)),
-  line("👤 Klient", debt.clientName || debt.client),
+  line("👤 Mijoz", debt.clientName || debt.client),
   line("📞 Telefon", debt.phone),
   line("💰 Qarz summa", formatMoney(debt.amount || 0, debt.currency || "UZS")),
   line("💳 To'lov", formatPayment(debt.paymentType || debt.payment)),
@@ -259,7 +259,7 @@ const orderEditMessage = (order = {}, changes = {}) => {
   return [
     "✏️ Buyurtma o'zgartirildi",
     "",
-    line("🆔 Order", orderNumber(order)),
+    line("🆔 Buyurtma", orderNumber(order)),
     line("🏢 Filial", formatBranch(order.branch || order.branchName)),
     line("👤 Admin", formatAdmin(order.updatedBy || order.admin || order.createdBy)),
     line("📝 O'zgargan", lines.length ? lines.join("; ") : "-"),
@@ -271,9 +271,9 @@ const lockerTransferMessage = (payload = {}, transfer = {}) => [
   "🔄 Yacheyka almashtirildi",
   "",
   line("🏢 Filial", formatBranch(payload.branch || payload.branchName)),
-  line("🆔 Order", payload.orderNumber || payload.order),
-  line("Eski", formatLockerNumber(transfer.from?.number || payload.from)),
-  line("Yangi", formatLockerNumber(transfer.to?.number || payload.to)),
+  line("🆔 Buyurtma", payload.orderNumber || payload.order),
+  line("Eski yacheyka", formatLockerNumber(transfer.from?.number || payload.from)),
+  line("Yangi yacheyka", formatLockerNumber(transfer.to?.number || payload.to)),
   line("📝 Sabab", transfer.reason || payload.reason || payload.note),
   line("👤 Admin", formatAdmin(transfer.admin || payload.admin || payload.createdBy)),
 ].join("\n");

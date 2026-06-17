@@ -42,12 +42,21 @@ const allowedOrigins = [
   ...productionFrontendOrigins,
 ].filter((origin, index, list) => origin && list.indexOf(origin) === index);
 
+const isLocalDevelopmentOrigin = (origin = "") =>
+  process.env.NODE_ENV !== "production" &&
+  /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
+
 app.set("trust proxy", 1);
 app.use(helmet());
 app.use(
   cors({
     origin(origin, callback) {
-      if (!origin || allowedOrigins.includes(origin) || (process.env.NODE_ENV !== "production" && allowedOrigins.length === 0)) {
+      if (
+        !origin ||
+        allowedOrigins.includes(origin) ||
+        isLocalDevelopmentOrigin(origin) ||
+        (process.env.NODE_ENV !== "production" && allowedOrigins.length === 0)
+      ) {
         return callback(null, true);
       }
       const error = new Error("Not allowed by CORS");
