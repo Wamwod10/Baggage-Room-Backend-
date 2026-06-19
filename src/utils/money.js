@@ -13,6 +13,8 @@ const currencyFractionDigits = {
   USD: 2,
   EUR: 2,
   RUB: 2,
+  KZT: 2,
+  TJS: 2,
 };
 
 const convertUzsToCurrencyMinor = (amountUZS, currency = "UZS", exchangeRate = 1) => {

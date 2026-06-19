@@ -23,7 +23,7 @@ const calculatePrice = (tariff, hours, options = {}) => {
   if (h <= 24) return tariff.price24h;
   if (h <= 48) return tariff.price48h;
   if (h <= 72) return tariff.price72h;
-  return tariff.price72h + Math.ceil((h - 72) / 24) * tariff.after72hPrice;
+  return Math.round(Number(tariff.price72h || 0) + (h - 72) * (Number(tariff.after72hPrice || 0) / 24));
 };
 
 const sizesForBranch = (branch) => [

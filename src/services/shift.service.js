@@ -44,6 +44,7 @@ const openShift = async (user, body) => {
       openingCash: body.openingCash || 0,
       acceptedCash: body.acceptedCash || 0,
       acceptedFromName: body.acceptedFromName || null,
+      acceptedByName: body.acceptedByName || null,
       handoverToName: body.handoverToName || null,
     },
     include,
@@ -62,7 +63,10 @@ const computeShiftReport = async (tx, shift) => {
   const outMovements = movements.filter((item) => item.direction === "OUT");
   const totalRevenue = sum(inMovements);
   const cashRevenue = sum(inMovements.filter((item) => item.paymentType === "CASH"));
-  const cardRevenue = sum(inMovements.filter((item) => item.paymentType === "CARD"));
+  const terminalRevenue = sum(inMovements.filter((item) => ["TERMINAL", "CARD", "TRANSFER"].includes(item.paymentType)));
+  const clickRevenue = sum(inMovements.filter((item) => item.paymentType === "CLICK"));
+  const paymeRevenue = sum(inMovements.filter((item) => item.paymentType === "PAYME"));
+  const cardRevenue = terminalRevenue;
   const transferRevenue = sum(inMovements.filter((item) => item.paymentType === "TRANSFER"));
   const expenseAmount = sum(outMovements.filter((item) => item.type === "EXPENSE"));
   const salaryAmount = sum(outMovements.filter(isSalaryMovement));
@@ -70,9 +74,23 @@ const computeShiftReport = async (tx, shift) => {
   const debtAmount = sum(debts.filter((item) => item.status === "OPEN"));
   const manualIn = sum(inMovements.filter((item) => item.type === "MANUAL_CORRECTION"));
   const manualOut = sum(outMovements.filter((item) => item.type === "MANUAL_CORRECTION"));
-  const systemExpectedCash = shift.openingCash + totalRevenue + manualIn - expenseAmount - inkassaAmount - manualOut;
+  const systemExpectedCash = shift.openingCash + shift.acceptedCash + totalRevenue + manualIn - expenseAmount - inkassaAmount - manualOut;
 
-  return { totalRevenue, cashRevenue, cardRevenue, transferRevenue, debtAmount, expenseAmount, salaryAmount, inkassaAmount, systemExpectedCash, ordersCount };
+  return {
+    totalRevenue,
+    cashRevenue,
+    cardRevenue,
+    terminalRevenue,
+    clickRevenue,
+    paymeRevenue,
+    transferRevenue,
+    debtAmount,
+    expenseAmount,
+    salaryAmount,
+    inkassaAmount,
+    systemExpectedCash,
+    ordersCount,
+  };
 };
 
 const closeShift = async (user, id, body) => {

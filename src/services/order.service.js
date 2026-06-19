@@ -405,6 +405,12 @@ const pickupOrder = async (user, id, body) => {
   if (result.debtPayment) {
     telegram.sendSafely(telegram.sendDebtClosed(result.debtPayment), { branchId: result.updated.branchId, userId: user.id, entityType: "Debt", entityId: result.debtPayment.id });
   }
+  if (Number(result.updated.overtimeAmount || 0) > 0) {
+    googleSheets.sendSafely(
+      () => googleSheets.sendDoplata({ ...result.updated, overtimePaymentType: body.paymentType || "CASH" }),
+      { action: "DOPLATA", branchId: result.updated.branchId, userId: user.id, entityType: "OrderDoplata", entityId: `${id}:doplata:${result.updated.realPickupTime?.getTime?.() || Date.now()}` },
+    );
+  }
   return result.updated;
 };
 

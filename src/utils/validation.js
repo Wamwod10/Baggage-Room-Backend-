@@ -3,8 +3,8 @@ const { z } = require("zod");
 const idParam = z.object({ params: z.object({ id: z.string().min(1) }) });
 const branchParam = z.object({ params: z.object({ branchId: z.string().min(1) }) });
 
-const currency = z.enum(["UZS", "USD", "RUB", "EUR"]);
-const paymentType = z.enum(["CASH", "CARD", "TRANSFER", "DEBT"]);
+const currency = z.enum(["UZS", "USD", "RUB", "EUR", "KZT", "TJS"]);
+const paymentType = z.enum(["CASH", "CARD", "TERMINAL", "CLICK", "PAYME", "TRANSFER", "DEBT"]);
 const lockerStatus = z.enum(["EMPTY", "BUSY", "DELAYED", "SERVICE"]);
 const lockerSize = z.enum(["S", "M", "L", "XL"]);
 const orderStatus = z.enum(["ACTIVE", "PICKED_UP", "CANCELLED", "DELAYED"]);

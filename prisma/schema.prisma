@@ -39,11 +39,16 @@ enum Currency {
   USD
   RUB
   EUR
+  KZT
+  TJS
 }
 
 enum PaymentType {
   CASH
   CARD
+  TERMINAL
+  CLICK
+  PAYME
   TRANSFER
   DEBT
 }
@@ -236,12 +241,16 @@ model Shift {
   closedById          String?
   handoverToName      String?
   acceptedFromName    String?
+  acceptedByName      String?
   openingCash         Int           @default(0)
   acceptedCash        Int           @default(0)
   closingCash         Int?
   totalRevenue        Int           @default(0)
   cashRevenue         Int           @default(0)
   cardRevenue         Int           @default(0)
+  terminalRevenue     Int           @default(0)
+  clickRevenue        Int           @default(0)
+  paymeRevenue        Int           @default(0)
   transferRevenue     Int           @default(0)
   debtAmount          Int           @default(0)
   expenseAmount       Int           @default(0)

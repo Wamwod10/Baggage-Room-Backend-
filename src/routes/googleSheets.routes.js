@@ -7,7 +7,7 @@ const googleSheetsController = require("../controllers/googleSheets.controller")
 router.post(
   "/test",
   requireRole("SUPER_ADMIN"),
-  validate(z.object({ body: z.object({ branchCode: z.string().trim().min(1), action: z.enum(["NEW_ORDER", "EXPENSE", "INKASSA", "SALARY"]) }) })),
+  validate(z.object({ body: z.object({ branchCode: z.string().trim().min(1), action: z.enum(["NEW_ORDER", "DOPLATA", "EXPENSE", "INKASSA", "SALARY"]) }) })),
   googleSheetsController.test,
 );
 

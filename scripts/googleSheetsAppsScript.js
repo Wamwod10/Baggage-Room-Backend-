@@ -17,7 +17,7 @@ const SHEET_BY_BRANCH_CODE = {
   SIA: "SIA",
 };
 
-const WRITABLE_ACTIONS = new Set(["NEW_ORDER", "EXPENSE", "INKASSA", "SALARY"]);
+const WRITABLE_ACTIONS = new Set(["NEW_ORDER", "DOPLATA", "EXPENSE", "INKASSA", "SALARY"]);
 const LEGACY_WIDTH = 22; // A:V
 const IDEMPOTENCY_COLUMN = 23; // hidden/helper column W
 
@@ -64,7 +64,17 @@ const BALANCE_COLUMN_BY_CURRENCY = {
   TJS: COLUMN.BALANCE_TJS,
 };
 
+const FRACTION_DIGITS_BY_CURRENCY = {
+  UZS: 0,
+  USD: 2,
+  EUR: 2,
+  RUB: 2,
+  KZT: 2,
+  TJS: 2,
+};
+
 const ACTION_STYLE = {
+  DOPLATA: { background: "#d9ead3", fontColor: "#14532d" },
   EXPENSE: { background: "#f4cccc", fontColor: "#7f1d1d" },
   SALARY: { background: "#f4cccc", fontColor: "#7f1d1d" },
   INKASSA: { background: "#fce4d6", fontColor: "#000000" },
@@ -189,6 +199,8 @@ function buildLegacyRow_(payload) {
 
   if (action === "NEW_ORDER") {
     fillNewOrderRow_(row, payload);
+  } else if (action === "DOPLATA") {
+    fillDoplataRow_(row, payload);
   } else if (action === "EXPENSE") {
     fillExpenseRow_(row, payload);
   } else if (action === "SALARY") {
@@ -206,7 +218,30 @@ function fillNewOrderRow_(row, payload) {
   row[COLUMN.CHECK - 1] = payload.orderNumber || payload.checkNumber || "";
   row[COLUMN.PERIOD - 1] = payload.period || payload.tariffHours || payload.storagePeriod || "";
 
-  const amount = amountAbs_(firstValue_(payload.amount, payload.finalAmount, payload.realPaidAmount, payload.paidAmount));
+  const amount = amountAbs_(firstValue_(payload.amount, payload.finalAmount, payload.realPaidAmount, payload.paidAmount), payload.currency);
+  if (amount === "") return;
+
+  const paymentType = String(payload.paymentType || "CASH").toUpperCase();
+  const currency = String(payload.currency || "UZS").toUpperCase();
+  if (paymentType === "CLICK") {
+    row[COLUMN.CLICK - 1] = amount;
+  } else if (paymentType === "PAYME") {
+    row[COLUMN.PAYME - 1] = amount;
+  } else if (paymentType === "CARD" || paymentType === "TERMINAL") {
+    row[COLUMN.TERMINAL - 1] = amount;
+  } else {
+    row[(CASH_COLUMN_BY_CURRENCY[currency] || COLUMN.CASH_UZS) - 1] = amount;
+  }
+}
+
+function fillDoplataRow_(row, payload) {
+  row[COLUMN.FIO - 1] = payload.clientName || payload.fio || "";
+  row[COLUMN.PLACE - 1] = formatPlaces_(payload);
+  row[COLUMN.CHECK - 1] = payload.orderNumber || payload.checkNumber || "";
+  row[COLUMN.PERIOD - 1] = payload.period || payload.tariffHours || payload.storagePeriod || "";
+  row[COLUMN.NAME - 1] = "DOPLATA";
+
+  const amount = amountAbs_(firstValue_(payload.amount, payload.overtimeAmount, payload.finalAmount, payload.realPaidAmount), payload.currency);
   if (amount === "") return;
 
   const paymentType = String(payload.paymentType || "CASH").toUpperCase();
@@ -226,14 +261,14 @@ function fillExpenseRow_(row, payload) {
   const category = payload.category || payload.fio || payload.clientName || "Xarajat";
   const reason = payload.reason || payload.note || "";
   row[COLUMN.FIO - 1] = category;
-  row[COLUMN.EXPENSE - 1] = amountAbs_(firstValue_(payload.expenseAmount, payload.amount, payload.finalAmount, payload.amountUzs));
+  row[COLUMN.EXPENSE - 1] = amountAbs_(firstValue_(payload.expenseAmount, payload.amount, payload.finalAmount, payload.amountUzs), payload.currency);
   row[COLUMN.NAME - 1] = [category, reason].filter(Boolean).join(" - ");
 }
 
 function fillSalaryRow_(row, payload) {
   const receiver = payload.salaryReceiver || payload.recipientName || payload.adminName || "";
   row[COLUMN.FIO - 1] = receiver || payload.adminName || "Oylik";
-  row[COLUMN.EXPENSE - 1] = amountAbs_(firstValue_(payload.salaryAmount, payload.amount, payload.finalAmount, payload.amountUzs));
+  row[COLUMN.EXPENSE - 1] = amountAbs_(firstValue_(payload.salaryAmount, payload.amount, payload.finalAmount, payload.amountUzs), payload.currency);
   row[COLUMN.NAME - 1] = ["Oylik", receiver].filter(Boolean).join(" - ");
 }
 
@@ -242,14 +277,17 @@ function fillInkassaRow_(row, payload) {
   const note = payload.note || "";
   const currency = String(payload.currency || "UZS").toUpperCase();
   row[COLUMN.FIO - 1] = receiver;
-  row[(BALANCE_COLUMN_BY_CURRENCY[currency] || COLUMN.BALANCE_UZS) - 1] = amountAbs_(firstValue_(payload.inkassaAmount, payload.amount, payload.finalAmount, payload.amountUzs));
+  row[(BALANCE_COLUMN_BY_CURRENCY[currency] || COLUMN.BALANCE_UZS) - 1] = amountAbs_(firstValue_(payload.inkassaAmount, payload.amount, payload.finalAmount, payload.amountUzs), currency);
   row[COLUMN.NAME - 1] = ["Inkassa", note].filter(Boolean).join(" - ");
 }
 
-function amountAbs_(value) {
+function amountAbs_(value, currency) {
   if (value === null || value === undefined || value === "") return "";
   const number = Math.abs(Number(value || 0));
-  return Number.isFinite(number) ? number : value;
+  if (!Number.isFinite(number)) return value;
+  const code = String(currency || "UZS").toUpperCase();
+  const digits = FRACTION_DIGITS_BY_CURRENCY[code] || 0;
+  return digits ? number / Math.pow(10, digits) : number;
 }
 
 function firstValue_() {
@@ -261,11 +299,20 @@ function firstValue_() {
 }
 
 function formatPlaces_(payload) {
-  if (payload.place || payload.places || payload.lockerNumber) return payload.place || payload.places || payload.lockerNumber;
+  if (payload.place || payload.places) return payload.place || payload.places;
   if (!Array.isArray(payload.lockers)) return "";
-  return payload.lockers
-    .map((locker) => [locker.number, locker.size, locker.count ? "x" + locker.count : ""].filter(Boolean).join(" "))
-    .join(",");
+  const counts = payload.lockers.reduce(function (acc, locker) {
+    const size = String(locker.size || "").toUpperCase();
+    if (!size) return acc;
+    acc[size] = (acc[size] || 0) + Number(locker.count || 1);
+    return acc;
+  }, {});
+  return ["S", "M", "L", "XL"]
+    .map(function (size) {
+      return counts[size] > 0 ? counts[size] + "-" + size : "";
+    })
+    .filter(Boolean)
+    .join(" ");
 }
 
 function formatSheetDate_(dateValue) {

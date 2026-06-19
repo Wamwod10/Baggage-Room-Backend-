@@ -5,18 +5,18 @@ const { formatTashkentIso } = require("../utils/date");
 const TIMEOUT_MS = 5000;
 
 const branchNameByCode = {
-  TIA: "Toshkent xalqaro aeroport",
+  TIA: "Toshkent aeroport",
   TSV: "Toshkent Shimoliy vokzal",
   TJV: "Toshkent Janubiy vokzal",
   SVK: "Samarqand vokzal",
-  SIA: "Samarqand xalqaro aeroport",
+  SIA: "Samarqand aeroport",
 };
 const allowedBranchCodes = new Set(Object.keys(branchNameByCode));
 
 const enabledValue = () => process.env.GOOGLE_SHEETS_ENABLED || process.env.GOOGLE_SHEET_ENABLED || "";
 const getWebhookUrl = () => String(process.env.GOOGLE_SHEET_WEBHOOK || process.env.GOOGLE_SHEETS_WEBHOOK || "").trim();
 const isEnabled = () => ["true", "1", "yes", "on"].includes(String(enabledValue()).toLowerCase()) && Boolean(getWebhookUrl());
-const DELIVERABLE_ACTIONS = new Set(["NEW_ORDER", "EXPENSE", "INKASSA", "SALARY"]);
+const DELIVERABLE_ACTIONS = new Set(["NEW_ORDER", "DOPLATA", "EXPENSE", "INKASSA", "SALARY"]);
 const shouldDeliver = (payload) => DELIVERABLE_ACTIONS.has(String(payload?.action || "").toUpperCase());
 
 const toIso = (value) => {
@@ -102,14 +102,28 @@ const INKASSA_ROW_LABEL = "INKASSA";
 
 const lockerItems = (order) => {
   if (!Array.isArray(order?.items)) return [];
-  return order.items
-    .map((item) => ({
-      number: item.lockerNumber || item.locker?.number,
-      size: item.size || item.locker?.size,
-      count: item.count || 1,
-    }))
-    .filter((locker) => locker.number !== undefined && locker.number !== null && locker.size);
+  const counts = order.items.reduce((acc, item) => {
+    const size = item.size || item.locker?.size;
+    if (!size) return acc;
+    acc[size] = (acc[size] || 0) + Number(item.count || 1);
+    return acc;
+  }, {});
+
+  return ["S", "M", "L", "XL"]
+    .filter((size) => Number(counts[size] || 0) > 0)
+    .map((size) => ({ size, count: counts[size] }));
 };
+
+const formatBaggagePlaces = (items = []) =>
+  ["S", "M", "L", "XL"]
+    .map((size) => {
+      const count = items
+        .filter((item) => item.size === size)
+        .reduce((total, item) => total + Number(item.count || 0), 0);
+      return count > 0 ? `${count}-${size}` : null;
+    })
+    .filter(Boolean)
+    .join(" ");
 
 const orderPayload = (action, order, overrides = {}) => {
   const lockers = lockerItems(order);
@@ -122,6 +136,8 @@ const orderPayload = (action, order, overrides = {}) => {
     phone: order?.phone || null,
     passport: order?.passport || null,
     lockers,
+    places: formatBaggagePlaces(lockers),
+    place: formatBaggagePlaces(lockers),
     checkIn: toIso(order?.checkIn),
     checkOut: toIso(order?.realPickupTime || order?.plannedCheckOut || order?.closedAt),
     amount: order?.finalAmount ?? order?.amount ?? null,
@@ -164,7 +180,7 @@ const postWebhook = async (payload) => {
     if (!shouldDeliver(payload)) {
       return {
         skipped: true,
-        reason: `Google Sheets only accepts NEW_ORDER, EXPENSE, INKASSA, SALARY events (received ${payload.action || "UNKNOWN"})`,
+        reason: `Google Sheets only accepts NEW_ORDER, DOPLATA, EXPENSE, INKASSA, SALARY events (received ${payload.action || "UNKNOWN"})`,
       };
     }
     if (!isEnabled()) {
@@ -300,6 +316,15 @@ const sendSafely = async (delivery, { action = "UNKNOWN", branchId = null, userI
 };
 
 const sendNewOrder = (order) => postWebhook(orderPayload("NEW_ORDER", order, { amount: order?.finalAmount ?? null }));
+
+const sendDoplata = (order) =>
+  postWebhook(orderPayload("DOPLATA", order, {
+    amount: order?.overtimeAmount ?? order?.extraPayment ?? 0,
+    currency: order?.currency || "UZS",
+    paymentType: order?.overtimePaymentType || order?.paymentType || "CASH",
+    checkOut: toIso(order?.realPickupTime || order?.updatedAt),
+    note: "DOPLATA",
+  }));
 
 const expensePayload = (expense) =>
   (() => {
@@ -523,6 +548,28 @@ const testPayload = (action, branchCodeValue, branch, user) => {
     });
   }
 
+  if (action === "DOPLATA") {
+    return orderPayload(
+      "DOPLATA",
+      {
+        id: entityId,
+        branch: { code: branchCodeValue, name: common.branchName },
+        orderNumber: `TEST-DOPLATA-${branchCodeValue}-${Date.now()}`,
+        clientName: "GOOGLE SHEETS TEST",
+        phone: "",
+        passport: "",
+        items: [{ size: "S", count: 1 }],
+        checkIn: new Date(),
+        realPickupTime: new Date(),
+        overtimeAmount: 1000,
+        currency: "UZS",
+        paymentType: "CASH",
+        createdAt: new Date(),
+      },
+      { entityId, amount: 1000, note: "DOPLATA" },
+    );
+  }
+
   if (action === "INKASSA") {
     return inkassaPayload({
       id: entityId,
@@ -570,6 +617,7 @@ const sendTestEvent = async (user, body) => {
 
 module.exports = {
   sendNewOrder,
+  sendDoplata,
   sendPickup,
   sendDebtClosed,
   sendExpense,
@@ -584,6 +632,7 @@ module.exports = {
     getWebhookUrl,
     isEnabled,
     orderPayload,
+    formatBaggagePlaces,
     basePayload,
     expensePayload,
     inkassaPayload,

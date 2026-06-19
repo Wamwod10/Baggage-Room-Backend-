@@ -7,7 +7,7 @@ router.get("/", validate(z.object({ query: z.object({ branchId: z.string().optio
 router.get("/current", validate(z.object({ query: z.object({ branchId: z.string().optional() }) })), shiftController.current);
 router.post(
   "/open",
-  validate(z.object({ body: z.object({ branchId: z.string().optional(), openingCash: amount.default(0), acceptedCash: amount.default(0), acceptedFromName: z.string().optional(), handoverToName: z.string().optional() }) })),
+  validate(z.object({ body: z.object({ branchId: z.string().optional(), openingCash: amount.default(0), acceptedCash: amount.default(0), acceptedFromName: z.string().optional(), acceptedByName: z.string().optional(), handoverToName: z.string().optional() }) })),
   shiftController.open
 );
 router.post(

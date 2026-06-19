@@ -50,9 +50,13 @@ const formatPayment = (payment) => {
     case "CASH":
       return "Naqd";
     case "CARD":
-      return "Karta";
+    case "TERMINAL":
     case "TRANSFER":
-      return "O'tkazma";
+      return "Terminal";
+    case "CLICK":
+      return "Click";
+    case "PAYME":
+      return "Payme";
     case "DEBT":
       return "Qarz";
     default:
@@ -287,13 +291,66 @@ const lockerServiceMessage = (payload = {}) => [
   line("👤 Admin", formatAdmin(payload.admin || payload.createdBy)),
 ].join("\n");
 
+const shiftOpenedMessageV2 = (shift = {}) => [
+  "Kassa ochildi",
+  "",
+  line("Filial", formatBranch(shift.branch || shift.branchName)),
+  "",
+  line("Kim topshirdi", shift.acceptedFromName || shift.receivedFrom),
+  line("Kim qabul qildi", shift.acceptedByName || formatAdmin(shift.openedBy || shift.admin || shift.openedByName)),
+  "",
+  line("Qabul", formatMoney(shift.acceptedCash || 0, shift.currency || "UZS")),
+  line("Yakuniy", formatMoney(Number(shift.openingCash || 0) + Number(shift.acceptedCash || 0), shift.currency || "UZS")),
+  ...(shift.shiftTime ? ["", line("Smena", shift.shiftTime)] : []),
+  line("Ochildi", formatDate(shift.openedAt || shift.createdAt)),
+].join("\n");
+
+const shiftClosedMessageV2 = (shift = {}) => [
+  "Smena yopildi",
+  "",
+  line("Filial", formatBranch(shift.branch || shift.branchName)),
+  "",
+  line("Kim topshirdi", shift.acceptedByName || formatAdmin(shift.openedBy || shift.admin || shift.openedByName)),
+  line("Kim qabul qildi", shift.handoverToName || shift.handoverTo || formatAdmin(shift.closedBy || shift.closedByName)),
+  "",
+  line("Qabul", formatMoney(shift.acceptedCash || shift.acceptedAmount || 0, shift.currency || "UZS")),
+  line("Yakuniy", formatMoney(shift.closingCash ?? shiftCashLeft(shift), shift.currency || "UZS")),
+  ...(shift.shiftTime ? ["", line("Smena", shift.shiftTime)] : []),
+  "",
+  line("Buyurtmalar", `${Number(shift.ordersCount || shift.orders || 0)} ta`),
+  line("Umumiy tushum", formatMoney(shift.totalRevenue || 0, shift.currency || "UZS")),
+  line("Naqd", formatMoney(shift.cashRevenue || 0, shift.currency || "UZS")),
+  line("Terminal", formatMoney(shift.terminalRevenue ?? shift.cardRevenue ?? 0, shift.currency || "UZS")),
+  line("Click", formatMoney(shift.clickRevenue || 0, shift.currency || "UZS")),
+  line("Payme", formatMoney(shift.paymeRevenue || 0, shift.currency || "UZS")),
+  "",
+  line("Xarajat", formatMoney(shiftRegularExpense(shift), shift.currency || "UZS")),
+  line("Oylik", formatMoney(shift.salaryAmount || 0, shift.currency || "UZS")),
+  ...(shift.salaryReceiver ? [line("Oylik kimga", shift.salaryReceiver)] : []),
+  line("Inkassa", formatMoney(shift.inkassaAmount || 0, shift.currency || "UZS")),
+  line("Ochiq qarz", formatMoney(shift.debtAmount || 0, shift.currency || "UZS")),
+  line("Kassada qolgan", formatMoney(shiftCashLeft(shift), shift.currency || "UZS")),
+  "",
+  line("Yopildi", formatDate(shift.closedAt || new Date())),
+].join("\n");
+
+const overtimePaymentMessageV2 = (order = {}) => [
+  "Qo'shimcha to'lov",
+  "",
+  line("Mijoz", order.clientName || order.client),
+  line("Filial", formatBranch(order.branch || order.branchName)),
+  line("Buyurtma", orderNumber(order)),
+  line("Kechikkan", `${cleanText(order.overtimeHours || 0)} soat`),
+  line("Qo'shimcha", formatMoney(order.overtimeAmount || order.extraPayment || 0, order.currency || "UZS")),
+].join("\n");
+
 module.exports = {
   orderMessage,
-  shiftOpenedMessage,
-  shiftClosedMessage,
+  shiftOpenedMessage: shiftOpenedMessageV2,
+  shiftClosedMessage: shiftClosedMessageV2,
   orderCancelledMessage,
   delayedBaggageMessage,
-  overtimePaymentMessage,
+  overtimePaymentMessage: overtimePaymentMessageV2,
   debtClosedMessage,
   debtPaymentMessage,
   inkassaMessage,
