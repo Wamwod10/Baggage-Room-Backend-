@@ -6,6 +6,7 @@ const { audit } = require("./activity.service");
 const { findOpenShift, createCashMovement } = require("./cashMovement.service");
 const telegram = require("./telegram.service");
 const googleSheets = require("./googleSheets.service");
+const { computeShiftReport } = require("./shift.service");
 
 const includeInkassa = {
   branch: { select: { id: true, name: true, code: true } },
@@ -27,11 +28,20 @@ const createInkassa = async (user, body) => {
   if (!branchId) throw new AppError("branchId is required", 400);
   const inkassa = await prisma.$transaction(async (tx) => {
     const shift = await findOpenShift(tx, branchId);
+    if (!shift) throw new AppError("Inkassa uchun ochiq smena talab qilinadi", 400);
+    const currency = body.currency || "UZS";
+    const report = await computeShiftReport(tx, shift);
+    const available = Number(report.cashBalanceByCurrency?.[currency] || 0);
+    if (Number(body.amount || 0) > available) {
+      throw new AppError(`${currency} kassasida inkassa uchun mablag' yetarli emas`, 400, [
+        { field: "amount", message: `Mavjud qoldiq: ${available} ${currency} minor birlik` },
+      ]);
+    }
     const inkassa = await tx.inkassa.create({
-      data: { branchId, shiftId: shift?.id || null, receiverName: body.receiverName, amount: body.amount, currency: body.currency || "UZS", note: body.note || null, createdById: user.id },
+      data: { branchId, shiftId: shift.id, receiverName: body.receiverName, amount: body.amount, currency, note: body.note || null, createdById: user.id },
       include: includeInkassa,
     });
-    await createCashMovement({ tx, branchId, shiftId: shift?.id || null, type: "INKASSA", direction: "OUT", amount: body.amount, currency: body.currency || "UZS", note: body.note || body.receiverName, createdById: user.id });
+    await createCashMovement({ tx, branchId, shiftId: shift.id, type: "INKASSA", direction: "OUT", amount: body.amount, currency, note: body.note || body.receiverName, createdById: user.id });
     await audit({ tx, branchId, userId: user.id, entityType: "Inkassa", entityId: inkassa.id, action: "INKASSA_CREATE", newValue: inkassa, description: body.note || "Inkassa" });
     return inkassa;
   });

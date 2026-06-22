@@ -304,6 +304,8 @@ const pickupOrder = async (user, id, body) => {
     const pickupTime = body.realPickupTime ? new Date(body.realPickupTime) : new Date();
     const overtimeHours = Math.max(0, Math.ceil((pickupTime.getTime() - order.plannedCheckOut.getTime()) / 3600000));
     const overtimeAmount = Number(body.overtimeAmount || body.extraPayment || 0);
+    const overtimeCurrency = body.currency || order.currency;
+    const overtimePaymentType = body.paymentType || "CASH";
     const updated = await tx.order.update({
       where: { id },
       data: {
@@ -327,8 +329,8 @@ const pickupOrder = async (user, id, body) => {
         type: "ORDER_PAYMENT",
         direction: "IN",
         amount: overtimeAmount,
-        currency: body.currency || order.currency,
-        paymentType: body.paymentType || "CASH",
+        currency: overtimeCurrency,
+        paymentType: overtimePaymentType,
         note: `Overtime ${order.orderNumber}`,
         createdById: user.id,
       });
@@ -398,9 +400,9 @@ const pickupOrder = async (user, id, body) => {
     }
     await audit({ tx, branchId: order.branchId, userId: user.id, entityType: "Order", entityId: id, action: "ORDER_PICKUP", oldValue: order, newValue: updated, description: "Order picked up" });
     if (overtimeAmount > 0) {
-      telegram.sendSafely(telegram.sendOvertimePayment({ ...updated, overtimePaymentType: body.paymentType || "CASH" }), { branchId: order.branchId, userId: user.id, entityType: "Order", entityId: id });
+      telegram.sendSafely(telegram.sendOvertimePayment({ ...updated, currency: overtimeCurrency, overtimeCurrency, overtimePaymentType }), { branchId: order.branchId, userId: user.id, entityType: "Order", entityId: id });
     }
-    return { updated, closedDebt, debtPayment, debtPaidAmount };
+    return { updated: { ...updated, overtimeCurrency, overtimePaymentType }, closedDebt, debtPayment, debtPaidAmount };
   });
   if (result.debtPayment) {
     telegram.sendSafely(telegram.sendDebtClosed(result.debtPayment), { branchId: result.updated.branchId, userId: user.id, entityType: "Debt", entityId: result.debtPayment.id });

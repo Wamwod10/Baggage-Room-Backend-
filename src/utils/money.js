@@ -17,6 +17,36 @@ const currencyFractionDigits = {
   TJS: 2,
 };
 
+const CURRENCIES = Object.freeze(Object.keys(currencyFractionDigits));
+
+const normalizeCurrencyAmount = (amount, currency = "UZS") => {
+  const code = String(currency || "UZS").toUpperCase();
+  const digits = currencyFractionDigits[code];
+  if (digits === undefined) throw new TypeError(`Unsupported currency: ${code}`);
+
+  const minorAmount = Number(amount);
+  if (!Number.isFinite(minorAmount)) throw new TypeError("Invalid currency amount");
+  return minorAmount / 10 ** digits;
+};
+
+const byCurrency = (items, selector = (item) => item.amount) =>
+  CURRENCIES.reduce((result, currency) => {
+    result[currency] = sum(
+      (Array.isArray(items) ? items : []).filter((item) => item?.currency === currency),
+      selector,
+    );
+    return result;
+  }, {});
+
+const subtractCurrencyMaps = (base = {}, ...subtractors) =>
+  CURRENCIES.reduce((result, currency) => {
+    result[currency] = Number(base[currency] || 0) - subtractors.reduce(
+      (total, map) => total + Number(map?.[currency] || 0),
+      0,
+    );
+    return result;
+  }, {});
+
 const convertUzsToCurrencyMinor = (amountUZS, currency = "UZS", exchangeRate = 1) => {
   const code = currency || "UZS";
   if (code === "UZS") return Math.round(Number(amountUZS || 0));
@@ -60,4 +90,15 @@ const formatCurrency = (amount, currency = "UZS", locale = "uz-UZ") => {
   }).format(major);
 };
 
-module.exports = { sum, byKeySum, parseCurrency, formatCurrency, currencyFractionDigits, convertUzsToCurrencyMinor };
+module.exports = {
+  CURRENCIES,
+  sum,
+  byKeySum,
+  byCurrency,
+  subtractCurrencyMaps,
+  parseCurrency,
+  formatCurrency,
+  normalizeCurrencyAmount,
+  currencyFractionDigits,
+  convertUzsToCurrencyMinor,
+};

@@ -1,8 +1,9 @@
 const logger = require("../utils/logger");
 const prisma = require("../config/prisma");
 const { formatTashkentIso } = require("../utils/date");
+const { normalizeCurrencyAmount } = require("../utils/money");
 
-const TIMEOUT_MS = 5000;
+const TIMEOUT_MS = Number(process.env.GOOGLE_SHEETS_TIMEOUT_MS || 15000);
 
 const branchNameByCode = {
   TIA: "Toshkent aeroport",
@@ -125,9 +126,14 @@ const formatBaggagePlaces = (items = []) =>
     .filter(Boolean)
     .join(" ");
 
+const sheetAmount = (amount, currency) => {
+  if (amount === null || amount === undefined || amount === "") return null;
+  return normalizeCurrencyAmount(amount, currency || "UZS");
+};
+
 const orderPayload = (action, order, overrides = {}) => {
   const lockers = lockerItems(order);
-  return withDeliveryMetadata({
+  const payload = {
     branchCode: branchCode(order),
     branch: branchName(order),
     orderId: order?.id || order?.orderId || order?.order?.id || null,
@@ -140,12 +146,21 @@ const orderPayload = (action, order, overrides = {}) => {
     place: formatBaggagePlaces(lockers),
     checkIn: toIso(order?.checkIn),
     checkOut: toIso(order?.realPickupTime || order?.plannedCheckOut || order?.closedAt),
+    period: order?.tariffHours ? `${order.tariffHours} soat` : "",
+    tariffHours: order?.tariffHours || "",
     amount: order?.finalAmount ?? order?.amount ?? null,
     currency: order?.currency || null,
     paymentType: order?.paymentType || null,
     action,
     createdAt: toIso(order?.createdAt || new Date()),
     ...overrides,
+  };
+  return withDeliveryMetadata({
+    ...payload,
+    amountMinor: payload.amount,
+    amount: sheetAmount(payload.amount, payload.currency),
+    sheetAmount: sheetAmount(payload.amount, payload.currency),
+    amountUnit: "MAJOR",
   });
 };
 
@@ -320,7 +335,7 @@ const sendNewOrder = (order) => postWebhook(orderPayload("NEW_ORDER", order, { a
 const sendDoplata = (order) =>
   postWebhook(orderPayload("DOPLATA", order, {
     amount: order?.overtimeAmount ?? order?.extraPayment ?? 0,
-    currency: order?.currency || "UZS",
+    currency: order?.overtimeCurrency || order?.currency || "UZS",
     paymentType: order?.overtimePaymentType || order?.paymentType || "CASH",
     checkOut: toIso(order?.realPickupTime || order?.updatedAt),
     note: "DOPLATA",
@@ -352,7 +367,11 @@ const expensePayload = (expense) =>
       period: "",
       tariffHours: "",
       storagePeriod: "",
-      ...positiveMoneyFields(expense?.amount ?? null),
+      ...positiveMoneyFields(sheetAmount(expense?.amount, expense?.currency || "UZS")),
+      amountMinor: expense?.amount ?? null,
+      expenseAmount: sheetAmount(expense?.amount, expense?.currency || "UZS"),
+      sheetAmount: sheetAmount(expense?.amount, expense?.currency || "UZS"),
+      amountUnit: "MAJOR",
       currency: expense?.currency || "UZS",
       paymentType: "CASH",
       legacySheetTarget: {
@@ -380,11 +399,14 @@ const salaryPayload = (salary) =>
     displayName: ["OYLIK", salary?.salaryReceiver].filter(Boolean).join(" - "),
     recipientName: salary?.salaryReceiver || null,
     salaryReceiver: salary?.salaryReceiver || null,
-    salaryAmount: salary?.salaryAmount ?? null,
+    salaryAmountMinor: salary?.salaryAmount ?? null,
+    salaryAmount: sheetAmount(salary?.salaryAmount, salary?.currency || "UZS"),
     period: "",
     tariffHours: "",
     storagePeriod: "",
-    ...positiveMoneyFields(salary?.salaryAmount ?? null),
+    ...positiveMoneyFields(sheetAmount(salary?.salaryAmount, salary?.currency || "UZS")),
+    sheetAmount: sheetAmount(salary?.salaryAmount, salary?.currency || "UZS"),
+    amountUnit: "MAJOR",
     currency: salary?.currency || "UZS",
     paymentType: "CASH",
     adminName: salary?.closedBy?.name || salary?.closedBy?.login || salary?.adminName || null,
@@ -440,7 +462,11 @@ const inkassaPayload = (inkassa) => {
     name: receiver,
     itemName: receiver,
     naimenovanie: receiver,
-    ...positiveMoneyFields(inkassa?.amount ?? null),
+    ...positiveMoneyFields(sheetAmount(inkassa?.amount, inkassa?.currency || "UZS")),
+    amountMinor: inkassa?.amount ?? null,
+    inkassaAmount: sheetAmount(inkassa?.amount, inkassa?.currency || "UZS"),
+    sheetAmount: sheetAmount(inkassa?.amount, inkassa?.currency || "UZS"),
+    amountUnit: "MAJOR",
     currency: inkassa?.currency || "UZS",
     note: inkassa?.note || "Inkassa",
     period: "",
@@ -637,6 +663,9 @@ module.exports = {
     expensePayload,
     inkassaPayload,
     salaryPayload,
+    sheetAmount,
+    testPayload,
+    postWebhook,
     validateBranchCode,
     shouldDeliver,
   },

@@ -1,4 +1,4 @@
-const { currencyFractionDigits } = require("./money");
+const { CURRENCIES, currencyFractionDigits } = require("./money");
 const { formatTashkentDateTime } = require("./date");
 
 const safe = (value, fallback = "-") => {
@@ -10,7 +10,8 @@ const safe = (value, fallback = "-") => {
 const isLikelyDatabaseId = (value = "") => {
   if (typeof value !== "string") return false;
   const trimmed = value.trim();
-  return trimmed.length >= 12 && !/\s/.test(trimmed) && /^[A-Za-z0-9_-]+$/.test(trimmed);
+  return /^c[a-z0-9]{20,}$/i.test(trimmed) ||
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(trimmed);
 };
 
 const cleanText = (value, fallback = "-") => {
@@ -30,6 +31,13 @@ const formatMoney = (amount, currency = "UZS") => {
 
   if (code === "UZS") return `${formatted} so'm`;
   return `${formatted} ${code}`;
+};
+
+const formatCurrencyMap = (values = {}) => {
+  const formatted = CURRENCIES
+    .filter((currency) => Number(values?.[currency] || 0) !== 0)
+    .map((currency) => formatMoney(values[currency], currency));
+  return formatted.length ? formatted.join(" / ") : formatMoney(0, "UZS");
 };
 
 const formatDate = (date) => {
@@ -292,59 +300,66 @@ const lockerServiceMessage = (payload = {}) => [
 ].join("\n");
 
 const shiftOpenedMessageV2 = (shift = {}) => [
-  "Kassa ochildi",
+  "🟢 Kassa ochildi",
   "",
-  line("Filial", formatBranch(shift.branch || shift.branchName)),
+  line("🏢 Filial", formatBranch(shift.branch || shift.branchName)),
   "",
-  line("Kim topshirdi", shift.acceptedFromName || shift.receivedFrom),
-  line("Kim qabul qildi", shift.acceptedByName || formatAdmin(shift.openedBy || shift.admin || shift.openedByName)),
+  line("👤 Kim topshirdi", shift.acceptedFromName || shift.receivedFrom),
+  line("👤 Kim qabul qildi", shift.acceptedByName || formatAdmin(shift.openedBy || shift.admin || shift.openedByName)),
   "",
-  line("Qabul", formatMoney(shift.acceptedCash || 0, shift.currency || "UZS")),
-  line("Yakuniy", formatMoney(Number(shift.openingCash || 0) + Number(shift.acceptedCash || 0), shift.currency || "UZS")),
+  line("💵 Qabul", formatMoney(shift.acceptedCash || 0, shift.currency || "UZS")),
+  line("💰 Yakuniy", formatMoney(Number(shift.openingCash || 0) + Number(shift.acceptedCash || 0), shift.currency || "UZS")),
   ...(shift.shiftTime ? ["", line("Smena", shift.shiftTime)] : []),
-  line("Ochildi", formatDate(shift.openedAt || shift.createdAt)),
+  line("🕒 Ochildi", formatDate(shift.openedAt || shift.createdAt)),
 ].join("\n");
 
-const shiftClosedMessageV2 = (shift = {}) => [
-  "Smena yopildi",
+const shiftClosedMessageV2 = (shift = {}) => {
+  const report = shift.report || {};
+  return [
+  "🔴 Smena yopildi",
   "",
-  line("Filial", formatBranch(shift.branch || shift.branchName)),
+  line("🏢 Filial", formatBranch(shift.branch || shift.branchName)),
   "",
-  line("Kim topshirdi", shift.acceptedByName || formatAdmin(shift.openedBy || shift.admin || shift.openedByName)),
-  line("Kim qabul qildi", shift.handoverToName || shift.handoverTo || formatAdmin(shift.closedBy || shift.closedByName)),
+  line("👤 Kim topshirdi", shift.acceptedByName || formatAdmin(shift.openedBy || shift.admin || shift.openedByName)),
+  line("👤 Kim qabul qildi", shift.handoverToName || shift.handoverTo || formatAdmin(shift.closedBy || shift.closedByName)),
+  line("👤 Yopgan admin", formatAdmin(shift.closedBy || shift.closedByName)),
   "",
   line("Qabul", formatMoney(shift.acceptedCash || shift.acceptedAmount || 0, shift.currency || "UZS")),
   line("Yakuniy", formatMoney(shift.closingCash ?? shiftCashLeft(shift), shift.currency || "UZS")),
   ...(shift.shiftTime ? ["", line("Smena", shift.shiftTime)] : []),
   "",
-  line("Buyurtmalar", `${Number(shift.ordersCount || shift.orders || 0)} ta`),
-  line("Umumiy tushum", formatMoney(shift.totalRevenue || 0, shift.currency || "UZS")),
-  line("Naqd", formatMoney(shift.cashRevenue || 0, shift.currency || "UZS")),
-  line("Terminal", formatMoney(shift.terminalRevenue ?? shift.cardRevenue ?? 0, shift.currency || "UZS")),
-  line("Click", formatMoney(shift.clickRevenue || 0, shift.currency || "UZS")),
-  line("Payme", formatMoney(shift.paymeRevenue || 0, shift.currency || "UZS")),
+  line("📦 Buyurtmalar", `${Number(shift.ordersCount || shift.orders || 0)} ta`),
+  line("💰 Umumiy tushum", formatCurrencyMap(shift.revenueByCurrency || report.revenueByCurrency)),
+  line("💵 Naqd", formatCurrencyMap(shift.cashByCurrency || report.cashByCurrency)),
+  line("💳 Terminal", formatCurrencyMap(shift.terminalByCurrency || report.terminalByCurrency)),
+  line("🔵 Click", formatCurrencyMap(shift.clickByCurrency || report.clickByCurrency)),
+  line("🟢 Payme", formatCurrencyMap(shift.paymeByCurrency || report.paymeByCurrency)),
   "",
-  line("Xarajat", formatMoney(shiftRegularExpense(shift), shift.currency || "UZS")),
-  line("Oylik", formatMoney(shift.salaryAmount || 0, shift.currency || "UZS")),
+  line("💸 Xarajat", formatCurrencyMap(shift.expenseByCurrency || report.expenseByCurrency)),
+  line("👛 Oylik", formatCurrencyMap(shift.salaryByCurrency || report.salaryByCurrency)),
   ...(shift.salaryReceiver ? [line("Oylik kimga", shift.salaryReceiver)] : []),
-  line("Inkassa", formatMoney(shift.inkassaAmount || 0, shift.currency || "UZS")),
-  line("Ochiq qarz", formatMoney(shift.debtAmount || 0, shift.currency || "UZS")),
-  line("Kassada qolgan", formatMoney(shiftCashLeft(shift), shift.currency || "UZS")),
+  line("🏦 Inkassa", formatCurrencyMap(shift.inkassaByCurrency || report.inkassaByCurrency)),
+  line("📝 Ochiq qarz", formatCurrencyMap(shift.debtByCurrency || report.debtByCurrency)),
+  line("💼 Kassada qolgan", formatCurrencyMap(shift.cashBalanceByCurrency || report.cashBalanceByCurrency)),
   "",
-  line("Yopildi", formatDate(shift.closedAt || new Date())),
+  line("🕒 Yopildi", formatDate(shift.closedAt || new Date())),
 ].join("\n");
+};
 
 const overtimePaymentMessageV2 = (order = {}) => [
-  "Qo'shimcha to'lov",
+  "⚠️ Qo'shimcha to'lov",
   "",
-  line("Mijoz", order.clientName || order.client),
-  line("Filial", formatBranch(order.branch || order.branchName)),
-  line("Buyurtma", orderNumber(order)),
-  line("Kechikkan", `${cleanText(order.overtimeHours || 0)} soat`),
-  line("Qo'shimcha", formatMoney(order.overtimeAmount || order.extraPayment || 0, order.currency || "UZS")),
+  line("🏢 Filial", formatBranch(order.branch || order.branchName)),
+  line("🧾 Buyurtma", orderNumber(order)),
+  line("👤 Mijoz", order.clientName || order.client),
+  line("⏰ Kechikkan vaqt", `${cleanText(order.overtimeHours || 0)} soat`),
+  line("💰 Summa", formatMoney(order.overtimeAmount || order.extraPayment || 0, order.currency || "UZS")),
+  line("👤 Admin", formatAdmin(order.pickedUpBy || order.admin || order.createdBy)),
 ].join("\n");
 
 module.exports = {
+  formatMoney,
+  formatCurrencyMap,
   orderMessage,
   shiftOpenedMessage: shiftOpenedMessageV2,
   shiftClosedMessage: shiftClosedMessageV2,

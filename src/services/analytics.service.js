@@ -1,7 +1,7 @@
 const prisma = require("../config/prisma");
 const { branchWhere, getScopedBranchId } = require("../utils/scope");
 const { dateRangeWhere, formatTashkentDateKey, getTashkentParts, startOfToday } = require("../utils/date");
-const { sum, byKeySum } = require("../utils/money");
+const { CURRENCIES, sum, byKeySum, byCurrency, subtractCurrencyMaps } = require("../utils/money");
 const { markDelayedOrders } = require("./order.service");
 const { computeShiftReport } = require("./shift.service");
 
@@ -18,6 +18,16 @@ const countBy = (items, keySelector) =>
   }, {});
 
 const percent = (part, total) => (total > 0 ? Math.round((part / total) * 100) : 0);
+const sumCurrencyMaps = (maps = []) => CURRENCIES.reduce((result, currency) => {
+  result[currency] = maps.reduce((total, map) => total + Number(map?.[currency] || 0), 0);
+  return result;
+}, {});
+const paymentCurrencyBreakdown = (movements = []) =>
+  ["CASH", "TERMINAL", "CLICK", "PAYME", "DEBT"].reduce((result, paymentType) => {
+    const aliases = paymentType === "TERMINAL" ? ["TERMINAL", "CARD", "TRANSFER"] : [paymentType];
+    result[paymentType] = byCurrency(movements.filter((item) => aliases.includes(item.paymentType)));
+    return result;
+  }, {});
 
 const buildBranchSummary = ({ branches, orders, lockers, movements }) =>
   branches.map((branch) => {
@@ -98,12 +108,18 @@ const dashboard = async (user, query) => {
   const todayExpenses = todayOut.filter((movement) => movement.type === "EXPENSE");
   const todayInkassa = todayOut.filter((movement) => movement.type === "INKASSA");
   const lockerCounts = countBy(lockers, (item) => item.status);
-  const todayRevenue = sum(todayPayments);
-  const expenseAmount = sum(todayExpenses);
-  const inkassaAmount = sum(todayInkassa);
+  const revenueByCurrency = byCurrency(todayPayments);
+  const expensesByCurrency = byCurrency(todayExpenses);
+  const inkassaByCurrency = byCurrency(todayInkassa);
+  const debtByCurrency = byCurrency(openDebts);
+  const cashOnHandByCurrency = sumCurrencyMaps(shiftStatus.map((shift) => shift.cashBalanceByCurrency));
+  const netProfitByCurrency = subtractCurrencyMaps(revenueByCurrency, expensesByCurrency, inkassaByCurrency);
+  const todayRevenue = revenueByCurrency.UZS;
+  const expenseAmount = expensesByCurrency.UZS;
+  const inkassaAmount = inkassaByCurrency.UZS;
   const cashMovementIn = todayRevenue;
-  const cashMovementOut = sum(todayOut);
-  const cashOnHand = sum(shiftStatus, (shift) => shift.systemExpectedCash);
+  const cashMovementOut = byCurrency(todayOut).UZS;
+  const cashOnHand = cashOnHandByCurrency.UZS;
 
   return {
     todayRevenue,
@@ -118,8 +134,8 @@ const dashboard = async (user, query) => {
     cashLeft: cashOnHand,
     expenseAmount,
     totalExpenses: expenseAmount,
-    debtAmount: sum(openDebts),
-    openDebtAmount: sum(openDebts),
+    debtAmount: debtByCurrency.UZS,
+    openDebtAmount: debtByCurrency.UZS,
     emptyLockers: lockerCounts.EMPTY || 0,
     busyLockers: lockerCounts.BUSY || 0,
     delayedOrders,
@@ -127,8 +143,15 @@ const dashboard = async (user, query) => {
     inkassaAmount,
     cashMovementIn,
     cashMovementOut,
-    paymentBreakdown: byKeySum(todayPayments, "paymentType"),
-    currencyBreakdown: byKeySum(todayPayments, "currency"),
+    paymentBreakdown: byKeySum(todayPayments.filter((item) => item.currency === "UZS"), "paymentType"),
+    paymentCurrencyBreakdown: paymentCurrencyBreakdown(todayPayments),
+    currencyBreakdown: revenueByCurrency,
+    revenueByCurrency,
+    expensesByCurrency,
+    inkassaByCurrency,
+    debtByCurrency,
+    cashOnHandByCurrency,
+    netProfitByCurrency,
     branchSummary: buildBranchSummary({ branches, orders: todayOrders, lockers, movements: todayMovements }),
     shiftStatus,
   };
@@ -159,7 +182,6 @@ const reports = async (user, query) => {
 
   const shiftsWithReports = await Promise.all(
     shifts.map(async (shift) => {
-      if (shift.status !== "OPEN") return shift;
       const { ordersCount, ...report } = await computeShiftReport(prisma, shift);
       return { ...shift, ...report, ordersCount };
     }),
@@ -169,9 +191,17 @@ const reports = async (user, query) => {
   const outMovements = movements.filter((m) => m.direction === "OUT");
   const expenseMovements = outMovements.filter((m) => m.type === "EXPENSE");
   const inkassaMovements = outMovements.filter((m) => m.type === "INKASSA");
-  const totalRevenue = sum(inMovements);
-  const totalExpenses = sum(expenseMovements) || sum(expenses);
-  const totalInkassa = sum(inkassaMovements) || sum(inkassa);
+  const revenueByCurrency = byCurrency(inMovements);
+  const expensesByCurrency = byCurrency(expenseMovements.length ? expenseMovements : expenses);
+  const inkassaByCurrency = byCurrency(inkassaMovements.length ? inkassaMovements : inkassa);
+  const debtByCurrency = byCurrency(debts.filter((item) => item.status === "OPEN"));
+  const cashOnHandByCurrency = shiftsWithReports.length
+    ? sumCurrencyMaps(shiftsWithReports.map((shift) => shift.cashBalanceByCurrency))
+    : subtractCurrencyMaps(revenueByCurrency, expensesByCurrency, inkassaByCurrency);
+  const netProfitByCurrency = subtractCurrencyMaps(revenueByCurrency, expensesByCurrency, inkassaByCurrency);
+  const totalRevenue = revenueByCurrency.UZS;
+  const totalExpenses = expensesByCurrency.UZS;
+  const totalInkassa = inkassaByCurrency.UZS;
   const totalOrders = orders.length;
 
   const revenueByDay = {};
@@ -250,8 +280,7 @@ const reports = async (user, query) => {
   }
 
   const shiftRevenueTotal = sum(shiftsWithReports, (shift) => shift.totalRevenue);
-  const shiftCashOnHandTotal = sum(shiftsWithReports, (shift) => shift.systemExpectedCash);
-  const cashOnHand = shiftsWithReports.length ? shiftCashOnHandTotal : totalRevenue - totalExpenses - totalInkassa;
+  const cashOnHand = cashOnHandByCurrency.UZS;
   const bestShift = shiftsWithReports
     .slice()
     .sort((a, b) => asNumber(b.totalRevenue) - asNumber(a.totalRevenue))[0];
@@ -275,6 +304,12 @@ const reports = async (user, query) => {
       averageShiftRevenue: shiftsWithReports.length ? Math.round(shiftRevenueTotal / shiftsWithReports.length) : 0,
       expenseRatio: percent(totalExpenses, totalRevenue),
       inkassa: totalInkassa,
+      revenueByCurrency,
+      expensesByCurrency,
+      inkassaByCurrency,
+      debtByCurrency,
+      netProfitByCurrency,
+      cashOnHandByCurrency,
     },
     revenueByDay,
     expensesByDay,
@@ -286,8 +321,14 @@ const reports = async (user, query) => {
       return acc;
     }, {}),
     branchComparison,
-    revenueByCurrency: byKeySum(movements.filter((m) => m.direction === "IN"), "currency"),
-    paymentAnalytics: byKeySum(movements.filter((m) => m.direction === "IN"), "paymentType"),
+    revenueByCurrency,
+    expensesByCurrency,
+    inkassaByCurrency,
+    debtByCurrency,
+    cashOnHandByCurrency,
+    netProfitByCurrency,
+    paymentAnalytics: byKeySum(inMovements.filter((item) => item.currency === "UZS"), "paymentType"),
+    paymentAnalyticsByCurrency: paymentCurrencyBreakdown(inMovements),
     paymentOrderCounts: countBy(inMovements, (item) => item.paymentType),
     lockerUsage: lockers.reduce((acc, locker) => {
       const key = locker.status;

@@ -105,6 +105,7 @@ function doPost(e) {
     const targetRow = findNextOrderRow(sheet);
     sheet.getRange(targetRow, 1, 1, LEGACY_WIDTH).setValues([row]);
     sheet.getRange(targetRow, IDEMPOTENCY_COLUMN).setValue(idempotencyKey);
+    applyMoneyFormat_(sheet, targetRow, payload);
     styleRow_(sheet, targetRow, action);
 
     return json_({ ok: true, row: targetRow, idempotencyKey });
@@ -218,7 +219,7 @@ function fillNewOrderRow_(row, payload) {
   row[COLUMN.CHECK - 1] = payload.orderNumber || payload.checkNumber || "";
   row[COLUMN.PERIOD - 1] = payload.period || payload.tariffHours || payload.storagePeriod || "";
 
-  const amount = amountAbs_(firstValue_(payload.amount, payload.finalAmount, payload.realPaidAmount, payload.paidAmount), payload.currency);
+  const amount = sheetAmount_(payload, payload.amount, payload.finalAmount, payload.realPaidAmount, payload.paidAmount);
   if (amount === "") return;
 
   const paymentType = String(payload.paymentType || "CASH").toUpperCase();
@@ -241,7 +242,7 @@ function fillDoplataRow_(row, payload) {
   row[COLUMN.PERIOD - 1] = payload.period || payload.tariffHours || payload.storagePeriod || "";
   row[COLUMN.NAME - 1] = "DOPLATA";
 
-  const amount = amountAbs_(firstValue_(payload.amount, payload.overtimeAmount, payload.finalAmount, payload.realPaidAmount), payload.currency);
+  const amount = sheetAmount_(payload, payload.amount, payload.overtimeAmount, payload.finalAmount, payload.realPaidAmount);
   if (amount === "") return;
 
   const paymentType = String(payload.paymentType || "CASH").toUpperCase();
@@ -261,14 +262,14 @@ function fillExpenseRow_(row, payload) {
   const category = payload.category || payload.fio || payload.clientName || "Xarajat";
   const reason = payload.reason || payload.note || "";
   row[COLUMN.FIO - 1] = category;
-  row[COLUMN.EXPENSE - 1] = amountAbs_(firstValue_(payload.expenseAmount, payload.amount, payload.finalAmount, payload.amountUzs), payload.currency);
+  row[COLUMN.EXPENSE - 1] = sheetAmount_(payload, payload.expenseAmount, payload.amount, payload.finalAmount, payload.amountUzs);
   row[COLUMN.NAME - 1] = [category, reason].filter(Boolean).join(" - ");
 }
 
 function fillSalaryRow_(row, payload) {
   const receiver = payload.salaryReceiver || payload.recipientName || payload.adminName || "";
   row[COLUMN.FIO - 1] = receiver || payload.adminName || "Oylik";
-  row[COLUMN.EXPENSE - 1] = amountAbs_(firstValue_(payload.salaryAmount, payload.amount, payload.finalAmount, payload.amountUzs), payload.currency);
+  row[COLUMN.EXPENSE - 1] = sheetAmount_(payload, payload.salaryAmount, payload.amount, payload.finalAmount, payload.amountUzs);
   row[COLUMN.NAME - 1] = ["Oylik", receiver].filter(Boolean).join(" - ");
 }
 
@@ -277,7 +278,7 @@ function fillInkassaRow_(row, payload) {
   const note = payload.note || "";
   const currency = String(payload.currency || "UZS").toUpperCase();
   row[COLUMN.FIO - 1] = receiver;
-  row[(BALANCE_COLUMN_BY_CURRENCY[currency] || COLUMN.BALANCE_UZS) - 1] = amountAbs_(firstValue_(payload.inkassaAmount, payload.amount, payload.finalAmount, payload.amountUzs), currency);
+  row[(BALANCE_COLUMN_BY_CURRENCY[currency] || COLUMN.BALANCE_UZS) - 1] = sheetAmount_(payload, payload.inkassaAmount, payload.amount, payload.finalAmount, payload.amountUzs);
   row[COLUMN.NAME - 1] = ["Inkassa", note].filter(Boolean).join(" - ");
 }
 
@@ -288,6 +289,32 @@ function amountAbs_(value, currency) {
   const code = String(currency || "UZS").toUpperCase();
   const digits = FRACTION_DIGITS_BY_CURRENCY[code] || 0;
   return digits ? number / Math.pow(10, digits) : number;
+}
+
+function sheetAmount_(payload) {
+  if (payload.sheetAmount !== null && payload.sheetAmount !== undefined && payload.sheetAmount !== "") {
+    const normalized = Math.abs(Number(payload.sheetAmount));
+    return Number.isFinite(normalized) ? normalized : payload.sheetAmount;
+  }
+  const values = Array.prototype.slice.call(arguments, 1);
+  return amountAbs_(firstValue_.apply(null, values), payload.currency);
+}
+
+function applyMoneyFormat_(sheet, row, payload) {
+  const code = String(payload.currency || "UZS").toUpperCase();
+  const format = (FRACTION_DIGITS_BY_CURRENCY[code] || 0) > 0 ? "#,##0.00" : "#,##0";
+  const action = String(payload.action || "").toUpperCase();
+  let column = null;
+  if (action === "EXPENSE" || action === "SALARY") column = COLUMN.EXPENSE;
+  if (action === "INKASSA") column = BALANCE_COLUMN_BY_CURRENCY[code] || COLUMN.BALANCE_UZS;
+  if (action === "NEW_ORDER" || action === "DOPLATA") {
+    const paymentType = String(payload.paymentType || "CASH").toUpperCase();
+    if (paymentType === "CLICK") column = COLUMN.CLICK;
+    else if (paymentType === "PAYME") column = COLUMN.PAYME;
+    else if (paymentType === "CARD" || paymentType === "TERMINAL") column = COLUMN.TERMINAL;
+    else column = CASH_COLUMN_BY_CURRENCY[code] || COLUMN.CASH_UZS;
+  }
+  if (column) sheet.getRange(row, column).setNumberFormat(format);
 }
 
 function firstValue_() {
@@ -318,6 +345,14 @@ function formatPlaces_(payload) {
 function formatSheetDate_(dateValue) {
   const date = dateValue instanceof Date ? dateValue : new Date(dateValue);
   if (Number.isNaN(date.getTime())) return dateValue || "";
+  if (typeof Utilities === "undefined") {
+    return new Intl.DateTimeFormat("ru-RU", {
+      timeZone: "Asia/Tashkent",
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+    }).format(date);
+  }
   return Utilities.formatDate(date, "Asia/Tashkent", "dd.MM.yyyy");
 }
 
@@ -338,4 +373,15 @@ function buildIdempotencyKey_(payload) {
 
 function json_(body) {
   return ContentService.createTextOutput(JSON.stringify(body)).setMimeType(ContentService.MimeType.JSON);
+}
+
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = {
+    COLUMN,
+    SHEET_BY_BRANCH_CODE,
+    buildLegacyRow_,
+    formatPlaces_,
+    amountAbs_,
+    sheetAmount_,
+  };
 }

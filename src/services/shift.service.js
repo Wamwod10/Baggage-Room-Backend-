@@ -2,7 +2,7 @@ const prisma = require("../config/prisma");
 const { AppError } = require("../utils/response");
 const { branchWhere, getScopedBranchId } = require("../utils/scope");
 const { dateRangeWhere } = require("../utils/date");
-const { sum } = require("../utils/money");
+const { CURRENCIES, sum, byCurrency, subtractCurrencyMaps } = require("../utils/money");
 const { audit } = require("./activity.service");
 const telegram = require("./telegram.service");
 const googleSheets = require("./googleSheets.service");
@@ -20,7 +20,11 @@ const isSalaryMovement = (movement) => movement.type === "EXPENSE" && String(mov
 
 const listShifts = async (user, query) => {
   const where = { ...branchWhere(user, query.branchId), ...dateRangeWhere(query.dateFrom, query.dateTo, "openedAt"), ...(query.status ? { status: query.status } : {}) };
-  return prisma.shift.findMany({ where, include, orderBy: { openedAt: "desc" } });
+  const shifts = await prisma.shift.findMany({ where, include, orderBy: { openedAt: "desc" } });
+  return Promise.all(shifts.map(async (shift) => ({
+    ...shift,
+    ...(await computeShiftReport(prisma, shift)),
+  })));
 };
 
 const currentShift = async (user, query = {}) => {
@@ -56,25 +60,56 @@ const openShift = async (user, body) => {
 
 const computeShiftReport = async (tx, shift) => {
   const movements = await tx.cashMovement.findMany({ where: { shiftId: shift.id } });
-  const debts = await tx.debt.findMany({ where: { branchId: shift.branchId, createdAt: { gte: shift.openedAt, lte: new Date() } } });
-  const ordersCount = await tx.order.count({ where: { branchId: shift.branchId, createdAt: { gte: shift.openedAt, lte: new Date() } } });
+  const reportEnd = shift.closedAt || new Date();
+  const debts = await tx.debt.findMany({ where: { branchId: shift.branchId, createdAt: { gte: shift.openedAt, lte: reportEnd } } });
+  const ordersCount = await tx.order.count({ where: { branchId: shift.branchId, createdAt: { gte: shift.openedAt, lte: reportEnd } } });
 
   const inMovements = movements.filter((item) => item.direction === "IN");
   const outMovements = movements.filter((item) => item.direction === "OUT");
-  const totalRevenue = sum(inMovements);
-  const cashRevenue = sum(inMovements.filter((item) => item.paymentType === "CASH"));
-  const terminalRevenue = sum(inMovements.filter((item) => ["TERMINAL", "CARD", "TRANSFER"].includes(item.paymentType)));
-  const clickRevenue = sum(inMovements.filter((item) => item.paymentType === "CLICK"));
-  const paymeRevenue = sum(inMovements.filter((item) => item.paymentType === "PAYME"));
+  const cashMovements = inMovements.filter((item) => item.paymentType === "CASH");
+  const terminalMovements = inMovements.filter((item) => ["TERMINAL", "CARD", "TRANSFER"].includes(item.paymentType));
+  const clickMovements = inMovements.filter((item) => item.paymentType === "CLICK");
+  const paymeMovements = inMovements.filter((item) => item.paymentType === "PAYME");
+  const expenseMovements = outMovements.filter((item) => item.type === "EXPENSE");
+  const salaryMovements = outMovements.filter(isSalaryMovement);
+  const inkassaMovements = outMovements.filter((item) => item.type === "INKASSA");
+  const openDebts = debts.filter((item) => item.status === "OPEN");
+  const manualInMovements = inMovements.filter((item) => item.type === "MANUAL_CORRECTION");
+  const manualOutMovements = outMovements.filter((item) => item.type === "MANUAL_CORRECTION");
+
+  const revenueByCurrency = byCurrency(inMovements);
+  const cashByCurrency = byCurrency(cashMovements);
+  const terminalByCurrency = byCurrency(terminalMovements);
+  const clickByCurrency = byCurrency(clickMovements);
+  const paymeByCurrency = byCurrency(paymeMovements);
+  const expenseByCurrency = byCurrency(expenseMovements);
+  const salaryByCurrency = byCurrency(salaryMovements);
+  const inkassaByCurrency = byCurrency(inkassaMovements);
+  const debtByCurrency = byCurrency(openDebts);
+  const manualInByCurrency = byCurrency(manualInMovements);
+  const manualOutByCurrency = byCurrency(manualOutMovements);
+  const openingByCurrency = Object.fromEntries(CURRENCIES.map((currency) => [currency, currency === "UZS" ? Number(shift.openingCash || 0) + Number(shift.acceptedCash || 0) : 0]));
+  const cashBalanceByCurrency = subtractCurrencyMaps(
+    Object.fromEntries(CURRENCIES.map((currency) => [currency, openingByCurrency[currency] + cashByCurrency[currency] + manualInByCurrency[currency]])),
+    expenseByCurrency,
+    inkassaByCurrency,
+    manualOutByCurrency,
+  );
+
+  // Legacy Shift columns remain UZS values. Complete multi-currency values are
+  // returned in the breakdown maps below and are never added across currencies.
+  const totalRevenue = revenueByCurrency.UZS;
+  const cashRevenue = cashByCurrency.UZS;
+  const terminalRevenue = terminalByCurrency.UZS;
+  const clickRevenue = clickByCurrency.UZS;
+  const paymeRevenue = paymeByCurrency.UZS;
   const cardRevenue = terminalRevenue;
-  const transferRevenue = sum(inMovements.filter((item) => item.paymentType === "TRANSFER"));
-  const expenseAmount = sum(outMovements.filter((item) => item.type === "EXPENSE"));
-  const salaryAmount = sum(outMovements.filter(isSalaryMovement));
-  const inkassaAmount = sum(outMovements.filter((item) => item.type === "INKASSA"));
-  const debtAmount = sum(debts.filter((item) => item.status === "OPEN"));
-  const manualIn = sum(inMovements.filter((item) => item.type === "MANUAL_CORRECTION"));
-  const manualOut = sum(outMovements.filter((item) => item.type === "MANUAL_CORRECTION"));
-  const systemExpectedCash = shift.openingCash + shift.acceptedCash + totalRevenue + manualIn - expenseAmount - inkassaAmount - manualOut;
+  const transferRevenue = sum(inMovements.filter((item) => item.paymentType === "TRANSFER" && item.currency === "UZS"));
+  const expenseAmount = expenseByCurrency.UZS;
+  const salaryAmount = salaryByCurrency.UZS;
+  const inkassaAmount = inkassaByCurrency.UZS;
+  const debtAmount = debtByCurrency.UZS;
+  const systemExpectedCash = cashBalanceByCurrency.UZS;
 
   return {
     totalRevenue,
@@ -90,6 +125,34 @@ const computeShiftReport = async (tx, shift) => {
     inkassaAmount,
     systemExpectedCash,
     ordersCount,
+    revenueByCurrency,
+    cashByCurrency,
+    terminalByCurrency,
+    clickByCurrency,
+    paymeByCurrency,
+    expenseByCurrency,
+    salaryByCurrency,
+    inkassaByCurrency,
+    debtByCurrency,
+    cashBalanceByCurrency,
+    paymentByCurrency: {
+      CASH: cashByCurrency,
+      TERMINAL: terminalByCurrency,
+      CLICK: clickByCurrency,
+      PAYME: paymeByCurrency,
+    },
+    report: {
+      revenueByCurrency,
+      cashByCurrency,
+      terminalByCurrency,
+      clickByCurrency,
+      paymeByCurrency,
+      expenseByCurrency,
+      salaryByCurrency,
+      inkassaByCurrency,
+      debtByCurrency,
+      cashBalanceByCurrency,
+    },
   };
 };
 
@@ -130,14 +193,24 @@ const closeShift = async (user, id, body) => {
     }
 
     const { ordersCount, ...report } = await computeShiftReport(tx, shift);
-    const { salaryAmount: reportSalaryAmount, ...shiftReport } = report;
-    const closingCash = body.closingCash ?? shiftReport.systemExpectedCash;
+    const reportSalaryAmount = report.salaryAmount;
+    const closingCash = body.closingCash ?? report.systemExpectedCash;
     const updated = await tx.shift.update({
       where: { id },
       data: {
-        ...shiftReport,
+        totalRevenue: report.totalRevenue,
+        cashRevenue: report.cashRevenue,
+        cardRevenue: report.cardRevenue,
+        terminalRevenue: report.terminalRevenue,
+        clickRevenue: report.clickRevenue,
+        paymeRevenue: report.paymeRevenue,
+        transferRevenue: report.transferRevenue,
+        debtAmount: report.debtAmount,
+        expenseAmount: report.expenseAmount,
+        inkassaAmount: report.inkassaAmount,
+        systemExpectedCash: report.systemExpectedCash,
         closingCash,
-        difference: closingCash - shiftReport.systemExpectedCash,
+        difference: closingCash - report.systemExpectedCash,
         closedById: user.id,
         closedAt: new Date(),
         status: "CLOSED",
