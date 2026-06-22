@@ -489,8 +489,6 @@ const inkassaPayload = (inkassa) => {
       USD: 16,
       EUR: 17,
       RUB: 18,
-      KZT: 19,
-      TJS: 20,
     },
     legacySheetTarget: {
       amountColumnByCurrency: {
@@ -498,8 +496,6 @@ const inkassaPayload = (inkassa) => {
         USD: 16,
         EUR: 17,
         RUB: 18,
-        KZT: 19,
-        TJS: 20,
       },
       nameColumn: 22,
     },

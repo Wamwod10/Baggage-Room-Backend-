@@ -27,7 +27,6 @@ test("72+ and manual-hour tariff calculations use Settings tariff fields", () =>
 
 test("Telegram formats decimal currencies without multiplying by 100", () => {
   assert.equal(formatMoney(21429, "RUB"), "214,29 RUB");
-  assert.equal(formatMoney(1739, "TJS"), "17,39 TJS");
   assert.equal(formatMoney(12345, "USD"), "123,45 USD");
   assert.equal(formatMoney(9950, "EUR"), "99,50 EUR");
   assert.equal(formatMoney(250000, "UZS"), "250 000 so'm");

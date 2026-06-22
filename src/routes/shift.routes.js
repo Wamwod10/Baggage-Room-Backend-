@@ -2,7 +2,7 @@ const router = require("express").Router();
 const { z, idParam, amount } = require("../utils/validation");
 const validate = require("../middleware/validate.middleware");
 const shiftController = require("../controllers/shift.controller");
-const currencyAmountMap = z.record(z.enum(["UZS", "USD", "EUR", "RUB", "KZT", "TJS"]), amount);
+const currencyAmountMap = z.record(z.enum(["UZS", "USD", "EUR", "RUB"]), amount);
 
 router.get("/", validate(z.object({ query: z.object({ branchId: z.string().optional(), dateFrom: z.string().optional(), dateTo: z.string().optional(), status: z.enum(["OPEN", "CLOSED"]).optional() }) })), shiftController.list);
 router.get("/current", validate(z.object({ query: z.object({ branchId: z.string().optional() }) })), shiftController.current);

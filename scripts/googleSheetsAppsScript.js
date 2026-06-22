@@ -31,8 +31,7 @@ const COLUMN = {
   CASH_USD: 7,
   CASH_EUR: 8,
   CASH_RUB: 9,
-  CASH_KZT: 10,
-  CASH_TJS: 11,
+  CASH_LEGACY_END: 11,
   CLICK: 12,
   PAYME: 13,
   TERMINAL: 14,
@@ -40,8 +39,7 @@ const COLUMN = {
   BALANCE_USD: 16,
   BALANCE_EUR: 17,
   BALANCE_RUB: 18,
-  BALANCE_KZT: 19,
-  BALANCE_TJS: 20,
+  BALANCE_LEGACY_END: 20,
   EXPENSE: 21,
   NAME: 22,
 };
@@ -51,8 +49,6 @@ const CASH_COLUMN_BY_CURRENCY = {
   USD: COLUMN.CASH_USD,
   EUR: COLUMN.CASH_EUR,
   RUB: COLUMN.CASH_RUB,
-  KZT: COLUMN.CASH_KZT,
-  TJS: COLUMN.CASH_TJS,
 };
 
 const BALANCE_COLUMN_BY_CURRENCY = {
@@ -60,8 +56,6 @@ const BALANCE_COLUMN_BY_CURRENCY = {
   USD: COLUMN.BALANCE_USD,
   EUR: COLUMN.BALANCE_EUR,
   RUB: COLUMN.BALANCE_RUB,
-  KZT: COLUMN.BALANCE_KZT,
-  TJS: COLUMN.BALANCE_TJS,
 };
 
 const FRACTION_DIGITS_BY_CURRENCY = {
@@ -69,8 +63,6 @@ const FRACTION_DIGITS_BY_CURRENCY = {
   USD: 2,
   EUR: 2,
   RUB: 2,
-  KZT: 2,
-  TJS: 2,
 };
 
 const ACTION_STYLE = {
@@ -263,7 +255,7 @@ function fillDoplataRow_(row, payload) {
 
 function fillExpenseRow_(row, payload) {
   clearColumns_(row, COLUMN.CASH_UZS, COLUMN.TERMINAL);
-  clearColumns_(row, COLUMN.BALANCE_UZS, COLUMN.BALANCE_TJS);
+  clearColumns_(row, COLUMN.BALANCE_UZS, COLUMN.BALANCE_LEGACY_END);
   const category = payload.category || payload.fio || payload.clientName || "Xarajat";
   const reason = payload.reason || payload.note || "";
   row[COLUMN.FIO - 1] = category;
@@ -273,7 +265,7 @@ function fillExpenseRow_(row, payload) {
 
 function fillSalaryRow_(row, payload) {
   clearColumns_(row, COLUMN.CASH_UZS, COLUMN.TERMINAL);
-  clearColumns_(row, COLUMN.BALANCE_UZS, COLUMN.BALANCE_TJS);
+  clearColumns_(row, COLUMN.BALANCE_UZS, COLUMN.BALANCE_LEGACY_END);
   const receiver = payload.salaryReceiver || payload.recipientName || payload.adminName || "";
   row[COLUMN.FIO - 1] = receiver || payload.adminName || "Oylik";
   row[COLUMN.EXPENSE - 1] = sheetAmount_(payload, payload.salaryAmount, payload.amount, payload.finalAmount, payload.amountUzs);

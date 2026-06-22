@@ -13,7 +13,6 @@ const { COLUMN } = appsScript;
 test("decimal currency minor units normalize to exact Google Sheets major numbers", () => {
   const cases = [
     [214.29, "RUB", 214.29],
-    [17.39, "TJS", 17.39],
     [123.45, "USD", 123.45],
     [99.5, "EUR", 99.5],
     [250000, "UZS", 250000],
@@ -60,8 +59,8 @@ test("EXPENSE, SALARY and INKASSA map only to their financial blocks", () => {
     branch: { code: "TSV", name: "Shimoliy vokzal" },
     category: "Transport",
     reason: "Taxi",
-    amount: parseCurrency(17.39, "TJS"),
-    currency: "TJS",
+    amount: parseCurrency(99.5, "EUR"),
+    currency: "EUR",
   });
   const salary = sheets._internals.salaryPayload({
     salaryEntityId: "salary-test",
@@ -81,7 +80,7 @@ test("EXPENSE, SALARY and INKASSA map only to their financial blocks", () => {
   const expenseRow = appsScript.buildLegacyRow_(expense);
   const salaryRow = appsScript.buildLegacyRow_(salary);
   const inkassaRow = appsScript.buildLegacyRow_(inkassa);
-  assert.equal(expenseRow[COLUMN.EXPENSE - 1], 17.39);
+  assert.equal(expenseRow[COLUMN.EXPENSE - 1], 99.5);
   assert.match(expenseRow[COLUMN.NAME - 1], /Transport - Taxi/);
   assert.equal(expenseRow[COLUMN.CHECK - 1], "");
   assert.equal(salaryRow[COLUMN.EXPENSE - 1], 250000);
@@ -94,8 +93,8 @@ test("EXPENSE, SALARY and INKASSA map only to their financial blocks", () => {
   assert.deepEqual(salaryRow.slice(COLUMN.CASH_UZS - 1, COLUMN.TERMINAL), new Array(9).fill(""));
 });
 
-test("INKASSA currencies use O-T only and never F-K revenue columns", () => {
-  const expectedColumns = { UZS: COLUMN.BALANCE_UZS, USD: COLUMN.BALANCE_USD, EUR: COLUMN.BALANCE_EUR, RUB: COLUMN.BALANCE_RUB, KZT: COLUMN.BALANCE_KZT, TJS: COLUMN.BALANCE_TJS };
+test("INKASSA currencies use O-R only and never F-K revenue columns", () => {
+  const expectedColumns = { UZS: COLUMN.BALANCE_UZS, USD: COLUMN.BALANCE_USD, EUR: COLUMN.BALANCE_EUR, RUB: COLUMN.BALANCE_RUB };
   for (const [currency, column] of Object.entries(expectedColumns)) {
     const payload = sheets._internals.inkassaPayload({
       id: `inkassa-${currency}`,
@@ -116,8 +115,6 @@ test("orders and doplata alone can write F-K, Click, Payme and Terminal revenue 
     ["CASH", "USD", COLUMN.CASH_USD],
     ["CASH", "EUR", COLUMN.CASH_EUR],
     ["CASH", "RUB", COLUMN.CASH_RUB],
-    ["CASH", "KZT", COLUMN.CASH_KZT],
-    ["CASH", "TJS", COLUMN.CASH_TJS],
     ["CLICK", "UZS", COLUMN.CLICK],
     ["PAYME", "UZS", COLUMN.PAYME],
     ["TERMINAL", "UZS", COLUMN.TERMINAL],
