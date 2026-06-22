@@ -17,6 +17,13 @@ const include = {
 const SALARY_NOTE_PREFIX = "Oylik:";
 
 const isSalaryMovement = (movement) => movement.type === "EXPENSE" && String(movement.note || "").startsWith(SALARY_NOTE_PREFIX);
+const normalizeCurrencyMap = (value, fallbackUzs = 0) => {
+  const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  return Object.fromEntries(CURRENCIES.map((currency) => {
+    const amount = Number(source[currency] ?? (currency === "UZS" ? fallbackUzs : 0));
+    return [currency, Number.isFinite(amount) ? Math.max(0, Math.round(amount)) : 0];
+  }));
+};
 
 const listShifts = async (user, query) => {
   const where = { ...branchWhere(user, query.branchId), ...dateRangeWhere(query.dateFrom, query.dateTo, "openedAt"), ...(query.status ? { status: query.status } : {}) };
@@ -41,12 +48,16 @@ const openShift = async (user, body) => {
   if (!branchId) throw new AppError("branchId is required", 400);
   const existing = await prisma.shift.findFirst({ where: { branchId, status: "OPEN" } });
   if (existing) throw new AppError("This branch already has an open shift", 400);
+  const openingCashByCurrency = normalizeCurrencyMap(body.openingCashByCurrency, body.openingCash);
+  const acceptedCashByCurrency = normalizeCurrencyMap(body.acceptedCashByCurrency, body.acceptedCash);
   const shift = await prisma.shift.create({
     data: {
       branchId,
       openedById: user.id,
-      openingCash: body.openingCash || 0,
-      acceptedCash: body.acceptedCash || 0,
+      openingCash: openingCashByCurrency.UZS,
+      acceptedCash: acceptedCashByCurrency.UZS,
+      openingCashByCurrency,
+      acceptedCashByCurrency,
       acceptedFromName: body.acceptedFromName || null,
       acceptedByName: body.acceptedByName || null,
       handoverToName: body.handoverToName || null,
@@ -54,8 +65,9 @@ const openShift = async (user, body) => {
     include,
   });
   await audit({ branchId, userId: user.id, entityType: "Shift", entityId: shift.id, action: "SHIFT_OPEN", newValue: shift, description: "Shift opened" });
-  telegram.sendSafely(telegram.sendShiftOpen(shift), { branchId, userId: user.id, entityType: "Shift", entityId: shift.id });
-  return shift;
+  const result = { ...shift, openingCashByCurrency, acceptedCashByCurrency };
+  telegram.sendSafely(telegram.sendShiftOpen(result), { branchId, userId: user.id, entityType: "Shift", entityId: shift.id });
+  return result;
 };
 
 const computeShiftReport = async (tx, shift) => {
@@ -88,9 +100,13 @@ const computeShiftReport = async (tx, shift) => {
   const debtByCurrency = byCurrency(openDebts);
   const manualInByCurrency = byCurrency(manualInMovements);
   const manualOutByCurrency = byCurrency(manualOutMovements);
-  const openingByCurrency = Object.fromEntries(CURRENCIES.map((currency) => [currency, currency === "UZS" ? Number(shift.openingCash || 0) + Number(shift.acceptedCash || 0) : 0]));
+  const openingCashByCurrency = normalizeCurrencyMap(shift.openingCashByCurrency, shift.openingCash);
+  const acceptedCashByCurrency = normalizeCurrencyMap(shift.acceptedCashByCurrency, shift.acceptedCash);
   const cashBalanceByCurrency = subtractCurrencyMaps(
-    Object.fromEntries(CURRENCIES.map((currency) => [currency, openingByCurrency[currency] + cashByCurrency[currency] + manualInByCurrency[currency]])),
+    Object.fromEntries(CURRENCIES.map((currency) => [
+      currency,
+      openingCashByCurrency[currency] + acceptedCashByCurrency[currency] + cashByCurrency[currency] + manualInByCurrency[currency],
+    ])),
     expenseByCurrency,
     inkassaByCurrency,
     manualOutByCurrency,
@@ -125,6 +141,8 @@ const computeShiftReport = async (tx, shift) => {
     inkassaAmount,
     systemExpectedCash,
     ordersCount,
+    openingCashByCurrency,
+    acceptedCashByCurrency,
     revenueByCurrency,
     cashByCurrency,
     terminalByCurrency,
@@ -143,6 +161,8 @@ const computeShiftReport = async (tx, shift) => {
     },
     report: {
       revenueByCurrency,
+      openingCashByCurrency,
+      acceptedCashByCurrency,
       cashByCurrency,
       terminalByCurrency,
       clickByCurrency,
@@ -166,6 +186,11 @@ const closeShift = async (user, id, body) => {
 
     if (salaryAmount < 0) throw new AppError("Oylik summasi manfiy bo'lishi mumkin emas", 400);
     if (salaryAmount > 0 && !salaryReceiver) throw new AppError("Oylik uchun kimga berilganini kiriting", 400);
+
+    const balanceBeforeSalary = await computeShiftReport(tx, shift);
+    if (salaryAmount > Number(balanceBeforeSalary.cashBalanceByCurrency.UZS || 0)) {
+      throw new AppError("Oylik summasi UZS kassasidagi qoldiqdan oshmasligi kerak", 400);
+    }
 
     if (salaryAmount > 0) {
       await tx.expense.create({
@@ -194,7 +219,18 @@ const closeShift = async (user, id, body) => {
 
     const { ordersCount, ...report } = await computeShiftReport(tx, shift);
     const reportSalaryAmount = report.salaryAmount;
-    const closingCash = body.closingCash ?? report.systemExpectedCash;
+    const requestedClosing = normalizeCurrencyMap(body.closingCashByCurrency, body.closingCash ?? report.systemExpectedCash);
+    const closingCashByCurrency = Object.fromEntries(CURRENCIES.map((currency) => [
+      currency,
+      body.closingCashByCurrency?.[currency] === undefined && currency !== "UZS"
+        ? Number(report.cashBalanceByCurrency[currency] || 0)
+        : requestedClosing[currency],
+    ]));
+    const differenceByCurrency = Object.fromEntries(CURRENCIES.map((currency) => [
+      currency,
+      Number(closingCashByCurrency[currency] || 0) - Number(report.cashBalanceByCurrency[currency] || 0),
+    ]));
+    const closingCash = closingCashByCurrency.UZS;
     const updated = await tx.shift.update({
       where: { id },
       data: {
@@ -210,7 +246,9 @@ const closeShift = async (user, id, body) => {
         inkassaAmount: report.inkassaAmount,
         systemExpectedCash: report.systemExpectedCash,
         closingCash,
-        difference: closingCash - report.systemExpectedCash,
+        closingCashByCurrency,
+        difference: differenceByCurrency.UZS,
+        differenceByCurrency,
         closedById: user.id,
         closedAt: new Date(),
         status: "CLOSED",
@@ -218,7 +256,7 @@ const closeShift = async (user, id, body) => {
       },
       include,
     });
-    const result = { ...updated, ...report, salaryAmount: reportSalaryAmount, ordersCount, salaryReceiver: salaryAmount > 0 ? salaryReceiver : null };
+    const result = { ...updated, ...report, closingCashByCurrency, differenceByCurrency, salaryAmount: reportSalaryAmount, ordersCount, salaryReceiver: salaryAmount > 0 ? salaryReceiver : null };
     await audit({ tx, branchId: shift.branchId, userId: user.id, entityType: "Shift", entityId: id, action: "SHIFT_CLOSE", oldValue: shift, newValue: result, description: "Shift closed" });
     return result;
   });
@@ -235,4 +273,4 @@ const closeShift = async (user, id, body) => {
   return result;
 };
 
-module.exports = { listShifts, currentShift, openShift, closeShift, computeShiftReport };
+module.exports = { listShifts, currentShift, openShift, closeShift, computeShiftReport, normalizeCurrencyMap };

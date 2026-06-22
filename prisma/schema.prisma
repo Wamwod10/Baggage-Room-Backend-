@@ -245,6 +245,10 @@ model Shift {
   openingCash         Int           @default(0)
   acceptedCash        Int           @default(0)
   closingCash         Int?
+  openingCashByCurrency Json         @default("{}")
+  acceptedCashByCurrency Json        @default("{}")
+  closingCashByCurrency Json?
+  differenceByCurrency Json          @default("{}")
   totalRevenue        Int           @default(0)
   cashRevenue         Int           @default(0)
   cardRevenue         Int           @default(0)

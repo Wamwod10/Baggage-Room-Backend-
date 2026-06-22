@@ -103,6 +103,9 @@ function doPost(e) {
 
     const row = buildLegacyRow_(payload);
     const targetRow = findNextOrderRow(sheet);
+    // C (№ места / Кол-во место) is a text value such as "1-S 2-M 1-L".
+    // Force plain text so an existing custom number format cannot render it as #.
+    sheet.getRange(targetRow, COLUMN.PLACE).setNumberFormat("@");
     sheet.getRange(targetRow, 1, 1, LEGACY_WIDTH).setValues([row]);
     sheet.getRange(targetRow, IDEMPOTENCY_COLUMN).setValue(idempotencyKey);
     applyMoneyFormat_(sheet, targetRow, payload);
@@ -259,6 +262,8 @@ function fillDoplataRow_(row, payload) {
 }
 
 function fillExpenseRow_(row, payload) {
+  clearColumns_(row, COLUMN.CASH_UZS, COLUMN.TERMINAL);
+  clearColumns_(row, COLUMN.BALANCE_UZS, COLUMN.BALANCE_TJS);
   const category = payload.category || payload.fio || payload.clientName || "Xarajat";
   const reason = payload.reason || payload.note || "";
   row[COLUMN.FIO - 1] = category;
@@ -267,6 +272,8 @@ function fillExpenseRow_(row, payload) {
 }
 
 function fillSalaryRow_(row, payload) {
+  clearColumns_(row, COLUMN.CASH_UZS, COLUMN.TERMINAL);
+  clearColumns_(row, COLUMN.BALANCE_UZS, COLUMN.BALANCE_TJS);
   const receiver = payload.salaryReceiver || payload.recipientName || payload.adminName || "";
   row[COLUMN.FIO - 1] = receiver || payload.adminName || "Oylik";
   row[COLUMN.EXPENSE - 1] = sheetAmount_(payload, payload.salaryAmount, payload.amount, payload.finalAmount, payload.amountUzs);
@@ -274,12 +281,20 @@ function fillSalaryRow_(row, payload) {
 }
 
 function fillInkassaRow_(row, payload) {
+  clearColumns_(row, COLUMN.CASH_UZS, COLUMN.TERMINAL);
   const receiver = payload.receiverName || payload.recipientName || payload.clientName || "";
   const note = payload.note || "";
   const currency = String(payload.currency || "UZS").toUpperCase();
   row[COLUMN.FIO - 1] = receiver;
   row[(BALANCE_COLUMN_BY_CURRENCY[currency] || COLUMN.BALANCE_UZS) - 1] = sheetAmount_(payload, payload.inkassaAmount, payload.amount, payload.finalAmount, payload.amountUzs);
-  row[COLUMN.NAME - 1] = ["Inkassa", note].filter(Boolean).join(" - ");
+  const cleanNote = String(note).toLowerCase() === "inkassa" ? "" : note;
+  row[COLUMN.NAME - 1] = ["Inkassa", currency === "UZS" ? "" : currency, cleanNote].filter(Boolean).join(" - ");
+}
+
+function clearColumns_(row, firstColumn, lastColumn) {
+  for (let column = firstColumn; column <= lastColumn; column += 1) {
+    row[column - 1] = "";
+  }
 }
 
 function amountAbs_(value, currency) {
@@ -326,20 +341,26 @@ function firstValue_() {
 }
 
 function formatPlaces_(payload) {
-  if (payload.place || payload.places) return payload.place || payload.places;
-  if (!Array.isArray(payload.lockers)) return "";
-  const counts = payload.lockers.reduce(function (acc, locker) {
+  const lockers = Array.isArray(payload.lockers) ? payload.lockers : [];
+  const counts = lockers.reduce(function (acc, locker) {
     const size = String(locker.size || "").toUpperCase();
     if (!size) return acc;
     acc[size] = (acc[size] || 0) + Number(locker.count || 1);
     return acc;
   }, {});
-  return ["S", "M", "L", "XL"]
+  const fromCounts = ["S", "M", "L", "XL"]
     .map(function (size) {
       return counts[size] > 0 ? counts[size] + "-" + size : "";
     })
     .filter(Boolean)
     .join(" ");
+  if (fromCounts) return fromCounts;
+
+  // Backward-compatible fallback for older payloads; never allow # in column C.
+  return String(payload.place || payload.places || "")
+    .replace(/#/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function formatSheetDate_(dateValue) {

@@ -2,6 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const { calculatePrice } = require("../src/services/tariff.service");
+const { computeShiftReport, normalizeCurrencyMap } = require("../src/services/shift.service");
 const {
   formatMoney,
   inkassaMessage,
@@ -63,6 +64,8 @@ test("Telegram shift report separates payment and currency balances", () => {
     branch: { name: "Samarqand aeroport" },
     openedBy: { name: "Ali" },
     closedBy: { name: "Vali" },
+    openingCashByCurrency: { UZS: 100000, USD: 10000 },
+    acceptedCashByCurrency: { UZS: 50000, USD: 5000 },
     revenueByCurrency: { UZS: 250000, RUB: 21429 },
     cashByCurrency: { UZS: 200000, RUB: 21429 },
     terminalByCurrency: { UZS: 50000 },
@@ -78,4 +81,35 @@ test("Telegram shift report separates payment and currency balances", () => {
   assert.match(message, /Payme: 99,50 EUR/);
   assert.match(message, /Inkassa: 100,00 RUB/);
   assert.match(message, /Yopgan admin: Vali/);
+  assert.match(message, /Boshlang'ich kassa: 100 000 so'm \/ 100,00 USD/);
+  assert.match(message, /Qabul qilingan: 50 000 so'm \/ 50,00 USD/);
+});
+
+test("shift opening, accepted, sales, expense and inkassa remain separate by currency", async () => {
+  const shift = {
+    id: "shift-test",
+    branchId: "branch-test",
+    openedAt: new Date("2026-06-22T00:00:00Z"),
+    openingCash: 100000,
+    acceptedCash: 50000,
+    openingCashByCurrency: { UZS: 100000, USD: 10000 },
+    acceptedCashByCurrency: { UZS: 50000, USD: 5000 },
+  };
+  const movements = [
+    { direction: "IN", type: "ORDER_PAYMENT", paymentType: "CASH", amount: 25000, currency: "UZS" },
+    { direction: "IN", type: "ORDER_PAYMENT", paymentType: "CASH", amount: 2500, currency: "USD" },
+    { direction: "OUT", type: "EXPENSE", paymentType: null, amount: 5000, currency: "UZS", note: "Xarajat" },
+    { direction: "OUT", type: "INKASSA", paymentType: null, amount: 1000, currency: "USD", note: "Inkassa" },
+  ];
+  const tx = {
+    cashMovement: { findMany: async () => movements },
+    debt: { findMany: async () => [] },
+    order: { count: async () => 1 },
+  };
+  const report = await computeShiftReport(tx, shift);
+  assert.deepEqual(normalizeCurrencyMap(shift.openingCashByCurrency), report.openingCashByCurrency);
+  assert.equal(report.cashBalanceByCurrency.UZS, 170000);
+  assert.equal(report.cashBalanceByCurrency.USD, 16500);
+  assert.equal(report.expenseByCurrency.UZS, 5000);
+  assert.equal(report.inkassaByCurrency.USD, 1000);
 });
