@@ -53,6 +53,29 @@ test("NEW_ORDER keeps baggage places, check and period in their own columns", ()
   assert.doesNotMatch(row[COLUMN.PLACE - 1], /#/);
 });
 
+test("NEW_ORDER sends real paid amount when present and calculated final amount otherwise", () => {
+  assert.equal(sheets._internals.newOrderSheetAmount({ realPaidAmount: 175000, finalAmount: 200000 }), 175000);
+  assert.equal(sheets._internals.newOrderSheetAmount({ realPaidAmount: 0, finalAmount: 200000 }), 0);
+  assert.equal(sheets._internals.newOrderSheetAmount({ realPaidAmount: null, finalAmount: 200000 }), 200000);
+  assert.equal(sheets._internals.newOrderSheetAmount({ calculatedAmount: 220000 }), 220000);
+
+  const payload = sheets._internals.orderPayload("NEW_ORDER", {
+    id: "real-paid-order",
+    branch: { code: "TIA", name: "Toshkent aeroport" },
+    orderNumber: "TIA-REAL-PAID",
+    clientName: "Test Client",
+    tariffHours: 3,
+    items: [{ size: "M", count: 1 }],
+    finalAmount: 200000,
+    realPaidAmount: 175000,
+    currency: "UZS",
+    paymentType: "CASH",
+  }, { amount: sheets._internals.newOrderSheetAmount({ realPaidAmount: 175000, finalAmount: 200000 }) });
+
+  const row = appsScript.buildOrderRow(payload);
+  assert.equal(row[COLUMN.CASH_UZS - 1], 175000);
+});
+
 test("legacy place fallback strips hash signs from column C", () => {
   assert.equal(appsScript.formatPlaces_({ place: "#1-S #2-M #1-L" }), "1-S 2-M 1-L");
 });

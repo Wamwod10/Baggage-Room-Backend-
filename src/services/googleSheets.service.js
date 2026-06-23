@@ -337,7 +337,11 @@ const sendSafely = async (delivery, { action = "UNKNOWN", branchId = null, userI
   }
 };
 
-const sendNewOrder = (order) => postWebhook(orderPayload("NEW_ORDER", order, { amount: order?.finalAmount ?? null }));
+const newOrderSheetAmount = (order) =>
+  order?.realPaidAmount ?? order?.finalAmount ?? order?.calculatedAmount ?? null;
+
+const sendNewOrder = (order) =>
+  postWebhook(orderPayload("NEW_ORDER", order, { amount: newOrderSheetAmount(order) }));
 
 const sendDoplata = (order) =>
   postWebhook(orderPayload("DOPLATA", order, {
@@ -674,6 +678,7 @@ module.exports = {
     getWebhookUrl,
     isEnabled,
     orderPayload,
+    newOrderSheetAmount,
     formatBaggagePlaces,
     basePayload,
     expensePayload,
