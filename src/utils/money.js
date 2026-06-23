@@ -13,6 +13,8 @@ const currencyFractionDigits = {
   USD: 2,
   EUR: 2,
   RUB: 2,
+  KZT: 2,
+  TJS: 2,
 };
 
 const CURRENCIES = Object.freeze(Object.keys(currencyFractionDigits));
@@ -22,7 +24,9 @@ const normalizeCurrencyAmount = (amount, currency = "UZS") => {
   const digits = currencyFractionDigits[code];
   if (digits === undefined) throw new TypeError(`Unsupported currency: ${code}`);
 
-  const minorAmount = Number(amount);
+  const minorAmount = typeof amount === "string"
+    ? Number(amount.trim().replace(/[\s\u00a0\u202f]/g, "").replace(",", "."))
+    : Number(amount);
   if (!Number.isFinite(minorAmount)) throw new TypeError("Invalid currency amount");
   return minorAmount / 10 ** digits;
 };

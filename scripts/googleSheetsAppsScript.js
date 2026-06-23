@@ -17,6 +17,14 @@ const SHEET_BY_BRANCH_CODE = {
   SIA: "SIA",
 };
 
+const SHEET_NAME_PATTERN_BY_BRANCH_CODE = {
+  TIA: /(tia|ташкент.*аэропорт|toshkent.*aeroport)/i,
+  TSV: /(tsv|ташкент.*(север|шимол)|toshkent.*shimol)/i,
+  TJV: /(tjv|ташкент.*(юж|жануб)|toshkent.*janub)/i,
+  SVK: /(svk|самарканд.*вокзал|samarqand.*vokzal)/i,
+  SIA: /(sia|самарканд.*аэропорт|samarqand.*aeroport)/i,
+};
+
 const WRITABLE_ACTIONS = new Set(["NEW_ORDER", "DOPLATA", "EXPENSE", "INKASSA", "SALARY"]);
 const LEGACY_WIDTH = 22; // A:V
 const IDEMPOTENCY_COLUMN = 23; // hidden/helper column W
@@ -31,7 +39,9 @@ const COLUMN = {
   CASH_USD: 7,
   CASH_EUR: 8,
   CASH_RUB: 9,
-  CASH_LEGACY_END: 11,
+  CASH_KZT: 10,
+  CASH_TJS: 11,
+  CASH_END: 11,
   CLICK: 12,
   PAYME: 13,
   TERMINAL: 14,
@@ -39,7 +49,9 @@ const COLUMN = {
   BALANCE_USD: 16,
   BALANCE_EUR: 17,
   BALANCE_RUB: 18,
-  BALANCE_LEGACY_END: 20,
+  BALANCE_KZT: 19,
+  BALANCE_TJS: 20,
+  BALANCE_END: 20,
   EXPENSE: 21,
   NAME: 22,
 };
@@ -49,6 +61,8 @@ const CASH_COLUMN_BY_CURRENCY = {
   USD: COLUMN.CASH_USD,
   EUR: COLUMN.CASH_EUR,
   RUB: COLUMN.CASH_RUB,
+  KZT: COLUMN.CASH_KZT,
+  TJS: COLUMN.CASH_TJS,
 };
 
 const BALANCE_COLUMN_BY_CURRENCY = {
@@ -56,6 +70,8 @@ const BALANCE_COLUMN_BY_CURRENCY = {
   USD: COLUMN.BALANCE_USD,
   EUR: COLUMN.BALANCE_EUR,
   RUB: COLUMN.BALANCE_RUB,
+  KZT: COLUMN.BALANCE_KZT,
+  TJS: COLUMN.BALANCE_TJS,
 };
 
 const FRACTION_DIGITS_BY_CURRENCY = {
@@ -63,6 +79,8 @@ const FRACTION_DIGITS_BY_CURRENCY = {
   USD: 2,
   EUR: 2,
   RUB: 2,
+  KZT: 2,
+  TJS: 2,
 };
 
 const ACTION_STYLE = {
@@ -82,37 +100,50 @@ function doPost(e) {
     }
 
     const branchCode = String(payload.branchCode || "").trim();
-    const sheetName = SHEET_BY_BRANCH_CODE[branchCode];
-    if (!sheetName) throw new Error("Unknown branchCode: " + branchCode);
+    if (!SHEET_BY_BRANCH_CODE[branchCode]) throw new Error("Unknown branchCode: " + branchCode);
 
-    const sheet = getOrCreateSheet_(sheetName);
-    ensureColumns_(sheet, IDEMPOTENCY_COLUMN);
+    const lock = LockService.getDocumentLock();
+    lock.waitLock(30000);
+    try {
+      const sheet = getOrCreateSheet_(branchCode);
+      ensureColumns_(sheet, IDEMPOTENCY_COLUMN);
 
-    const idempotencyKey = String(payload.idempotencyKey || buildIdempotencyKey_(payload));
-    if (hasDuplicate_(sheet, idempotencyKey)) {
-      return json_({ ok: true, duplicate: true, idempotencyKey });
+      const idempotencyKey = String(payload.idempotencyKey || buildIdempotencyKey_(payload));
+      if (hasDuplicate_(sheet, idempotencyKey)) {
+        return json_({ ok: true, duplicate: true, idempotencyKey });
+      }
+
+      const row = buildLegacyRow_(payload);
+      if (row.length !== LEGACY_WIDTH) throw new Error("Row must contain exactly 22 columns (A:V)");
+      const targetRow = findNextOrderRow(sheet);
+      // C (№ места / Кол-во место) is plain text, for example "1-S 2-M 1-L".
+      sheet.getRange(targetRow, COLUMN.PLACE).setNumberFormat("@");
+      sheet.getRange(targetRow, 1, 1, LEGACY_WIDTH).setValues([row]);
+      sheet.getRange(targetRow, IDEMPOTENCY_COLUMN).setValue(idempotencyKey);
+      applyMoneyFormat_(sheet, targetRow, payload);
+      styleRow_(sheet, targetRow, action);
+
+      return json_({ ok: true, row: targetRow, idempotencyKey });
+    } finally {
+      lock.releaseLock();
     }
-
-    const row = buildLegacyRow_(payload);
-    const targetRow = findNextOrderRow(sheet);
-    // C (№ места / Кол-во место) is a text value such as "1-S 2-M 1-L".
-    // Force plain text so an existing custom number format cannot render it as #.
-    sheet.getRange(targetRow, COLUMN.PLACE).setNumberFormat("@");
-    sheet.getRange(targetRow, 1, 1, LEGACY_WIDTH).setValues([row]);
-    sheet.getRange(targetRow, IDEMPOTENCY_COLUMN).setValue(idempotencyKey);
-    applyMoneyFormat_(sheet, targetRow, payload);
-    styleRow_(sheet, targetRow, action);
-
-    return json_({ ok: true, row: targetRow, idempotencyKey });
   } catch (error) {
     console.error(error);
     return json_({ ok: false, error: error.message });
   }
 }
 
-function getOrCreateSheet_(name) {
+function getOrCreateSheet_(branchCode) {
   const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
-  return spreadsheet.getSheetByName(name) || spreadsheet.insertSheet(name);
+  const exactName = SHEET_BY_BRANCH_CODE[branchCode];
+  const exact = spreadsheet.getSheetByName(exactName);
+  if (exact) return exact;
+
+  const pattern = SHEET_NAME_PATTERN_BY_BRANCH_CODE[branchCode];
+  const existing = pattern
+    ? spreadsheet.getSheets().find(function (sheet) { return pattern.test(sheet.getName()); })
+    : null;
+  return existing || spreadsheet.insertSheet(exactName);
 }
 
 function ensureColumns_(sheet, minColumns) {
@@ -172,7 +203,8 @@ function legacyDataStartRow_(sheet) {
       text.indexOf("ф.и.о") !== -1 ||
       text.indexOf("период хранения") !== -1 ||
       text.indexOf("наименование") !== -1 ||
-      text.indexOf("№ чек") !== -1
+      text.indexOf("№ чек") !== -1 ||
+      text.indexOf("кол-во место") !== -1
     ) {
       return index + 2;
     }
@@ -189,34 +221,34 @@ function hasDuplicate_(sheet, idempotencyKey) {
 
 function buildLegacyRow_(payload) {
   const action = String(payload.action || "").toUpperCase();
+  if (action === "NEW_ORDER") return buildOrderRow(payload);
+  if (action === "DOPLATA") return buildDoplataRow(payload);
+  if (action === "EXPENSE") return buildExpenseRow(payload);
+  if (action === "SALARY") return buildSalaryRow(payload);
+  if (action === "INKASSA") return buildInkassaRow(payload);
+  throw new Error("Unsupported action: " + action);
+}
+
+function createRow_(payload) {
   const row = new Array(LEGACY_WIDTH).fill("");
-
   row[COLUMN.DATE - 1] = formatSheetDate_(payload.createdAt || new Date());
-
-  if (action === "NEW_ORDER") {
-    fillNewOrderRow_(row, payload);
-  } else if (action === "DOPLATA") {
-    fillDoplataRow_(row, payload);
-  } else if (action === "EXPENSE") {
-    fillExpenseRow_(row, payload);
-  } else if (action === "SALARY") {
-    fillSalaryRow_(row, payload);
-  } else if (action === "INKASSA") {
-    fillInkassaRow_(row, payload);
-  }
-
   return row;
 }
 
-function fillNewOrderRow_(row, payload) {
+function buildOrderRow(payload) {
+  const row = createRow_(payload);
   row[COLUMN.FIO - 1] = payload.clientName || payload.fio || "";
   row[COLUMN.PLACE - 1] = formatPlaces_(payload);
   row[COLUMN.CHECK - 1] = payload.orderNumber || payload.checkNumber || "";
   row[COLUMN.PERIOD - 1] = payload.period || payload.tariffHours || payload.storagePeriod || "";
+  row[COLUMN.NAME - 1] = payload.operationName || "Хранение багажа";
 
   const amount = sheetAmount_(payload, payload.amount, payload.finalAmount, payload.realPaidAmount, payload.paidAmount);
-  if (amount === "") return;
+  if (amount !== "") writeRevenue_(row, payload, amount);
+  return row;
+}
 
+function writeRevenue_(row, payload, amount) {
   const paymentType = String(payload.paymentType || "CASH").toUpperCase();
   const currency = String(payload.currency || "UZS").toUpperCase();
   if (paymentType === "CLICK") {
@@ -225,86 +257,96 @@ function fillNewOrderRow_(row, payload) {
     row[COLUMN.PAYME - 1] = amount;
   } else if (paymentType === "CARD" || paymentType === "TERMINAL") {
     row[COLUMN.TERMINAL - 1] = amount;
-  } else {
-    row[(CASH_COLUMN_BY_CURRENCY[currency] || COLUMN.CASH_UZS) - 1] = amount;
+  } else if (paymentType === "CASH" || !payload.paymentType) {
+    const cashColumn = CASH_COLUMN_BY_CURRENCY[currency];
+    if (!cashColumn) throw new Error("Unsupported cash currency: " + currency);
+    row[cashColumn - 1] = amount;
   }
 }
 
-function fillDoplataRow_(row, payload) {
+function buildDoplataRow(payload) {
+  const row = createRow_(payload);
   row[COLUMN.FIO - 1] = payload.clientName || payload.fio || "";
   row[COLUMN.PLACE - 1] = formatPlaces_(payload);
   row[COLUMN.CHECK - 1] = payload.orderNumber || payload.checkNumber || "";
-  row[COLUMN.PERIOD - 1] = payload.period || payload.tariffHours || payload.storagePeriod || "";
-  row[COLUMN.NAME - 1] = "DOPLATA";
+  row[COLUMN.PERIOD - 1] = payload.doplataPeriod || payload.period || payload.storagePeriod || "ДОПЛАТА";
+  row[COLUMN.NAME - 1] = payload.operationName || "Доплата";
 
   const amount = sheetAmount_(payload, payload.amount, payload.overtimeAmount, payload.finalAmount, payload.realPaidAmount);
-  if (amount === "") return;
-
-  const paymentType = String(payload.paymentType || "CASH").toUpperCase();
-  const currency = String(payload.currency || "UZS").toUpperCase();
-  if (paymentType === "CLICK") {
-    row[COLUMN.CLICK - 1] = amount;
-  } else if (paymentType === "PAYME") {
-    row[COLUMN.PAYME - 1] = amount;
-  } else if (paymentType === "CARD" || paymentType === "TERMINAL") {
-    row[COLUMN.TERMINAL - 1] = amount;
-  } else {
-    row[(CASH_COLUMN_BY_CURRENCY[currency] || COLUMN.CASH_UZS) - 1] = amount;
-  }
+  if (amount !== "") writeRevenue_(row, payload, amount);
+  return row;
 }
 
-function fillExpenseRow_(row, payload) {
-  clearColumns_(row, COLUMN.CASH_UZS, COLUMN.TERMINAL);
-  clearColumns_(row, COLUMN.BALANCE_UZS, COLUMN.BALANCE_LEGACY_END);
+function buildExpenseRow(payload) {
+  const row = createRow_(payload);
   const category = payload.category || payload.fio || payload.clientName || "Xarajat";
   const reason = payload.reason || payload.note || "";
-  row[COLUMN.FIO - 1] = category;
+  row[COLUMN.FIO - 1] = payload.adminName || payload.responsibleName || category;
   row[COLUMN.EXPENSE - 1] = sheetAmount_(payload, payload.expenseAmount, payload.amount, payload.finalAmount, payload.amountUzs);
   row[COLUMN.NAME - 1] = [category, reason].filter(Boolean).join(" - ");
+  return row;
 }
 
-function fillSalaryRow_(row, payload) {
-  clearColumns_(row, COLUMN.CASH_UZS, COLUMN.TERMINAL);
-  clearColumns_(row, COLUMN.BALANCE_UZS, COLUMN.BALANCE_LEGACY_END);
+function buildSalaryRow(payload) {
+  const row = createRow_(payload);
   const receiver = payload.salaryReceiver || payload.recipientName || payload.adminName || "";
   row[COLUMN.FIO - 1] = receiver || payload.adminName || "Oylik";
   row[COLUMN.EXPENSE - 1] = sheetAmount_(payload, payload.salaryAmount, payload.amount, payload.finalAmount, payload.amountUzs);
   row[COLUMN.NAME - 1] = ["Oylik", receiver].filter(Boolean).join(" - ");
+  return row;
 }
 
-function fillInkassaRow_(row, payload) {
-  clearColumns_(row, COLUMN.CASH_UZS, COLUMN.TERMINAL);
+function buildInkassaRow(payload) {
+  const row = createRow_(payload);
   const receiver = payload.receiverName || payload.recipientName || payload.clientName || "";
   const note = payload.note || "";
   const currency = String(payload.currency || "UZS").toUpperCase();
+  const balanceColumn = BALANCE_COLUMN_BY_CURRENCY[currency];
+  if (!balanceColumn) throw new Error("Unsupported inkassa currency: " + currency);
   row[COLUMN.FIO - 1] = receiver;
-  row[(BALANCE_COLUMN_BY_CURRENCY[currency] || COLUMN.BALANCE_UZS) - 1] = sheetAmount_(payload, payload.inkassaAmount, payload.amount, payload.finalAmount, payload.amountUzs);
+  row[balanceColumn - 1] = sheetAmount_(payload, payload.inkassaAmount, payload.amount, payload.finalAmount, payload.amountUzs);
   const cleanNote = String(note).toLowerCase() === "inkassa" ? "" : note;
-  row[COLUMN.NAME - 1] = ["Inkassa", currency === "UZS" ? "" : currency, cleanNote].filter(Boolean).join(" - ");
+  const label = currency === "UZS" ? "Inkassa" : "Inkassa " + currency;
+  row[COLUMN.NAME - 1] = [label, receiver || cleanNote].filter(Boolean).join(" - ");
+  return row;
 }
 
-function clearColumns_(row, firstColumn, lastColumn) {
-  for (let column = firstColumn; column <= lastColumn; column += 1) {
-    row[column - 1] = "";
-  }
-}
-
-function amountAbs_(value, currency) {
+function parseNumber_(value) {
   if (value === null || value === undefined || value === "") return "";
-  const number = Math.abs(Number(value || 0));
-  if (!Number.isFinite(number)) return value;
+  if (typeof value === "number") return Number.isFinite(value) ? value : "";
+  let text = String(value).trim().replace(/[\s\u00a0\u202f]/g, "");
+  if (!text) return "";
+  if (text.indexOf(",") !== -1 && text.indexOf(".") !== -1) {
+    if (text.lastIndexOf(",") > text.lastIndexOf(".")) {
+      text = text.replace(/\./g, "").replace(",", ".");
+    } else {
+      text = text.replace(/,/g, "");
+    }
+  } else {
+    text = text.replace(",", ".");
+  }
+  const number = Number(text);
+  if (!Number.isFinite(number)) throw new Error("Invalid currency amount: " + value);
+  return number;
+}
+
+function amountAbs_(value, currency, amountUnit) {
+  const parsed = parseNumber_(value);
+  if (parsed === "") return "";
+  const number = Math.abs(parsed);
   const code = String(currency || "UZS").toUpperCase();
   const digits = FRACTION_DIGITS_BY_CURRENCY[code] || 0;
-  return digits ? number / Math.pow(10, digits) : number;
+  const explicitUnit = String(amountUnit || "").toUpperCase();
+  const looksMajor = explicitUnit === "MAJOR" || (!explicitUnit && String(value).match(/[.,]/));
+  return digits && !looksMajor ? number / Math.pow(10, digits) : number;
 }
 
 function sheetAmount_(payload) {
   if (payload.sheetAmount !== null && payload.sheetAmount !== undefined && payload.sheetAmount !== "") {
-    const normalized = Math.abs(Number(payload.sheetAmount));
-    return Number.isFinite(normalized) ? normalized : payload.sheetAmount;
+    return amountAbs_(payload.sheetAmount, payload.currency, "MAJOR");
   }
   const values = Array.prototype.slice.call(arguments, 1);
-  return amountAbs_(firstValue_.apply(null, values), payload.currency);
+  return amountAbs_(firstValue_.apply(null, values), payload.currency, payload.amountUnit);
 }
 
 function applyMoneyFormat_(sheet, row, payload) {
@@ -393,8 +435,14 @@ if (typeof module !== "undefined" && module.exports) {
     COLUMN,
     SHEET_BY_BRANCH_CODE,
     buildLegacyRow_,
+    buildOrderRow,
+    buildDoplataRow,
+    buildExpenseRow,
+    buildSalaryRow,
+    buildInkassaRow,
     formatPlaces_,
     amountAbs_,
+    parseNumber_,
     sheetAmount_,
   };
 }

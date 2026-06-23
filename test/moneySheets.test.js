@@ -15,6 +15,8 @@ test("decimal currency minor units normalize to exact Google Sheets major number
     [214.29, "RUB", 214.29],
     [123.45, "USD", 123.45],
     [99.5, "EUR", 99.5],
+    [17.39, "TJS", 17.39],
+    [125.75, "KZT", 125.75],
     [250000, "UZS", 250000],
   ];
 
@@ -46,6 +48,8 @@ test("NEW_ORDER keeps baggage places, check and period in their own columns", ()
   assert.equal(row[COLUMN.CHECK - 1], "TIA-1001");
   assert.equal(row[COLUMN.PERIOD - 1], "75 soat");
   assert.equal(row[COLUMN.CASH_RUB - 1], 214.29);
+  assert.equal(row[COLUMN.NAME - 1], "Хранение багажа");
+  assert.equal(row.length, 22);
   assert.doesNotMatch(row[COLUMN.PLACE - 1], /#/);
 });
 
@@ -88,13 +92,20 @@ test("EXPENSE, SALARY and INKASSA map only to their financial blocks", () => {
   assert.equal(salaryRow[COLUMN.NAME - 1], "Oylik - Ali");
   assert.equal(inkassaRow[COLUMN.BALANCE_USD - 1], 123.45);
   assert.equal(inkassaRow[COLUMN.EXPENSE - 1], "");
-  assert.equal(inkassaRow[COLUMN.NAME - 1], "Inkassa - USD");
+  assert.equal(inkassaRow[COLUMN.NAME - 1], "Inkassa USD - Bosh kassir");
   assert.deepEqual(inkassaRow.slice(COLUMN.CASH_UZS - 1, COLUMN.TERMINAL), new Array(9).fill(""));
   assert.deepEqual(salaryRow.slice(COLUMN.CASH_UZS - 1, COLUMN.TERMINAL), new Array(9).fill(""));
 });
 
-test("INKASSA currencies use O-R only and never F-K revenue columns", () => {
-  const expectedColumns = { UZS: COLUMN.BALANCE_UZS, USD: COLUMN.BALANCE_USD, EUR: COLUMN.BALANCE_EUR, RUB: COLUMN.BALANCE_RUB };
+test("INKASSA currencies use O-T only and never F-N revenue columns", () => {
+  const expectedColumns = {
+    UZS: COLUMN.BALANCE_UZS,
+    USD: COLUMN.BALANCE_USD,
+    EUR: COLUMN.BALANCE_EUR,
+    RUB: COLUMN.BALANCE_RUB,
+    KZT: COLUMN.BALANCE_KZT,
+    TJS: COLUMN.BALANCE_TJS,
+  };
   for (const [currency, column] of Object.entries(expectedColumns)) {
     const payload = sheets._internals.inkassaPayload({
       id: `inkassa-${currency}`,
@@ -115,6 +126,8 @@ test("orders and doplata alone can write F-K, Click, Payme and Terminal revenue 
     ["CASH", "USD", COLUMN.CASH_USD],
     ["CASH", "EUR", COLUMN.CASH_EUR],
     ["CASH", "RUB", COLUMN.CASH_RUB],
+    ["CASH", "KZT", COLUMN.CASH_KZT],
+    ["CASH", "TJS", COLUMN.CASH_TJS],
     ["CLICK", "UZS", COLUMN.CLICK],
     ["PAYME", "UZS", COLUMN.PAYME],
     ["TERMINAL", "UZS", COLUMN.TERMINAL],
@@ -133,6 +146,78 @@ test("orders and doplata alone can write F-K, Click, Payme and Terminal revenue 
     const row = appsScript.buildLegacyRow_(payload);
     assert.equal(row[column - 1], currency === "UZS" ? 1000 : 10.25);
   }
+});
+
+test("each action builder returns an exact A:V row with isolated financial columns", () => {
+  const common = { createdAt: "2026-06-23T10:00:00+05:00", sheetAmount: "214,29", currency: "RUB" };
+  const order = appsScript.buildOrderRow({
+    ...common,
+    action: "NEW_ORDER",
+    clientName: "Ali",
+    orderNumber: "TIA-22",
+    lockers: [{ size: "S", count: 1 }],
+    period: "3 soat",
+    paymentType: "CASH",
+  });
+  const doplata = appsScript.buildDoplataRow({
+    ...common,
+    action: "DOPLATA",
+    clientName: "Ali",
+    orderNumber: "TIA-22",
+    doplataPeriod: "ДОПЛАТА 3ч",
+    paymentType: "PAYME",
+  });
+  const expense = appsScript.buildExpenseRow({
+    action: "EXPENSE",
+    createdAt: common.createdAt,
+    category: "Internet",
+    reason: "oylik to'lov",
+    adminName: "Admin",
+    currency: "UZS",
+    sheetAmount: "60 000",
+  });
+  const salary = appsScript.buildSalaryRow({
+    action: "SALARY",
+    createdAt: common.createdAt,
+    salaryReceiver: "Vali",
+    currency: "UZS",
+    sheetAmount: 250000,
+  });
+  const inkassa = appsScript.buildInkassaRow({
+    action: "INKASSA",
+    createdAt: common.createdAt,
+    receiverName: "Murod aka",
+    currency: "RUB",
+    sheetAmount: "214,29",
+  });
+
+  for (const row of [order, doplata, expense, salary, inkassa]) assert.equal(row.length, 22);
+  assert.equal(order[COLUMN.CASH_RUB - 1], 214.29);
+  assert.equal(doplata[COLUMN.PAYME - 1], 214.29);
+  assert.equal(doplata[COLUMN.PERIOD - 1], "ДОПЛАТА 3ч");
+  assert.equal(expense[COLUMN.FIO - 1], "Admin");
+  assert.equal(expense[COLUMN.EXPENSE - 1], 60000);
+  assert.equal(expense[COLUMN.NAME - 1], "Internet - oylik to'lov");
+  assert.equal(salary[COLUMN.EXPENSE - 1], 250000);
+  assert.equal(salary[COLUMN.CHECK - 1], "");
+  assert.equal(salary[COLUMN.PERIOD - 1], "");
+  assert.equal(inkassa[COLUMN.BALANCE_RUB - 1], 214.29);
+  assert.equal(inkassa[COLUMN.EXPENSE - 1], "");
+  assert.equal(inkassa[COLUMN.NAME - 1], "Inkassa RUB - Murod aka");
+  assert.deepEqual(expense.slice(COLUMN.CASH_UZS - 1, COLUMN.TERMINAL), new Array(9).fill(""));
+  assert.deepEqual(salary.slice(COLUMN.BALANCE_UZS - 1, COLUMN.BALANCE_TJS), new Array(6).fill(""));
+  assert.deepEqual(inkassa.slice(COLUMN.CASH_UZS - 1, COLUMN.TERMINAL), new Array(9).fill(""));
+});
+
+test("localized decimal strings stay decimals instead of becoming 100x larger", () => {
+  assert.equal(appsScript.parseNumber_("214,29"), 214.29);
+  assert.equal(appsScript.parseNumber_("17,39"), 17.39);
+  assert.equal(appsScript.parseNumber_("250 000"), 250000);
+  assert.equal(appsScript.amountAbs_(21429, "RUB"), 214.29);
+  assert.equal(appsScript.amountAbs_("214,29", "RUB"), 214.29);
+  assert.equal(sheets._internals.sheetAmount(21429, "RUB"), 214.29);
+  assert.equal(sheets._internals.sheetAmount("214,29", "RUB"), 214.29);
+  assert.equal(sheets._internals.sheetAmount("17,39", "TJS"), 17.39);
 });
 
 test("all five branch codes build every supported Sheets action", () => {

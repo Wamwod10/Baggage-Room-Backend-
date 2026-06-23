@@ -9,6 +9,7 @@
     "start": "node src/server.js",
     "build": "prisma generate",
     "test": "node --require dotenv/config test/run.js",
+    "test:sheets:real": "node scripts/googleSheetsRealMappingTest.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:deploy": "prisma migrate deploy",

@@ -39,9 +39,16 @@ GOOGLE_SHEET_WEBHOOK="Google Apps Script Web App URL"
 ```
 
 The Apps Script webhook template is in `scripts/googleSheetsAppsScript.js`.
-It writes `NEW_ORDER`, `EXPENSE`, and `SALARY` events, does not use
-`appendRow()`, writes after the last real data row, and skips duplicate events
-by `idempotencyKey`.
+It writes `NEW_ORDER`, `DOPLATA`, `EXPENSE`, `SALARY`, and `INKASSA` events
+as exact 22-cell A:V rows. It does not use `appendRow()`, writes after the last
+real data row, and skips duplicate events by `idempotencyKey`.
+
+After changing the template, publish a new Apps Script Web App deployment
+version. Run the labeled 11-case live smoke test with:
+
+```bash
+npm run test:sheets:real
+```
 
 ## Local Run
 

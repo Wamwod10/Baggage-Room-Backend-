@@ -128,7 +128,14 @@ const formatBaggagePlaces = (items = []) =>
 
 const sheetAmount = (amount, currency) => {
   if (amount === null || amount === undefined || amount === "") return null;
-  return normalizeCurrencyAmount(amount, currency || "UZS");
+  const isExplicitMajor = (typeof amount === "number" && !Number.isInteger(amount))
+    || (typeof amount === "string" && /[.,]/.test(amount));
+  if (isExplicitMajor) {
+    const major = Number(String(amount).trim().replace(/[\s\u00a0\u202f]/g, "").replace(",", "."));
+    if (!Number.isFinite(major)) throw new TypeError("Invalid currency amount");
+    return Math.abs(major);
+  }
+  return Math.abs(normalizeCurrencyAmount(amount, currency || "UZS"));
 };
 
 const orderPayload = (action, order, overrides = {}) => {
@@ -338,6 +345,9 @@ const sendDoplata = (order) =>
     currency: order?.overtimeCurrency || order?.currency || "UZS",
     paymentType: order?.overtimePaymentType || order?.paymentType || "CASH",
     checkOut: toIso(order?.realPickupTime || order?.updatedAt),
+    period: `ДОПЛАТА ${Number(order?.overtimeHours || 0)}ч`,
+    doplataPeriod: `ДОПЛАТА ${Number(order?.overtimeHours || 0)}ч`,
+    operationName: "Доплата",
     note: "DOPLATA",
   }));
 
@@ -489,6 +499,8 @@ const inkassaPayload = (inkassa) => {
       USD: 16,
       EUR: 17,
       RUB: 18,
+      KZT: 19,
+      TJS: 20,
     },
     legacySheetTarget: {
       amountColumnByCurrency: {
@@ -496,6 +508,8 @@ const inkassaPayload = (inkassa) => {
         USD: 16,
         EUR: 17,
         RUB: 18,
+        KZT: 19,
+        TJS: 20,
       },
       nameColumn: 22,
     },
