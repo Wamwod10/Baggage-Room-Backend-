@@ -366,6 +366,11 @@ function findMonthSheet_(spreadsheet, payload) {
 }
 
 function getTargetSheet_(spreadsheet, branchCode, payload) {
+  // All operational rows belong to the current month tab. Branch-named tabs
+  // are dashboards/legacy views and must only be used when no month tab exists.
+  const monthSheet = findMonthSheet_(spreadsheet, payload || {});
+  if (monthSheet) return monthSheet;
+
   const exactName = SHEET_BY_BRANCH_CODE[branchCode];
   const exact = spreadsheet.getSheetByName(exactName);
   if (exact) return exact;
@@ -375,9 +380,6 @@ function getTargetSheet_(spreadsheet, branchCode, payload) {
     ? spreadsheet.getSheets().find(function (sheet) { return pattern.test(sheet.getName()); })
     : null;
   if (existing) return existing;
-
-  const monthSheet = findMonthSheet_(spreadsheet, payload || {});
-  if (monthSheet) return monthSheet;
 
   throw new Error(
     "Target sheet was not found for " + branchCode +
@@ -743,6 +745,7 @@ if (typeof module !== "undefined" && module.exports) {
     SHEETS,
     SHEET_BY_BRANCH_CODE,
     normalizeBranchCode_,
+    getTargetSheet_,
     findMonthSheet_,
     headerStructureScore_,
     rankMonthSheets_,
