@@ -212,7 +212,7 @@ test("backend accepts only versioned 22-column INKASSA webhook results", () => {
   );
 });
 
-test("Janubiy vokzal aliases normalize to TJV and use its dedicated spreadsheet", () => {
+test("all branch mappings use their dedicated spreadsheets and Janubiy aliases normalize to TJV", () => {
   const aliases = [
     "TJV",
     "TJV ",
@@ -226,11 +226,15 @@ test("Janubiy vokzal aliases normalize to TJV and use its dedicated spreadsheet"
     assert.equal(sheets._internals.normalizeBranchCode(alias), "TJV");
     assert.equal(appsScript.normalizeBranchCode_(alias), "TJV");
   }
-  assert.equal(appsScript.SHEETS.TJV, "10-h62nZAEp-puvFF_MurFu1UE0Xdjdx5Qtlv3Qpd0L8");
-  assert.equal(
-    sheets._internals.EXPECTED_SPREADSHEET_ID_BY_BRANCH_CODE.TJV,
-    "10-h62nZAEp-puvFF_MurFu1UE0Xdjdx5Qtlv3Qpd0L8",
-  );
+  const expectedSheets = {
+    TIA: "1-RSJgecVrUUGzWK6XYpgK6J0pU0fuT5jckbXoiFCoD8",
+    TSV: "1SVo_flWiAntj2dCMBh60rMYVnIr8oU6pq6fpp90hvr8",
+    TJV: "10-h62nZAEp-puvFF_MurFu1UE0Xdjdx5Qtlv3Qpd0L8",
+    SVK: "1Kjr8XWvkVqI2fFpaakMFCvRHI-T-cVX4W6YpDPPF444",
+    SIA: "1VwtK7HcKA58o8X7Ttdn9fNvm88oea4TKDuSAPBquvBI",
+  };
+  assert.deepEqual(appsScript.SHEETS, expectedSheets);
+  assert.deepEqual(sheets._internals.EXPECTED_SPREADSHEET_ID_BY_BRANCH_CODE, expectedSheets);
   const maskedWebhook = sheets._internals.maskWebhookUrl("https://script.google.com/macros/s/1234567890abcdefghijkl/exec");
   assert.equal(maskedWebhook.slice(-20), "67890abcdefghijkl/exec".slice(-20));
   assert.doesNotMatch(maskedWebhook.slice(0, -20), /script\.google/);

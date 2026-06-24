@@ -20,7 +20,11 @@ const SHEET_BY_BRANCH_CODE = {
 // Every branch must resolve to an explicit spreadsheet ID. Additional branch
 // IDs can be configured as Apps Script properties: SPREADSHEET_ID_TIA, etc.
 const SHEETS = {
+  TIA: "1-RSJgecVrUUGzWK6XYpgK6J0pU0fuT5jckbXoiFCoD8",
+  TSV: "1SVo_flWiAntj2dCMBh60rMYVnIr8oU6pq6fpp90hvr8",
   TJV: "10-h62nZAEp-puvFF_MurFu1UE0Xdjdx5Qtlv3Qpd0L8",
+  SVK: "1Kjr8XWvkVqI2fFpaakMFCvRHI-T-cVX4W6YpDPPF444",
+  SIA: "1VwtK7HcKA58o8X7Ttdn9fNvm88oea4TKDuSAPBquvBI",
 };
 
 const SHEET_NAME_PATTERN_BY_BRANCH_CODE = {
@@ -116,12 +120,13 @@ function doPost(e) {
     lock.waitLock(30000);
     try {
       spreadsheet = getSpreadsheet_(branchCode);
-      sheet = getOrCreateSheet_(spreadsheet, branchCode);
+      sheet = getTargetSheet_(spreadsheet, branchCode, payload);
       console.log("[GoogleSheets] spreadsheetOpened " + JSON.stringify({
         branchCode,
         spreadsheetId: spreadsheet.getId(),
         spreadsheetName: spreadsheet.getName(),
         sheetName: sheet.getName(),
+        sheetId: sheet.getSheetId(),
       }));
       ensureColumns_(sheet, IDEMPOTENCY_COLUMN);
 
@@ -135,6 +140,7 @@ function doPost(e) {
           spreadsheetId: spreadsheet.getId(),
           spreadsheetName: spreadsheet.getName(),
           sheetName: sheet.getName(),
+          sheetId: sheet.getSheetId(),
           duplicate: true,
           idempotencyKey,
         });
@@ -164,6 +170,7 @@ function doPost(e) {
         spreadsheetId: spreadsheet.getId(),
         spreadsheetName: spreadsheet.getName(),
         sheetName: sheet.getName(),
+        sheetId: sheet.getSheetId(),
         row: targetRow,
         idempotencyKey,
         finalRow: row,
@@ -181,6 +188,7 @@ function doPost(e) {
       spreadsheetId: spreadsheet ? spreadsheet.getId() : null,
       spreadsheetName: spreadsheet ? spreadsheet.getName() : null,
       sheetName: sheet ? sheet.getName() : null,
+      sheetId: sheet ? sheet.getSheetId() : null,
       error: error.message,
     });
   }
@@ -207,8 +215,10 @@ function getSpreadsheet_(branchCode) {
   const propertyId = typeof PropertiesService !== "undefined"
     ? PropertiesService.getScriptProperties().getProperty(propertyKey)
     : null;
-  const spreadsheetId = SHEETS[branchCode] || propertyId;
-  if (!spreadsheetId) throw new Error("Spreadsheet ID is not configured for " + branchCode);
+  const spreadsheetId = SHEETS[branchCode] || propertyId || discoverSpreadsheetId_(branchCode);
+  if (!spreadsheetId) {
+    throw new Error("Spreadsheet ID is not configured for " + branchCode + ". Set " + propertyKey + " in Apps Script properties.");
+  }
   const spreadsheet = SpreadsheetApp.openById(spreadsheetId);
   if (!spreadsheet || spreadsheet.getId() !== spreadsheetId) {
     throw new Error("Failed to open configured spreadsheet for " + branchCode);
@@ -216,7 +226,145 @@ function getSpreadsheet_(branchCode) {
   return spreadsheet;
 }
 
-function getOrCreateSheet_(spreadsheet, branchCode) {
+function discoverSpreadsheetId_(branchCode) {
+  const expectedName = SHEET_BY_BRANCH_CODE[branchCode];
+  if (!expectedName || typeof DriveApp === "undefined") return null;
+
+  const files = DriveApp.getFilesByName(expectedName);
+  const ids = [];
+  while (files.hasNext()) {
+    const file = files.next();
+    if (file.getMimeType() === MimeType.GOOGLE_SHEETS) ids.push(file.getId());
+  }
+  if (ids.length > 1) {
+    throw new Error(
+      "Multiple spreadsheets named '" + expectedName + "' are accessible for " + branchCode +
+      ". Set SPREADSHEET_ID_" + branchCode + " explicitly. Matches: " + ids.join(", "),
+    );
+  }
+  if (ids.length === 0) return null;
+  console.log("[GoogleSheets] spreadsheetDiscovered " + JSON.stringify({
+    branchCode,
+    spreadsheetId: ids[0],
+    spreadsheetName: expectedName,
+  }));
+  return ids[0];
+}
+
+const MONTH_NAME_PARTS = [
+  ["\u044f\u043d\u0432\u0430\u0440", "yanvar", "january"],
+  ["\u0444\u0435\u0432\u0440\u0430\u043b", "fevral", "february"],
+  ["\u043c\u0430\u0440\u0442", "mart", "march"],
+  ["\u0430\u043f\u0440\u0435\u043b", "aprel", "april"],
+  ["\u043c\u0430\u0439", "may"],
+  ["\u0438\u044e\u043d", "iyun", "june"],
+  ["\u0438\u044e\u043b", "iyul", "july"],
+  ["\u0430\u0432\u0433\u0443\u0441\u0442", "avgust", "august"],
+  ["\u0441\u0435\u043d\u0442\u044f\u0431\u0440", "sentabr", "september"],
+  ["\u043e\u043a\u0442\u044f\u0431\u0440", "oktabr", "october"],
+  ["\u043d\u043e\u044f\u0431\u0440", "noyabr", "november"],
+  ["\u0434\u0435\u043a\u0430\u0431\u0440", "dekabr", "december"],
+];
+
+const MONTH_EXACT_NAMES = [
+  ["\u044f\u043d\u0432\u0430\u0440\u044c", "yanvar", "january"],
+  ["\u0444\u0435\u0432\u0440\u0430\u043b\u044c", "fevral", "february"],
+  ["\u043c\u0430\u0440\u0442", "mart", "march"],
+  ["\u0430\u043f\u0440\u0435\u043b\u044c", "aprel", "april"],
+  ["\u043c\u0430\u0439", "may"],
+  ["\u0438\u044e\u043d\u044c", "iyun", "june"],
+  ["\u0438\u044e\u043b\u044c", "iyul", "july"],
+  ["\u0430\u0432\u0433\u0443\u0441\u0442", "avgust", "august"],
+  ["\u0441\u0435\u043d\u0442\u044f\u0431\u0440\u044c", "sentabr", "september"],
+  ["\u043e\u043a\u0442\u044f\u0431\u0440\u044c", "oktabr", "october"],
+  ["\u043d\u043e\u044f\u0431\u0440\u044c", "noyabr", "november"],
+  ["\u0434\u0435\u043a\u0430\u0431\u0440\u044c", "dekabr", "december"],
+];
+
+function normalizeSheetTitle_(value) {
+  return String(value || "").toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function normalizeHeader_(value) {
+  return normalizeSheetTitle_(value).replace(/[.№:#()_\-]/g, "").replace(/\s+/g, " ").trim();
+}
+
+function headerStructureScore_(sheet) {
+  const rowCount = Math.max(1, Math.min(12, sheet.getMaxRows()));
+  const values = sheet.getRange(1, 1, rowCount, COLUMN.EXPENSE).getDisplayValues();
+  const expected = [
+    { column: COLUMN.DATE, value: "\u0434\u0430\u0442\u0430" },
+    { column: COLUMN.FIO, value: "\u0444\u0438\u043e" },
+    { column: COLUMN.CASH_UZS, value: "\u0432 \u043a\u0430\u0441\u0441\u0443" },
+    { column: COLUMN.EXPENSE, value: "\u0440\u0430\u0441\u0445\u043e\u0434" },
+  ];
+  return expected.reduce(function (score, item) {
+    const found = values.some(function (row) {
+      const header = normalizeHeader_(row[item.column - 1]);
+      return header === item.value || header.indexOf(item.value) !== -1;
+    });
+    return score + (found ? 1 : 0);
+  }, 0);
+}
+
+function rankMonthSheets_(sheets) {
+  return sheets.map(function (sheet) {
+    return {
+      sheet,
+      headerScore: headerStructureScore_(sheet),
+      lastRow: sheet.getLastRow(),
+      maxRows: sheet.getMaxRows(),
+      sheetId: sheet.getSheetId(),
+    };
+  }).sort(function (left, right) {
+    return right.headerScore - left.headerScore ||
+      right.lastRow - left.lastRow ||
+      right.maxRows - left.maxRows ||
+      left.sheetId - right.sheetId;
+  });
+}
+
+function findMonthSheet_(spreadsheet, payload) {
+  const candidateDate = new Date(payload.createdAt || payload.date || Date.now());
+  const validDate = Number.isNaN(candidateDate.getTime()) ? new Date() : candidateDate;
+  const tokens = MONTH_NAME_PARTS[validDate.getMonth()];
+  const sheets = spreadsheet.getSheets();
+  const matches = sheets.filter(function (candidate) {
+    const name = normalizeSheetTitle_(candidate.getName());
+    return tokens.some(function (token) { return name.indexOf(token) !== -1; });
+  });
+  if (matches.length === 0) return null;
+  if (matches.length === 1) return matches[0];
+
+  const year = String(validDate.getFullYear());
+  const exactNames = MONTH_EXACT_NAMES[validDate.getMonth()];
+  for (let index = 0; index < exactNames.length; index += 1) {
+    const exactTitle = normalizeSheetTitle_(exactNames[index] + " " + year);
+    const exact = matches.find(function (candidate) {
+      return normalizeSheetTitle_(candidate.getName()) === exactTitle;
+    });
+    if (exact) return exact;
+  }
+
+  const ranked = rankMonthSheets_(matches);
+  const selected = ranked[0].sheet;
+  console.log("[GoogleSheets] monthSheetSelected " + JSON.stringify({
+    selectedSheetName: selected.getName(),
+    selectedSheetId: selected.getSheetId(),
+    candidates: ranked.map(function (item) {
+      return {
+        sheetName: item.sheet.getName(),
+        sheetId: item.sheetId,
+        headerScore: item.headerScore,
+        lastRow: item.lastRow,
+        maxRows: item.maxRows,
+      };
+    }),
+  }));
+  return selected;
+}
+
+function getTargetSheet_(spreadsheet, branchCode, payload) {
   const exactName = SHEET_BY_BRANCH_CODE[branchCode];
   const exact = spreadsheet.getSheetByName(exactName);
   if (exact) return exact;
@@ -225,7 +373,16 @@ function getOrCreateSheet_(spreadsheet, branchCode) {
   const existing = pattern
     ? spreadsheet.getSheets().find(function (sheet) { return pattern.test(sheet.getName()); })
     : null;
-  return existing || spreadsheet.insertSheet(exactName);
+  if (existing) return existing;
+
+  const monthSheet = findMonthSheet_(spreadsheet, payload || {});
+  if (monthSheet) return monthSheet;
+
+  throw new Error(
+    "Target sheet was not found for " + branchCode +
+    ". Expected branch sheet or current month (including \u0418\u044e\u043d\u044c/Iyun). Available sheets: " +
+    spreadsheet.getSheets().map(function (candidate) { return candidate.getName(); }).join(", "),
+  );
 }
 
 function ensureColumns_(sheet, minColumns) {
@@ -553,6 +710,9 @@ if (typeof module !== "undefined" && module.exports) {
     SHEETS,
     SHEET_BY_BRANCH_CODE,
     normalizeBranchCode_,
+    findMonthSheet_,
+    headerStructureScore_,
+    rankMonthSheets_,
     buildLegacyRow_,
     buildNewOrderRow,
     buildDoplataRow,

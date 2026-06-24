@@ -7,7 +7,11 @@ const sheetMapper = require("../../scripts/googleSheetsAppsScript");
 const TIMEOUT_MS = Number(process.env.GOOGLE_SHEETS_TIMEOUT_MS || 15000);
 const EXPECTED_SCRIPT_VERSION = sheetMapper.SCRIPT_VERSION;
 const EXPECTED_SPREADSHEET_ID_BY_BRANCH_CODE = {
+  TIA: "1-RSJgecVrUUGzWK6XYpgK6J0pU0fuT5jckbXoiFCoD8",
+  TSV: "1SVo_flWiAntj2dCMBh60rMYVnIr8oU6pq6fpp90hvr8",
   TJV: "10-h62nZAEp-puvFF_MurFu1UE0Xdjdx5Qtlv3Qpd0L8",
+  SVK: "1Kjr8XWvkVqI2fFpaakMFCvRHI-T-cVX4W6YpDPPF444",
+  SIA: "1VwtK7HcKA58o8X7Ttdn9fNvm88oea4TKDuSAPBquvBI",
 };
 
 const branchNameByCode = {
@@ -55,6 +59,13 @@ const summarizeWebhookBody = (body) => String(body || "")
   .replace(/\s+/g, " ")
   .trim()
   .slice(0, 500);
+const webhookError = (message, { status = null, body = null, json = null } = {}) => {
+  const error = new Error(message);
+  error.webhookStatus = status;
+  error.webhookBody = body;
+  error.webhookJson = json;
+  return error;
+};
 const isEnabled = () => ["true", "1", "yes", "on"].includes(String(enabledValue()).toLowerCase()) && Boolean(getWebhookUrl());
 const DELIVERABLE_ACTIONS = new Set(["NEW_ORDER", "DOPLATA", "EXPENSE", "INKASSA", "SALARY"]);
 const shouldDeliver = (payload) => DELIVERABLE_ACTIONS.has(String(payload?.action || "").toUpperCase());
@@ -355,6 +366,8 @@ const postWebhook = async (payload) => {
       responseParseError = `Non-JSON Google Sheets response: ${summarizeWebhookBody(responseBody) || error.message}`;
     }
     logger.info("[GoogleSheets] response", {
+      status: response.status,
+      body: json || summarizeWebhookBody(responseBody),
       success: json?.success === true || json?.ok === true,
       scriptVersion: json?.scriptVersion || null,
       branchCode: json?.branchCode || null,
@@ -365,11 +378,24 @@ const postWebhook = async (payload) => {
       error: json?.error || (!response.ok ? `HTTP ${response.status}: ${summarizeWebhookBody(responseBody)}` : responseParseError),
     });
     if (!response.ok) {
-      throw new Error(`Google Sheets webhook failed: HTTP ${response.status}: ${json?.error || summarizeWebhookBody(responseBody) || "empty response"}`);
+      throw webhookError(
+        `Google Sheets webhook failed: HTTP ${response.status}: ${json?.error || summarizeWebhookBody(responseBody) || "empty response"}`,
+        { status: response.status, body: responseBody, json },
+      );
     }
-    if (!json) throw new Error(responseParseError || "Google Sheets webhook returned an empty response");
+    if (!json) {
+      throw webhookError(responseParseError || "Google Sheets webhook returned an empty response", {
+        status: response.status,
+        body: responseBody,
+        json,
+      });
+    }
     if (json && (json.success === false || json.ok === false || json.error || ["error", "failed", "fail"].includes(String(json.status || "").toLowerCase()))) {
-      throw new Error(`Google Sheets webhook rejected payload: ${responseBody}`);
+      throw webhookError(`Google Sheets webhook rejected payload: ${responseBody}`, {
+        status: response.status,
+        body: responseBody,
+        json,
+      });
     }
     const verified = validateWebhookResult(payload, json, finalRow);
     logger.info("[GoogleSheets] success", deliveryLogMeta(payload, {
@@ -380,6 +406,7 @@ const postWebhook = async (payload) => {
     }));
     return {
       ok: true,
+      status: response.status,
       response: responseBody,
       responseJson: json,
       finalRow: verified.row,
@@ -474,7 +501,14 @@ const sendSafely = async (delivery, { action = "UNKNOWN", branchId = null, userI
         },
       })
       .catch((auditError) => logger.warn("Google Sheets audit write failed", { message: auditError.message }));
-    return { skipped: true, error: error.message };
+    return {
+      skipped: true,
+      error: error.message,
+      status: error.webhookStatus ?? null,
+      response: error.webhookBody ?? null,
+      responseJson: error.webhookJson ?? null,
+      scriptVersion: error.webhookJson?.scriptVersion || null,
+    };
   }
 };
 
@@ -844,6 +878,7 @@ const sendTestEvent = async (user, body) => {
   return {
     action,
     branchCode: code,
+    status: result?.status ?? null,
     success: Boolean(result?.ok),
     sent: Boolean(result?.ok),
     scriptVersion: result?.scriptVersion || result?.responseJson?.scriptVersion || null,
