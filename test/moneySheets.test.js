@@ -169,7 +169,7 @@ test("backend accepts only versioned 22-column INKASSA webhook results", () => {
   const row = appsScript.buildInkassaRow(payload);
   const result = sheets._internals.validateWebhookResult(payload, {
     success: true,
-    scriptVersion: "v4-final-sheets-mapping-2026-06-24",
+    scriptVersion: "v5-month-tab-only-no-w-2026-06-25",
     branchCode: "TJV",
     spreadsheetId: "10-h62nZAEp-puvFF_MurFu1UE0Xdjdx5Qtlv3Qpd0L8",
     spreadsheetName: "Toshkent Janubiy vokzal",
@@ -177,8 +177,8 @@ test("backend accepts only versioned 22-column INKASSA webhook results", () => {
     row: 1885,
   });
 
-  assert.equal(appsScript.SCRIPT_VERSION, "v4-final-sheets-mapping-2026-06-24");
-  assert.equal(result.scriptVersion, "v4-final-sheets-mapping-2026-06-24");
+  assert.equal(appsScript.SCRIPT_VERSION, "v5-month-tab-only-no-w-2026-06-25");
+  assert.equal(result.scriptVersion, "v5-month-tab-only-no-w-2026-06-25");
   assert.equal(result.row[14], 500000);
   assert.deepEqual(result.row.slice(5, 14), new Array(9).fill(""));
   assert.throws(
@@ -188,7 +188,7 @@ test("backend accepts only versioned 22-column INKASSA webhook results", () => {
   assert.throws(
     () => sheets._internals.validateWebhookResult(payload, {
       success: true,
-      scriptVersion: "v4-final-sheets-mapping-2026-06-24",
+      scriptVersion: "v5-month-tab-only-no-w-2026-06-25",
       branchCode: "TJV",
       row: 1885,
     }),
@@ -200,7 +200,7 @@ test("backend accepts only versioned 22-column INKASSA webhook results", () => {
   assert.throws(
     () => sheets._internals.validateWebhookResult(payload, {
       success: true,
-      scriptVersion: "v4-final-sheets-mapping-2026-06-24",
+      scriptVersion: "v5-month-tab-only-no-w-2026-06-25",
       branchCode: "TJV",
       spreadsheetId: "10-h62nZAEp-puvFF_MurFu1UE0Xdjdx5Qtlv3Qpd0L8",
       spreadsheetName: "Toshkent Janubiy vokzal",

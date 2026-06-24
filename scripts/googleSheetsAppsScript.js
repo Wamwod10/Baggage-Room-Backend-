@@ -36,7 +36,7 @@ const SHEET_NAME_PATTERN_BY_BRANCH_CODE = {
 };
 
 const WRITABLE_ACTIONS = new Set(["NEW_ORDER", "DOPLATA", "EXPENSE", "INKASSA", "SALARY"]);
-const SCRIPT_VERSION = "v4-final-sheets-mapping-2026-06-24";
+const SCRIPT_VERSION = "v5-month-tab-only-no-w-2026-06-25";
 const LEGACY_WIDTH = 22; // A:V
 const LEGACY_TECHNICAL_COLUMN = 23; // W; cleaned once and never written again
 
@@ -366,24 +366,14 @@ function findMonthSheet_(spreadsheet, payload) {
 }
 
 function getTargetSheet_(spreadsheet, branchCode, payload) {
-  // All operational rows belong to the current month tab. Branch-named tabs
-  // are dashboards/legacy views and must only be used when no month tab exists.
+  // All operational rows belong to the current month tab. Never fall back to
+  // branch dashboards or create a new tab: a missing month tab is an error.
   const monthSheet = findMonthSheet_(spreadsheet, payload || {});
   if (monthSheet) return monthSheet;
 
-  const exactName = SHEET_BY_BRANCH_CODE[branchCode];
-  const exact = spreadsheet.getSheetByName(exactName);
-  if (exact) return exact;
-
-  const pattern = SHEET_NAME_PATTERN_BY_BRANCH_CODE[branchCode];
-  const existing = pattern
-    ? spreadsheet.getSheets().find(function (sheet) { return pattern.test(sheet.getName()); })
-    : null;
-  if (existing) return existing;
-
   throw new Error(
-    "Target sheet was not found for " + branchCode +
-    ". Expected branch sheet or current month (including \u0418\u044e\u043d\u044c/Iyun). Available sheets: " +
+    "Current month sheet was not found for " + branchCode +
+    ". Expected a month tab such as \u0418\u044e\u043d\u044c 2026 or Iyun 2026. Available sheets: " +
     spreadsheet.getSheets().map(function (candidate) { return candidate.getName(); }).join(", "),
   );
 }
