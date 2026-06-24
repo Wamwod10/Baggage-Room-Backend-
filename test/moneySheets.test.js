@@ -120,6 +120,71 @@ test("EXPENSE, SALARY and INKASSA map only to their financial blocks", () => {
   assert.deepEqual(salaryRow.slice(COLUMN.CASH_UZS - 1, COLUMN.TERMINAL), new Array(9).fill(""));
 });
 
+test("EXPENSE and INKASSA preserve every source field in the full-data block", () => {
+  const createdAt = "2026-06-23T10:11:12+05:00";
+  const createdBy = { id: "user-1", name: "Ali Admin", login: "ali.admin" };
+  const branch = { id: "branch-1", code: "TIA", name: "Toshkent aeroport" };
+  const expense = sheets._internals.expensePayload({
+    id: "expense-full",
+    branchId: branch.id,
+    shiftId: "shift-1",
+    createdById: createdBy.id,
+    branch,
+    createdBy,
+    category: "Transport",
+    reason: "Aeroportga taxi",
+    amount: parseCurrency(99.5, "EUR"),
+    currency: "EUR",
+    createdAt,
+  });
+  const inkassa = sheets._internals.inkassaPayload({
+    id: "inkassa-full",
+    branchId: branch.id,
+    shiftId: "shift-1",
+    createdById: createdBy.id,
+    branch,
+    createdBy,
+    receiverName: "Bosh kassir",
+    note: "Kunlik topshiruv",
+    amount: parseCurrency(123.45, "USD"),
+    currency: "USD",
+    createdAt,
+  });
+
+  assert.deepEqual(expense.sourceData, {
+    id: "expense-full",
+    branchId: "branch-1",
+    branchCode: "TIA",
+    branchName: "Toshkent aeroport",
+    shiftId: "shift-1",
+    category: "Transport",
+    reason: "Aeroportga taxi",
+    amountMinor: 9950,
+    amount: 99.5,
+    currency: "EUR",
+    createdById: "user-1",
+    adminName: "Ali Admin",
+    adminLogin: "ali.admin",
+    createdAt: expense.createdAt,
+  });
+  assert.equal(inkassa.sourceData.receiverName, "Bosh kassir");
+  assert.equal(inkassa.sourceData.note, "Kunlik topshiruv");
+  assert.equal(inkassa.sourceData.amountMinor, 12345);
+  assert.equal(inkassa.sourceData.amount, 123.45);
+
+  const headerIndex = (name) => appsScript.FULL_DATA_HEADERS.indexOf(name);
+  for (const payload of [expense, inkassa]) {
+    const detailRow = appsScript.buildFullDataRow_(payload);
+    assert.equal(detailRow.length, appsScript.FULL_DATA_HEADERS.length);
+    assert.equal(detailRow[headerIndex("YOZUV ID")], payload.entityId);
+    assert.equal(detailRow[headerIndex("FILIAL ID")], "branch-1");
+    assert.equal(detailRow[headerIndex("SMENA ID")], "shift-1");
+    assert.equal(detailRow[headerIndex("ADMIN")], "Ali Admin");
+    assert.equal(detailRow[headerIndex("ADMIN LOGIN")], "ali.admin");
+    assert.deepEqual(JSON.parse(detailRow[headerIndex("TO'LIQ JSON")]), payload);
+  }
+});
+
 test("INKASSA currencies use O-T only and never F-N revenue columns", () => {
   const expectedColumns = {
     UZS: COLUMN.BALANCE_UZS,

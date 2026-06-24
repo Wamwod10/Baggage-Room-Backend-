@@ -26,8 +26,29 @@ const SHEET_NAME_PATTERN_BY_BRANCH_CODE = {
 };
 
 const WRITABLE_ACTIONS = new Set(["NEW_ORDER", "DOPLATA", "EXPENSE", "INKASSA", "SALARY"]);
+const FULL_DATA_ACTIONS = new Set(["EXPENSE", "INKASSA"]);
 const LEGACY_WIDTH = 22; // A:V
 const IDEMPOTENCY_COLUMN = 23; // hidden/helper column W
+const FULL_DATA_START_COLUMN = 24; // X
+const FULL_DATA_HEADERS = [
+  "AMAL",
+  "YOZUV ID",
+  "FILIAL ID",
+  "FILIAL KODI",
+  "FILIAL NOMI",
+  "SMENA ID",
+  "TURI / KATEGORIYA",
+  "QABUL QILUVCHI",
+  "IZOH / SABAB",
+  "SUMMA",
+  "VALYUTA",
+  "ADMIN ID",
+  "ADMIN",
+  "ADMIN LOGIN",
+  "YARATILGAN VAQT",
+  "TO'LIQ JSON",
+];
+const FULL_DATA_END_COLUMN = FULL_DATA_START_COLUMN + FULL_DATA_HEADERS.length - 1; // AM
 
 const COLUMN = {
   DATE: 1,
@@ -106,7 +127,8 @@ function doPost(e) {
     lock.waitLock(30000);
     try {
       const sheet = getOrCreateSheet_(branchCode);
-      ensureColumns_(sheet, IDEMPOTENCY_COLUMN);
+      ensureColumns_(sheet, FULL_DATA_ACTIONS.has(action) ? FULL_DATA_END_COLUMN : IDEMPOTENCY_COLUMN);
+      if (FULL_DATA_ACTIONS.has(action)) ensureFullDataHeaders_(sheet);
 
       const idempotencyKey = String(payload.idempotencyKey || buildIdempotencyKey_(payload));
       if (hasDuplicate_(sheet, idempotencyKey)) {
@@ -120,6 +142,11 @@ function doPost(e) {
       sheet.getRange(targetRow, COLUMN.PLACE).setNumberFormat("@");
       sheet.getRange(targetRow, 1, 1, LEGACY_WIDTH).setValues([row]);
       sheet.getRange(targetRow, IDEMPOTENCY_COLUMN).setValue(idempotencyKey);
+      if (FULL_DATA_ACTIONS.has(action)) {
+        sheet
+          .getRange(targetRow, FULL_DATA_START_COLUMN, 1, FULL_DATA_HEADERS.length)
+          .setValues([buildFullDataRow_(payload)]);
+      }
       applyMoneyFormat_(sheet, targetRow, payload);
       styleRow_(sheet, targetRow, action);
 
@@ -151,6 +178,17 @@ function ensureColumns_(sheet, minColumns) {
   if (currentColumns < minColumns) {
     sheet.insertColumnsAfter(currentColumns, minColumns - currentColumns);
   }
+}
+
+function ensureFullDataHeaders_(sheet) {
+  const headerRow = Math.max(1, legacyDataStartRow_(sheet) - 1);
+  const range = sheet.getRange(headerRow, FULL_DATA_START_COLUMN, 1, FULL_DATA_HEADERS.length);
+  const existing = range.getDisplayValues()[0];
+  const headers = FULL_DATA_HEADERS.map(function (header, index) {
+    return String(existing[index] || "").trim() || header;
+  });
+  range.setValues([headers]);
+  range.setFontWeight("bold");
 }
 
 function findNextOrderRow(sheet) {
@@ -311,6 +349,34 @@ function buildInkassaRow(payload) {
   return row;
 }
 
+function buildFullDataRow_(payload) {
+  const source = payload.sourceData || {};
+  const action = String(payload.action || "").toUpperCase();
+  const amount = sheetAmount_(payload, source.amount, payload.amount, payload.finalAmount);
+  const typeOrCategory = action === "EXPENSE"
+    ? (source.category || payload.category || "Xarajat")
+    : (payload.operationName || "INKASSA");
+
+  return [
+    action,
+    firstValue_(source.id, payload.entityId, payload.orderId),
+    firstValue_(source.branchId, payload.branchId),
+    firstValue_(source.branchCode, payload.branchCode),
+    firstValue_(source.branchName, payload.branchName, payload.branch),
+    firstValue_(source.shiftId, payload.shiftId),
+    typeOrCategory,
+    firstValue_(source.receiverName, payload.receiverName, payload.recipientName),
+    firstValue_(source.reason, source.note, payload.reason, payload.note),
+    amount,
+    firstValue_(source.currency, payload.currency),
+    firstValue_(source.createdById, payload.createdById),
+    firstValue_(source.adminName, payload.adminName),
+    firstValue_(source.adminLogin, payload.adminLogin),
+    firstValue_(source.createdAt, payload.createdAt),
+    JSON.stringify(payload),
+  ];
+}
+
 function parseNumber_(value) {
   if (value === null || value === undefined || value === "") return "";
   if (typeof value === "number") return Number.isFinite(value) ? value : "";
@@ -440,6 +506,9 @@ if (typeof module !== "undefined" && module.exports) {
     buildExpenseRow,
     buildSalaryRow,
     buildInkassaRow,
+    buildFullDataRow_,
+    FULL_DATA_HEADERS,
+    FULL_DATA_START_COLUMN,
     formatPlaces_,
     amountAbs_,
     parseNumber_,

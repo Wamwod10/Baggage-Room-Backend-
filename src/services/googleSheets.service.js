@@ -358,12 +358,34 @@ const sendDoplata = (order) =>
 const expensePayload = (expense) =>
   (() => {
     const expenseName = expense?.category || "Xarajat";
+    const adminName = expense?.createdBy?.name || expense?.createdBy?.login || expense?.adminName || null;
+    const adminLogin = expense?.createdBy?.login || expense?.adminLogin || null;
+    const createdAt = toIso(expense?.createdAt || new Date());
+    const sourceData = {
+      id: expense?.id || null,
+      branchId: expense?.branchId || expense?.branch?.id || null,
+      branchCode: branchCode(expense),
+      branchName: branchName(expense),
+      shiftId: expense?.shiftId || null,
+      category: expense?.category || null,
+      reason: expense?.reason || expense?.note || null,
+      amountMinor: expense?.amount ?? null,
+      amount: sheetAmount(expense?.amount, expense?.currency || "UZS"),
+      currency: expense?.currency || "UZS",
+      createdById: expense?.createdById || expense?.createdBy?.id || null,
+      adminName,
+      adminLogin,
+      createdAt,
+    };
     return withDeliveryMetadata({
       action: "EXPENSE",
       branchCode: branchCode(expense),
       branchName: branchName(expense),
       branch: branchName(expense),
       entityId: expense?.id || null,
+      branchId: sourceData.branchId,
+      shiftId: sourceData.shiftId,
+      createdById: sourceData.createdById,
       orderNumber: "",
       checkNumber: "",
       checkNo: "",
@@ -393,8 +415,10 @@ const expensePayload = (expense) =>
       legacySheetTarget: {
         nameColumn: 22,
       },
-      adminName: expense?.createdBy?.name || expense?.createdBy?.login || expense?.adminName || null,
-      createdAt: toIso(expense?.createdAt || new Date()),
+      adminName,
+      adminLogin,
+      sourceData,
+      createdAt,
     });
   })();
 
@@ -459,6 +483,25 @@ const sendSalary = (salary) => postWebhook(salaryPayload(salary));
 const inkassaPayload = (inkassa) => {
   const receiver = inkassa?.receiverName || inkassa?.recipientName || null;
   const receiverLabel = receiver || INKASSA_ROW_LABEL;
+  const adminName = inkassa?.createdBy?.name || inkassa?.createdBy?.login || inkassa?.adminName || null;
+  const adminLogin = inkassa?.createdBy?.login || inkassa?.adminLogin || null;
+  const createdAt = toIso(inkassa?.createdAt || new Date());
+  const sourceData = {
+    id: inkassa?.id || null,
+    branchId: inkassa?.branchId || inkassa?.branch?.id || null,
+    branchCode: branchCode(inkassa),
+    branchName: branchName(inkassa),
+    shiftId: inkassa?.shiftId || null,
+    receiverName: receiver,
+    note: inkassa?.note || null,
+    amountMinor: inkassa?.amount ?? null,
+    amount: sheetAmount(inkassa?.amount, inkassa?.currency || "UZS"),
+    currency: inkassa?.currency || "UZS",
+    createdById: inkassa?.createdById || inkassa?.createdBy?.id || null,
+    adminName,
+    adminLogin,
+    createdAt,
+  };
 
   return withDeliveryMetadata({
     action: "INKASSA",
@@ -466,6 +509,9 @@ const inkassaPayload = (inkassa) => {
     branchName: branchName(inkassa),
     branch: branchName(inkassa),
     entityId: inkassa?.id || null,
+    branchId: sourceData.branchId,
+    shiftId: sourceData.shiftId,
+    createdById: sourceData.createdById,
     orderNumber: "",
     checkNumber: "",
     checkNo: "",
@@ -517,8 +563,10 @@ const inkassaPayload = (inkassa) => {
       },
       nameColumn: 22,
     },
-    adminName: inkassa?.createdBy?.name || inkassa?.createdBy?.login || inkassa?.adminName || null,
-    createdAt: toIso(inkassa?.createdAt || new Date()),
+    adminName,
+    adminLogin,
+    sourceData,
+    createdAt,
   });
 };
 
