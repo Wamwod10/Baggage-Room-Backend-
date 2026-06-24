@@ -10,7 +10,12 @@ const lockerSize = z.enum(["S", "M", "L", "XL"]);
 const orderStatus = z.enum(["ACTIVE", "PICKED_UP", "CANCELLED", "DELAYED"]);
 
 const optionalInt = z.coerce.number().int().optional();
-const amount = z.coerce.number().int().min(0);
+const normalizeAmountInput = (value) => {
+  if (typeof value !== "string") return value;
+  const normalized = value.trim().replace(/[\s\u00a0\u202f]/g, "").replace(",", ".");
+  return normalized === "" ? value : Number(normalized);
+};
+const amount = z.preprocess(normalizeAmountInput, z.number().int().min(0));
 const phone = z.string().trim().min(5).max(32).regex(/^[+0-9()\-\s]+$/, "Invalid phone number");
 
 const listQuery = z.object({
@@ -35,6 +40,7 @@ module.exports = {
   lockerSize,
   orderStatus,
   optionalInt,
+  normalizeAmountInput,
   amount,
   phone,
   listQuery,

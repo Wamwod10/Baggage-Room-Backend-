@@ -4,6 +4,7 @@ const { formatTashkentIso } = require("../utils/date");
 const { normalizeCurrencyAmount } = require("../utils/money");
 
 const TIMEOUT_MS = Number(process.env.GOOGLE_SHEETS_TIMEOUT_MS || 15000);
+const EXPECTED_SCRIPT_VERSION = "v3-inkassa-mapping";
 
 const branchNameByCode = {
   TIA: "Toshkent aeroport",
@@ -55,9 +56,62 @@ const deliveryLogMeta = (payload, extra = {}) => ({
   action: payload?.action,
   branchCode: payload?.branchCode,
   amount: payload?.amount ?? payload?.salaryAmount ?? payload?.finalAmount ?? null,
+  currency: payload?.currency || null,
   orderNumber: payload?.orderNumber || null,
   ...extra,
 });
+
+const INKASSA_COLUMN_INDEX_BY_CURRENCY = {
+  UZS: 14,
+  USD: 15,
+  EUR: 16,
+  RUB: 17,
+  KZT: 18,
+  TJS: 19,
+};
+
+const validateWebhookResult = (payload, json) => {
+  const scriptVersion = json?.scriptVersion || null;
+  if (scriptVersion !== EXPECTED_SCRIPT_VERSION) {
+    throw new Error(`Google Sheets script version mismatch: expected ${EXPECTED_SCRIPT_VERSION}, received ${scriptVersion || "missing"}`);
+  }
+  if (json?.duplicate === true) return { scriptVersion, row: null };
+
+  const row = json?.finalRow;
+  if (!Array.isArray(row) || row.length !== 22) {
+    throw new Error("Google Sheets response is missing a 22-column finalRow");
+  }
+
+  if (String(payload?.action || "").toUpperCase() === "INKASSA") {
+    const currency = String(payload.currency || "UZS").toUpperCase();
+    const amountIndex = INKASSA_COLUMN_INDEX_BY_CURRENCY[currency];
+    if (amountIndex === undefined) throw new Error(`Unsupported inkassa currency: ${currency}`);
+
+    const expectedAmount = Number(payload.sheetAmount ?? payload.inkassaAmount ?? payload.amount);
+    const actualAmount = Number(row[amountIndex]);
+    if (!Number.isFinite(expectedAmount) || actualAmount !== expectedAmount) {
+      throw new Error(`Google Sheets INKASSA amount mismatch: expected ${expectedAmount}, received ${row[amountIndex]}`);
+    }
+    const receiver = payload.receiverName || payload.recipientName || payload.clientName || "";
+    if (row[1] !== receiver) {
+      throw new Error(`Google Sheets INKASSA receiver mismatch: expected ${receiver}, received ${row[1]}`);
+    }
+    if (row[21] !== ["Inkassa", receiver || payload.note].filter(Boolean).join(" - ")) {
+      throw new Error(`Google Sheets INKASSA label mismatch: ${row[21]}`);
+    }
+    if (row.slice(5, 14).some((value) => value !== "" && value !== null && value !== undefined)) {
+      throw new Error("Google Sheets INKASSA must not write to revenue columns F:N");
+    }
+    if (row.slice(14, 20).some((value, index) => index + 14 !== amountIndex && value !== "" && value !== null && value !== undefined)) {
+      throw new Error("Google Sheets INKASSA must write to exactly one currency column O:T");
+    }
+    if (row[20] !== "" && row[20] !== null && row[20] !== undefined) {
+      throw new Error("Google Sheets INKASSA must keep expense column U empty");
+    }
+  }
+
+  return { scriptVersion, row };
+};
 
 const negativeMoneyFields = (amount) => {
   const number = Number(amount || 0);
@@ -240,12 +294,28 @@ const postWebhook = async (payload) => {
     if (json && (json.success === false || json.ok === false || json.error || ["error", "failed", "fail"].includes(String(json.status || "").toLowerCase()))) {
       throw new Error(`Google Sheets webhook rejected payload: ${responseBody}`);
     }
+    const verified = validateWebhookResult(payload, json);
+    if (verified.row) {
+      logger.info("[GoogleSheets] finalRow", {
+        action: payload.action,
+        branchCode: payload.branchCode,
+        row: verified.row,
+        scriptVersion: verified.scriptVersion,
+      });
+    }
     logger.info("[GoogleSheets] success", deliveryLogMeta(payload, {
       status: response.status,
       idempotencyKey: payload.idempotencyKey,
+      scriptVersion: verified.scriptVersion,
       response: responseBody.slice(0, 500),
     }));
-    return { ok: true, response: responseBody };
+    return {
+      ok: true,
+      response: responseBody,
+      responseJson: json,
+      finalRow: verified.row,
+      scriptVersion: verified.scriptVersion,
+    };
   } catch (error) {
     logger.warn("[GoogleSheets] failed", deliveryLogMeta(payload, { error: error.message }));
     throw error;
@@ -724,6 +794,8 @@ module.exports = {
   sendShiftClose,
   sendSafely,
   _internals: {
+    EXPECTED_SCRIPT_VERSION,
+    INKASSA_COLUMN_INDEX_BY_CURRENCY,
     branchNameByCode,
     getWebhookUrl,
     isEnabled,
@@ -739,6 +811,7 @@ module.exports = {
     testPayload,
     postWebhook,
     validateBranchCode,
+    validateWebhookResult,
     shouldDeliver,
   },
 };

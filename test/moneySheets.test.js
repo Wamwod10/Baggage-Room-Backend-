@@ -7,6 +7,7 @@ const {
 } = require("../src/utils/money");
 const sheets = require("../src/services/googleSheets.service");
 const appsScript = require("../scripts/googleSheetsAppsScript");
+const { amount: amountSchema } = require("../src/utils/validation");
 
 const { COLUMN } = appsScript;
 
@@ -24,6 +25,12 @@ test("decimal currency minor units normalize to exact Google Sheets major number
     const minor = parseCurrency(input, currency);
     assert.equal(normalizeCurrencyAmount(minor, currency), expected);
   }
+});
+
+test("inkassa amount parser preserves spaced and plain UZS amounts", () => {
+  assert.equal(amountSchema.parse("500 000"), 500000);
+  assert.equal(amountSchema.parse("500000"), 500000);
+  assert.equal(amountSchema.parse("5"), 5);
 });
 
 test("NEW_ORDER M=1 XL=1 writes only 1-M 1-XL to column C", () => {
@@ -123,7 +130,7 @@ test("EXPENSE, SALARY and INKASSA map only to their financial blocks", () => {
   assert.equal(salaryRow[COLUMN.NAME - 1], "Oylik - Ali");
   assert.equal(inkassaRow[COLUMN.BALANCE_USD - 1], 123.45);
   assert.equal(inkassaRow[COLUMN.EXPENSE - 1], "");
-  assert.equal(inkassaRow[COLUMN.NAME - 1], "Inkassa USD - Bosh kassir");
+  assert.equal(inkassaRow[COLUMN.NAME - 1], "Inkassa - Bosh kassir");
   assert.deepEqual(inkassaRow.slice(COLUMN.CASH_UZS - 1, COLUMN.TERMINAL), new Array(9).fill(""));
   assert.deepEqual(salaryRow.slice(COLUMN.CASH_UZS - 1, COLUMN.TERMINAL), new Array(9).fill(""));
 });
@@ -149,6 +156,43 @@ test("INKASSA currencies use O-T only and never F-N revenue columns", () => {
     assert.equal(row[column - 1], currency === "UZS" ? 250000 : 17.39);
     assert.deepEqual(row.slice(COLUMN.CASH_UZS - 1, COLUMN.TERMINAL), new Array(9).fill(""));
   }
+});
+
+test("backend accepts only versioned 22-column INKASSA webhook results", () => {
+  const payload = sheets._internals.inkassaPayload({
+    id: "inkassa-result-test",
+    branch: { code: "SVK", name: "Samarqand vokzal" },
+    receiverName: "Admin",
+    amount: 500000,
+    currency: "UZS",
+  });
+  const row = appsScript.buildInkassaRow(payload);
+  const result = sheets._internals.validateWebhookResult(payload, {
+    success: true,
+    ok: true,
+    scriptVersion: "v3-inkassa-mapping",
+    finalRow: row,
+  });
+
+  assert.equal(appsScript.SCRIPT_VERSION, "v3-inkassa-mapping");
+  assert.equal(result.scriptVersion, "v3-inkassa-mapping");
+  assert.equal(result.row[14], 500000);
+  assert.deepEqual(result.row.slice(5, 14), new Array(9).fill(""));
+  assert.throws(
+    () => sheets._internals.validateWebhookResult(payload, { success: true, finalRow: row }),
+    /script version mismatch/,
+  );
+
+  const wrongRow = [...row];
+  wrongRow[5] = 500000;
+  assert.throws(
+    () => sheets._internals.validateWebhookResult(payload, {
+      success: true,
+      scriptVersion: "v3-inkassa-mapping",
+      finalRow: wrongRow,
+    }),
+    /must not write to revenue columns F:N/,
+  );
 });
 
 test("orders and doplata alone can write F-K, Click, Payme and Terminal revenue columns", () => {

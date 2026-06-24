@@ -26,6 +26,7 @@ const SHEET_NAME_PATTERN_BY_BRANCH_CODE = {
 };
 
 const WRITABLE_ACTIONS = new Set(["NEW_ORDER", "DOPLATA", "EXPENSE", "INKASSA", "SALARY"]);
+const SCRIPT_VERSION = "v3-inkassa-mapping";
 const LEGACY_WIDTH = 22; // A:V
 const IDEMPOTENCY_COLUMN = 23; // hidden/helper column W
 
@@ -96,7 +97,7 @@ function doPost(e) {
     const action = String(payload.action || "").toUpperCase();
 
     if (!WRITABLE_ACTIONS.has(action)) {
-      return json_({ ok: true, skipped: true, reason: "Unsupported action: " + action });
+      return json_({ success: true, ok: true, scriptVersion: SCRIPT_VERSION, skipped: true, reason: "Unsupported action: " + action });
     }
 
     const branchCode = String(payload.branchCode || "").trim();
@@ -110,7 +111,7 @@ function doPost(e) {
 
       const idempotencyKey = String(payload.idempotencyKey || buildIdempotencyKey_(payload));
       if (hasDuplicate_(sheet, idempotencyKey)) {
-        return json_({ ok: true, duplicate: true, idempotencyKey });
+        return json_({ success: true, ok: true, scriptVersion: SCRIPT_VERSION, duplicate: true, idempotencyKey });
       }
 
       const row = buildLegacyRow_(payload);
@@ -124,13 +125,13 @@ function doPost(e) {
       applyMoneyFormat_(sheet, targetRow, payload);
       styleRow_(sheet, targetRow, action);
 
-      return json_({ ok: true, row: targetRow, idempotencyKey, finalRow: row });
+      return json_({ success: true, ok: true, scriptVersion: SCRIPT_VERSION, row: targetRow, idempotencyKey, finalRow: row });
     } finally {
       lock.releaseLock();
     }
   } catch (error) {
     console.error(error);
-    return json_({ ok: false, error: error.message });
+    return json_({ success: false, ok: false, scriptVersion: SCRIPT_VERSION, error: error.message });
   }
 }
 
@@ -307,8 +308,7 @@ function buildInkassaRow(payload) {
   row[COLUMN.FIO - 1] = receiver;
   row[balanceColumn - 1] = sheetAmount_(payload, payload.inkassaAmount, payload.amount, payload.finalAmount, payload.amountUzs);
   const cleanNote = String(note).toLowerCase() === "inkassa" ? "" : note;
-  const label = currency === "UZS" ? "Inkassa" : "Inkassa " + currency;
-  row[COLUMN.NAME - 1] = [label, receiver || cleanNote].filter(Boolean).join(" - ");
+  row[COLUMN.NAME - 1] = ["Inkassa", receiver || cleanNote].filter(Boolean).join(" - ");
   return row;
 }
 
@@ -444,6 +444,7 @@ function json_(body) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     COLUMN,
+    SCRIPT_VERSION,
     SHEET_BY_BRANCH_CODE,
     buildLegacyRow_,
     buildNewOrderRow,
