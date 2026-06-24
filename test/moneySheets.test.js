@@ -161,7 +161,7 @@ test("INKASSA currencies use O-T only and never F-N revenue columns", () => {
 test("backend accepts only versioned 22-column INKASSA webhook results", () => {
   const payload = sheets._internals.inkassaPayload({
     id: "inkassa-result-test",
-    branch: { code: "SVK", name: "Samarqand vokzal" },
+    branch: { code: "TJV", name: "Toshkent Janubiy vokzal" },
     receiverName: "Admin",
     amount: 500000,
     currency: "UZS",
@@ -170,6 +170,7 @@ test("backend accepts only versioned 22-column INKASSA webhook results", () => {
   const result = sheets._internals.validateWebhookResult(payload, {
     success: true,
     scriptVersion: "v4-final-sheets-mapping-2026-06-24",
+    spreadsheetId: "10-h62nZAEp-puvFF_MurFu1UE0Xdjdx5Qtlv3Qpd0L8",
     row: 1885,
   });
 
@@ -181,6 +182,14 @@ test("backend accepts only versioned 22-column INKASSA webhook results", () => {
     () => sheets._internals.validateWebhookResult(payload, { success: true, finalRow: row }),
     /script version mismatch/,
   );
+  assert.throws(
+    () => sheets._internals.validateWebhookResult(payload, {
+      success: true,
+      scriptVersion: "v4-final-sheets-mapping-2026-06-24",
+      row: 1885,
+    }),
+    /spreadsheet mismatch/,
+  );
 
   const wrongRow = [...row];
   wrongRow[5] = 500000;
@@ -188,10 +197,32 @@ test("backend accepts only versioned 22-column INKASSA webhook results", () => {
     () => sheets._internals.validateWebhookResult(payload, {
       success: true,
       scriptVersion: "v4-final-sheets-mapping-2026-06-24",
+      spreadsheetId: "10-h62nZAEp-puvFF_MurFu1UE0Xdjdx5Qtlv3Qpd0L8",
       row: 1886,
       finalRow: wrongRow,
     }),
     /must not write to revenue columns F:N/,
+  );
+});
+
+test("Janubiy vokzal aliases normalize to TJV and use its dedicated spreadsheet", () => {
+  const aliases = [
+    "TJV",
+    "TJV ",
+    "TJW",
+    "Toshkent Janubiy vokzal",
+    "Тошкент Жанубий вокзал",
+    "Камера хранения Южный вокзал",
+    "Камера хранения Южный вокзал 🛅",
+  ];
+  for (const alias of aliases) {
+    assert.equal(sheets._internals.normalizeBranchCode(alias), "TJV");
+    assert.equal(appsScript.normalizeBranchCode_(alias), "TJV");
+  }
+  assert.equal(appsScript.SHEETS.TJV, "10-h62nZAEp-puvFF_MurFu1UE0Xdjdx5Qtlv3Qpd0L8");
+  assert.equal(
+    sheets._internals.EXPECTED_SPREADSHEET_ID_BY_BRANCH_CODE.TJV,
+    "10-h62nZAEp-puvFF_MurFu1UE0Xdjdx5Qtlv3Qpd0L8",
   );
 });
 

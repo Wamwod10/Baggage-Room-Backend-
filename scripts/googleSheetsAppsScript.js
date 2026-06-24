@@ -17,6 +17,12 @@ const SHEET_BY_BRANCH_CODE = {
   SIA: "Автоматическая Камера хранения Самарканд Аэропорт 🛅",
 };
 
+// Branches with a dedicated spreadsheet are opened explicitly by ID.
+// Unlisted branches keep using the spreadsheet bound to this Apps Script.
+const SHEETS = {
+  TJV: "10-h62nZAEp-puvFF_MurFu1UE0Xdjdx5Qtlv3Qpd0L8",
+};
+
 const SHEET_NAME_PATTERN_BY_BRANCH_CODE = {
   TIA: /(tia|ташкент.*аэропорт|toshkent.*aeroport)/i,
   TSV: /(tsv|ташкент.*(север|шимол)|toshkent.*shimol)/i,
@@ -92,6 +98,8 @@ const ACTION_STYLE = {
 };
 
 function doPost(e) {
+  let branchCode = "";
+  let spreadsheet = null;
   try {
     const payload = JSON.parse((e && e.postData && e.postData.contents) || "{}");
     const action = String(payload.action || "").toUpperCase();
@@ -100,18 +108,28 @@ function doPost(e) {
       return json_({ success: true, ok: true, scriptVersion: SCRIPT_VERSION, skipped: true, reason: "Unsupported action: " + action });
     }
 
-    const branchCode = String(payload.branchCode || "").trim();
+    branchCode = normalizeBranchCode_(payload.branchCode || payload.branchName || payload.branch);
     if (!SHEET_BY_BRANCH_CODE[branchCode]) throw new Error("Unknown branchCode: " + branchCode);
 
-    const lock = LockService.getDocumentLock();
+    const lock = LockService.getScriptLock();
     lock.waitLock(30000);
     try {
-      const sheet = getOrCreateSheet_(branchCode);
+      spreadsheet = getSpreadsheet_(branchCode);
+      const sheet = getOrCreateSheet_(spreadsheet, branchCode);
       ensureColumns_(sheet, IDEMPOTENCY_COLUMN);
 
       const idempotencyKey = String(payload.idempotencyKey || buildIdempotencyKey_(payload));
       if (hasDuplicate_(sheet, idempotencyKey)) {
-        return json_({ success: true, ok: true, scriptVersion: SCRIPT_VERSION, duplicate: true, idempotencyKey });
+        return json_({
+          success: true,
+          ok: true,
+          scriptVersion: SCRIPT_VERSION,
+          branchCode,
+          spreadsheetId: spreadsheet.getId(),
+          spreadsheetName: spreadsheet.getName(),
+          duplicate: true,
+          idempotencyKey,
+        });
       }
 
       const row = buildLegacyRow_(payload);
@@ -125,18 +143,58 @@ function doPost(e) {
       applyMoneyFormat_(sheet, targetRow, payload);
       styleRow_(sheet, targetRow, action);
 
-      return json_({ success: true, ok: true, scriptVersion: SCRIPT_VERSION, row: targetRow, idempotencyKey, finalRow: row });
+      return json_({
+        success: true,
+        ok: true,
+        scriptVersion: SCRIPT_VERSION,
+        branchCode,
+        spreadsheetId: spreadsheet.getId(),
+        spreadsheetName: spreadsheet.getName(),
+        row: targetRow,
+        idempotencyKey,
+        finalRow: row,
+      });
     } finally {
       lock.releaseLock();
     }
   } catch (error) {
     console.error(error);
-    return json_({ success: false, ok: false, scriptVersion: SCRIPT_VERSION, error: error.message });
+    return json_({
+      success: false,
+      ok: false,
+      scriptVersion: SCRIPT_VERSION,
+      branchCode,
+      spreadsheetId: spreadsheet ? spreadsheet.getId() : null,
+      spreadsheetName: spreadsheet ? spreadsheet.getName() : null,
+      error: error.message,
+    });
   }
 }
 
-function getOrCreateSheet_(branchCode) {
-  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+function normalizeBranchCode_(value) {
+  const raw = String(value || "").trim();
+  const upper = raw.toUpperCase();
+  if (SHEET_BY_BRANCH_CODE[upper]) return upper;
+  const normalized = raw.toLowerCase().replace(/🛅/g, "").replace(/\s+/g, " ").trim();
+  if (upper === "TJW") return "TJV";
+  if (
+    normalized === "toshkent janubiy" ||
+    normalized === "toshkent janubiy vokzal" ||
+    normalized === "тошкент жанубий вокзал" ||
+    normalized === "камера хранения южный вокзал" ||
+    normalized === "южный"
+  ) return "TJV";
+  return upper;
+}
+
+function getSpreadsheet_(branchCode) {
+  const spreadsheetId = SHEETS[branchCode];
+  return spreadsheetId
+    ? SpreadsheetApp.openById(spreadsheetId)
+    : SpreadsheetApp.getActiveSpreadsheet();
+}
+
+function getOrCreateSheet_(spreadsheet, branchCode) {
   const exactName = SHEET_BY_BRANCH_CODE[branchCode];
   const exact = spreadsheet.getSheetByName(exactName);
   if (exact) return exact;
@@ -445,7 +503,9 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     COLUMN,
     SCRIPT_VERSION,
+    SHEETS,
     SHEET_BY_BRANCH_CODE,
+    normalizeBranchCode_,
     buildLegacyRow_,
     buildNewOrderRow,
     buildDoplataRow,

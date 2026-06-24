@@ -6,6 +6,9 @@ const sheetMapper = require("../../scripts/googleSheetsAppsScript");
 
 const TIMEOUT_MS = Number(process.env.GOOGLE_SHEETS_TIMEOUT_MS || 15000);
 const EXPECTED_SCRIPT_VERSION = sheetMapper.SCRIPT_VERSION;
+const EXPECTED_SPREADSHEET_ID_BY_BRANCH_CODE = {
+  TJV: "10-h62nZAEp-puvFF_MurFu1UE0Xdjdx5Qtlv3Qpd0L8",
+};
 
 const branchNameByCode = {
   TIA: "Toshkent aeroport",
@@ -15,6 +18,27 @@ const branchNameByCode = {
   SIA: "Samarqand aeroport",
 };
 const allowedBranchCodes = new Set(Object.keys(branchNameByCode));
+
+const normalizeBranchCode = (value) => {
+  const raw = String(value || "").trim();
+  const upper = raw.toUpperCase();
+  if (allowedBranchCodes.has(upper)) return upper;
+
+  const normalized = raw
+    .toLowerCase()
+    .replace(/🛅/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (upper === "TJW") return "TJV";
+  if (
+    normalized === "toshkent janubiy" ||
+    normalized === "toshkent janubiy vokzal" ||
+    normalized === "тошкент жанубий вокзал" ||
+    normalized === "камера хранения южный вокзал" ||
+    normalized === "южный"
+  ) return "TJV";
+  return upper || null;
+};
 
 const enabledValue = () => process.env.GOOGLE_SHEETS_ENABLED || process.env.GOOGLE_SHEET_ENABLED || "";
 const getWebhookUrl = () => String(process.env.GOOGLE_SHEET_WEBHOOK || process.env.GOOGLE_SHEETS_WEBHOOK || "").trim();
@@ -28,7 +52,13 @@ const toIso = (value) => {
   return Number.isNaN(date.getTime()) ? null : formatTashkentIso(date);
 };
 
-const branchCode = (entity) => entity?.branch?.code || entity?.branchCode || null;
+const branchCode = (entity) => normalizeBranchCode(
+  entity?.branch?.code ||
+  entity?.branchCode ||
+  entity?.branchName ||
+  entity?.branch?.name ||
+  (typeof entity?.branch === "string" ? entity.branch : null),
+);
 
 const branchName = (entity) => {
   const code = branchCode(entity);
@@ -36,11 +66,13 @@ const branchName = (entity) => {
 };
 
 const validateBranchCode = (payload) => {
-  if (!payload.branchCode) {
+  const normalized = normalizeBranchCode(payload.branchCode || payload.branchName || payload.branch);
+  payload.branchCode = normalized;
+  if (!normalized) {
     throw new Error(`Google Sheets payload is missing branchCode for ${payload.action || "UNKNOWN"}`);
   }
-  if (!allowedBranchCodes.has(payload.branchCode)) {
-    throw new Error(`Unknown Google Sheets branchCode: ${payload.branchCode}`);
+  if (!allowedBranchCodes.has(normalized)) {
+    throw new Error(`Unknown Google Sheets branchCode: ${normalized}`);
   }
 };
 
@@ -56,6 +88,7 @@ const withDeliveryMetadata = (payload) => ({
 const deliveryLogMeta = (payload, extra = {}) => ({
   action: payload?.action,
   branchCode: payload?.branchCode,
+  branchName: payload?.branchName || payload?.branch || branchNameByCode[payload?.branchCode] || null,
   amount: payload?.amount ?? payload?.salaryAmount ?? payload?.finalAmount ?? null,
   currency: payload?.currency || null,
   orderNumber: payload?.orderNumber || null,
@@ -75,6 +108,10 @@ const validateWebhookResult = (payload, json, expectedRow = sheetMapper.buildLeg
   const scriptVersion = json?.scriptVersion || null;
   if (scriptVersion !== EXPECTED_SCRIPT_VERSION) {
     throw new Error(`Google Sheets script version mismatch: expected ${EXPECTED_SCRIPT_VERSION}, received ${scriptVersion || "missing"}`);
+  }
+  const expectedSpreadsheetId = EXPECTED_SPREADSHEET_ID_BY_BRANCH_CODE[payload?.branchCode];
+  if (expectedSpreadsheetId && json?.spreadsheetId !== expectedSpreadsheetId) {
+    throw new Error(`Google Sheets spreadsheet mismatch for ${payload.branchCode}: expected ${expectedSpreadsheetId}, received ${json?.spreadsheetId || "missing"}`);
   }
   const row = Array.isArray(json?.finalRow) ? json.finalRow : expectedRow;
   if (!Array.isArray(row) || row.length !== 22) {
@@ -295,11 +332,23 @@ const postWebhook = async (payload) => {
 
     const responseBody = await response.text().catch(() => "");
     let json = null;
+    let responseParseError = null;
     try {
       json = responseBody ? JSON.parse(responseBody) : null;
-    } catch {
+    } catch (error) {
       json = null;
+      responseParseError = `Non-JSON Google Sheets response: ${responseBody.slice(0, 500) || error.message}`;
     }
+    logger.info("[GoogleSheets] response", {
+      success: json?.success === true || json?.ok === true,
+      scriptVersion: json?.scriptVersion || null,
+      branchCode: json?.branchCode || null,
+      spreadsheetId: json?.spreadsheetId || null,
+      spreadsheetName: json?.spreadsheetName || null,
+      row: Number.isInteger(json?.row) ? json.row : null,
+      error: json?.error || responseParseError,
+    });
+    if (!json) throw new Error(responseParseError || "Google Sheets webhook returned an empty response");
     if (json && (json.success === false || json.ok === false || json.error || ["error", "failed", "fail"].includes(String(json.status || "").toLowerCase()))) {
       throw new Error(`Google Sheets webhook rejected payload: ${responseBody}`);
     }
@@ -763,7 +812,7 @@ const testPayload = (action, branchCodeValue, branch, user) => {
 
 const sendTestEvent = async (user, body) => {
   const action = String(body.action || "").toUpperCase();
-  const code = String(body.branchCode || "").trim().toUpperCase();
+  const code = normalizeBranchCode(body.branchCode);
   const branch = await prisma.branch.findUnique({ where: { code }, select: { id: true, name: true, code: true } }).catch(() => null);
   const payload = testPayload(action, code, branch, user);
   const result = await sendSafely(() => postWebhook(payload), {
@@ -796,8 +845,10 @@ module.exports = {
   sendSafely,
   _internals: {
     EXPECTED_SCRIPT_VERSION,
+    EXPECTED_SPREADSHEET_ID_BY_BRANCH_CODE,
     INKASSA_COLUMN_INDEX_BY_CURRENCY,
     branchNameByCode,
+    normalizeBranchCode,
     getWebhookUrl,
     isEnabled,
     orderPayload,
