@@ -1,4 +1,4 @@
-const bcrypt = require("bcrypt");
+const bcrypt = require("bcryptjs");
 const prisma = require("../config/prisma");
 const { AppError } = require("../utils/response");
 const { publicUserSelect } = require("./auth.service");
