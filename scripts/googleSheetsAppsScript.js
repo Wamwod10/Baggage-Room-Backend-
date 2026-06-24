@@ -10,11 +10,11 @@
  */
 
 const SHEET_BY_BRANCH_CODE = {
-  TIA: "TIA",
-  TSV: "TSV",
-  TJV: "TJV",
-  SVK: "SVK",
-  SIA: "SIA",
+  TIA: "Автоматическая Камера хранения Ташкент Аэропорт 🛅",
+  TSV: "Камера хранения Северный вокзал 🛅",
+  TJV: "Камера хранения Южный вокзал 🛅",
+  SVK: "Камера хранения Самарканд вокзал 🛅",
+  SIA: "Автоматическая Камера хранения Самарканд Аэропорт 🛅",
 };
 
 const SHEET_NAME_PATTERN_BY_BRANCH_CODE = {
@@ -26,7 +26,7 @@ const SHEET_NAME_PATTERN_BY_BRANCH_CODE = {
 };
 
 const WRITABLE_ACTIONS = new Set(["NEW_ORDER", "DOPLATA", "EXPENSE", "INKASSA", "SALARY"]);
-const SCRIPT_VERSION = "v3-inkassa-mapping";
+const SCRIPT_VERSION = "v4-final-sheets-mapping-2026-06-24";
 const LEGACY_WIDTH = 22; // A:V
 const IDEMPOTENCY_COLUMN = 23; // hidden/helper column W
 

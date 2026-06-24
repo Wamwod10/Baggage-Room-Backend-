@@ -2,9 +2,10 @@ const logger = require("../utils/logger");
 const prisma = require("../config/prisma");
 const { formatTashkentIso } = require("../utils/date");
 const { normalizeCurrencyAmount } = require("../utils/money");
+const sheetMapper = require("../../scripts/googleSheetsAppsScript");
 
 const TIMEOUT_MS = Number(process.env.GOOGLE_SHEETS_TIMEOUT_MS || 15000);
-const EXPECTED_SCRIPT_VERSION = "v3-inkassa-mapping";
+const EXPECTED_SCRIPT_VERSION = sheetMapper.SCRIPT_VERSION;
 
 const branchNameByCode = {
   TIA: "Toshkent aeroport",
@@ -70,16 +71,17 @@ const INKASSA_COLUMN_INDEX_BY_CURRENCY = {
   TJS: 19,
 };
 
-const validateWebhookResult = (payload, json) => {
+const validateWebhookResult = (payload, json, expectedRow = sheetMapper.buildLegacyRow_(payload)) => {
   const scriptVersion = json?.scriptVersion || null;
   if (scriptVersion !== EXPECTED_SCRIPT_VERSION) {
     throw new Error(`Google Sheets script version mismatch: expected ${EXPECTED_SCRIPT_VERSION}, received ${scriptVersion || "missing"}`);
   }
-  if (json?.duplicate === true) return { scriptVersion, row: null };
-
-  const row = json?.finalRow;
+  const row = Array.isArray(json?.finalRow) ? json.finalRow : expectedRow;
   if (!Array.isArray(row) || row.length !== 22) {
     throw new Error("Google Sheets response is missing a 22-column finalRow");
+  }
+  if (json?.duplicate !== true && !Number.isInteger(json?.row)) {
+    throw new Error("Google Sheets response is missing the written row number");
   }
 
   if (String(payload?.action || "").toUpperCase() === "INKASSA") {
@@ -269,6 +271,13 @@ const postWebhook = async (payload) => {
     }
     validateBranchCode(payload);
 
+    const finalRow = sheetMapper.buildLegacyRow_(payload);
+    logger.info("[GoogleSheets] finalRow", {
+      action: payload.action,
+      branchCode: payload.branchCode,
+      row: finalRow,
+      scriptVersion: EXPECTED_SCRIPT_VERSION,
+    });
     logger.info("[GoogleSheets] sending", deliveryLogMeta(payload));
     timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
@@ -294,15 +303,7 @@ const postWebhook = async (payload) => {
     if (json && (json.success === false || json.ok === false || json.error || ["error", "failed", "fail"].includes(String(json.status || "").toLowerCase()))) {
       throw new Error(`Google Sheets webhook rejected payload: ${responseBody}`);
     }
-    const verified = validateWebhookResult(payload, json);
-    if (verified.row) {
-      logger.info("[GoogleSheets] finalRow", {
-        action: payload.action,
-        branchCode: payload.branchCode,
-        row: verified.row,
-        scriptVersion: verified.scriptVersion,
-      });
-    }
+    const verified = validateWebhookResult(payload, json, finalRow);
     logger.info("[GoogleSheets] success", deliveryLogMeta(payload, {
       status: response.status,
       idempotencyKey: payload.idempotencyKey,

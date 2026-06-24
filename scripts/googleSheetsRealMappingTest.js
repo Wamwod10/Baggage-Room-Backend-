@@ -1,4 +1,5 @@
 require("dotenv").config();
+const sheets = require("../src/services/googleSheets.service");
 
 const webhook = String(process.env.GOOGLE_SHEET_WEBHOOK || process.env.GOOGLE_SHEETS_WEBHOOK || "").trim();
 const branchCode = String(process.env.GOOGLE_SHEETS_TEST_BRANCH || "TIA").trim().toUpperCase();
@@ -101,30 +102,15 @@ const cases = [
 const run = async () => {
   const results = [];
   for (const [name, payload, verify] of cases) {
-    const response = await fetch(webhook, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+    const result = await sheets._internals.postWebhook(payload);
+    const parsed = result.responseJson || {};
+    verify(result.finalRow);
+    results.push({
+      name,
+      scriptVersion: result.scriptVersion,
+      sheetRow: parsed.row,
+      finalRow: result.finalRow,
     });
-    const body = await response.text();
-    let parsed;
-    try {
-      parsed = JSON.parse(body);
-    } catch {
-      parsed = { raw: body };
-    }
-    const confirmedByCurrentMapper = parsed?.ok === true
-      && Number.isInteger(parsed?.row)
-      && Array.isArray(parsed?.finalRow)
-      && parsed.finalRow.length === 22;
-    if (!response.ok || parsed?.ok === false || parsed?.error || !confirmedByCurrentMapper) {
-      if (response.ok && !confirmedByCurrentMapper) {
-        throw new Error(`${name} reached an outdated Apps Script deployment: ${body}`);
-      }
-      throw new Error(`${name} failed: HTTP ${response.status} ${body}`);
-    }
-    verify(parsed.finalRow);
-    results.push({ name, status: response.status, sheetRow: parsed.row, finalRow: parsed.finalRow });
   }
   console.log(JSON.stringify({ batch, branchCode, results }, null, 2));
 };

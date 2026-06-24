@@ -169,13 +169,12 @@ test("backend accepts only versioned 22-column INKASSA webhook results", () => {
   const row = appsScript.buildInkassaRow(payload);
   const result = sheets._internals.validateWebhookResult(payload, {
     success: true,
-    ok: true,
-    scriptVersion: "v3-inkassa-mapping",
-    finalRow: row,
+    scriptVersion: "v4-final-sheets-mapping-2026-06-24",
+    row: 1885,
   });
 
-  assert.equal(appsScript.SCRIPT_VERSION, "v3-inkassa-mapping");
-  assert.equal(result.scriptVersion, "v3-inkassa-mapping");
+  assert.equal(appsScript.SCRIPT_VERSION, "v4-final-sheets-mapping-2026-06-24");
+  assert.equal(result.scriptVersion, "v4-final-sheets-mapping-2026-06-24");
   assert.equal(result.row[14], 500000);
   assert.deepEqual(result.row.slice(5, 14), new Array(9).fill(""));
   assert.throws(
@@ -188,7 +187,8 @@ test("backend accepts only versioned 22-column INKASSA webhook results", () => {
   assert.throws(
     () => sheets._internals.validateWebhookResult(payload, {
       success: true,
-      scriptVersion: "v3-inkassa-mapping",
+      scriptVersion: "v4-final-sheets-mapping-2026-06-24",
+      row: 1886,
       finalRow: wrongRow,
     }),
     /must not write to revenue columns F:N/,
