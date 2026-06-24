@@ -17,8 +17,8 @@ const SHEET_BY_BRANCH_CODE = {
   SIA: "Автоматическая Камера хранения Самарканд Аэропорт 🛅",
 };
 
-// Branches with a dedicated spreadsheet are opened explicitly by ID.
-// Unlisted branches keep using the spreadsheet bound to this Apps Script.
+// Every branch must resolve to an explicit spreadsheet ID. Additional branch
+// IDs can be configured as Apps Script properties: SPREADSHEET_ID_TIA, etc.
 const SHEETS = {
   TJV: "10-h62nZAEp-puvFF_MurFu1UE0Xdjdx5Qtlv3Qpd0L8",
 };
@@ -100,6 +100,7 @@ const ACTION_STYLE = {
 function doPost(e) {
   let branchCode = "";
   let spreadsheet = null;
+  let sheet = null;
   try {
     const payload = JSON.parse((e && e.postData && e.postData.contents) || "{}");
     const action = String(payload.action || "").toUpperCase();
@@ -115,7 +116,13 @@ function doPost(e) {
     lock.waitLock(30000);
     try {
       spreadsheet = getSpreadsheet_(branchCode);
-      const sheet = getOrCreateSheet_(spreadsheet, branchCode);
+      sheet = getOrCreateSheet_(spreadsheet, branchCode);
+      console.log("[GoogleSheets] spreadsheetOpened " + JSON.stringify({
+        branchCode,
+        spreadsheetId: spreadsheet.getId(),
+        spreadsheetName: spreadsheet.getName(),
+        sheetName: sheet.getName(),
+      }));
       ensureColumns_(sheet, IDEMPOTENCY_COLUMN);
 
       const idempotencyKey = String(payload.idempotencyKey || buildIdempotencyKey_(payload));
@@ -127,6 +134,7 @@ function doPost(e) {
           branchCode,
           spreadsheetId: spreadsheet.getId(),
           spreadsheetName: spreadsheet.getName(),
+          sheetName: sheet.getName(),
           duplicate: true,
           idempotencyKey,
         });
@@ -142,6 +150,11 @@ function doPost(e) {
       sheet.getRange(targetRow, IDEMPOTENCY_COLUMN).setValue(idempotencyKey);
       applyMoneyFormat_(sheet, targetRow, payload);
       styleRow_(sheet, targetRow, action);
+      verifyWrittenRow_(sheet, targetRow, row, idempotencyKey);
+
+      if (spreadsheet.getId() !== SHEETS.TJV && branchCode === "TJV") {
+        throw new Error("TJV write reached the wrong spreadsheet: " + spreadsheet.getId());
+      }
 
       return json_({
         success: true,
@@ -150,6 +163,7 @@ function doPost(e) {
         branchCode,
         spreadsheetId: spreadsheet.getId(),
         spreadsheetName: spreadsheet.getName(),
+        sheetName: sheet.getName(),
         row: targetRow,
         idempotencyKey,
         finalRow: row,
@@ -166,6 +180,7 @@ function doPost(e) {
       branchCode,
       spreadsheetId: spreadsheet ? spreadsheet.getId() : null,
       spreadsheetName: spreadsheet ? spreadsheet.getName() : null,
+      sheetName: sheet ? sheet.getName() : null,
       error: error.message,
     });
   }
@@ -188,10 +203,17 @@ function normalizeBranchCode_(value) {
 }
 
 function getSpreadsheet_(branchCode) {
-  const spreadsheetId = SHEETS[branchCode];
-  return spreadsheetId
-    ? SpreadsheetApp.openById(spreadsheetId)
-    : SpreadsheetApp.getActiveSpreadsheet();
+  const propertyKey = "SPREADSHEET_ID_" + branchCode;
+  const propertyId = typeof PropertiesService !== "undefined"
+    ? PropertiesService.getScriptProperties().getProperty(propertyKey)
+    : null;
+  const spreadsheetId = SHEETS[branchCode] || propertyId;
+  if (!spreadsheetId) throw new Error("Spreadsheet ID is not configured for " + branchCode);
+  const spreadsheet = SpreadsheetApp.openById(spreadsheetId);
+  if (!spreadsheet || spreadsheet.getId() !== spreadsheetId) {
+    throw new Error("Failed to open configured spreadsheet for " + branchCode);
+  }
+  return spreadsheet;
 }
 
 function getOrCreateSheet_(spreadsheet, branchCode) {
@@ -210,6 +232,31 @@ function ensureColumns_(sheet, minColumns) {
   const currentColumns = sheet.getMaxColumns();
   if (currentColumns < minColumns) {
     sheet.insertColumnsAfter(currentColumns, minColumns - currentColumns);
+  }
+}
+
+function verifyWrittenRow_(sheet, targetRow, expectedRow, idempotencyKey) {
+  SpreadsheetApp.flush();
+  const actualRow = sheet.getRange(targetRow, 1, 1, LEGACY_WIDTH).getValues()[0];
+  const actualKey = String(sheet.getRange(targetRow, IDEMPOTENCY_COLUMN).getDisplayValue() || "").trim();
+  if (actualKey !== String(idempotencyKey || "").trim()) {
+    throw new Error("Google Sheets write verification failed: idempotency key mismatch at row " + targetRow);
+  }
+
+  for (let index = 0; index < expectedRow.length; index += 1) {
+    const expected = expectedRow[index];
+    const actual = actualRow[index];
+    if (index === COLUMN.DATE - 1) {
+      if (formatSheetDate_(actual) !== String(expected)) {
+        throw new Error("Google Sheets write verification failed in column A at row " + targetRow);
+      }
+    } else if (typeof expected === "number") {
+      if (Number(actual) !== expected) {
+        throw new Error("Google Sheets write verification failed in column " + (index + 1) + " at row " + targetRow);
+      }
+    } else if (String(actual || "") !== String(expected || "")) {
+      throw new Error("Google Sheets write verification failed in column " + (index + 1) + " at row " + targetRow);
+    }
   }
 }
 

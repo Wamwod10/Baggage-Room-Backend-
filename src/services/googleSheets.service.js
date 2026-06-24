@@ -42,6 +42,19 @@ const normalizeBranchCode = (value) => {
 
 const enabledValue = () => process.env.GOOGLE_SHEETS_ENABLED || process.env.GOOGLE_SHEET_ENABLED || "";
 const getWebhookUrl = () => String(process.env.GOOGLE_SHEET_WEBHOOK || process.env.GOOGLE_SHEETS_WEBHOOK || "").trim();
+const maskWebhookUrl = (value = getWebhookUrl()) => {
+  const url = String(value || "");
+  if (!url) return null;
+  const visible = url.slice(-20);
+  return `${"*".repeat(Math.max(0, url.length - visible.length))}${visible}`;
+};
+const summarizeWebhookBody = (body) => String(body || "")
+  .replace(/<script[\s\S]*?<\/script>/gi, " ")
+  .replace(/<style[\s\S]*?<\/style>/gi, " ")
+  .replace(/<[^>]+>/g, " ")
+  .replace(/\s+/g, " ")
+  .trim()
+  .slice(0, 500);
 const isEnabled = () => ["true", "1", "yes", "on"].includes(String(enabledValue()).toLowerCase()) && Boolean(getWebhookUrl());
 const DELIVERABLE_ACTIONS = new Set(["NEW_ORDER", "DOPLATA", "EXPENSE", "INKASSA", "SALARY"]);
 const shouldDeliver = (payload) => DELIVERABLE_ACTIONS.has(String(payload?.action || "").toUpperCase());
@@ -89,6 +102,7 @@ const deliveryLogMeta = (payload, extra = {}) => ({
   action: payload?.action,
   branchCode: payload?.branchCode,
   branchName: payload?.branchName || payload?.branch || branchNameByCode[payload?.branchCode] || null,
+  webhookUrlMasked: maskWebhookUrl(),
   amount: payload?.amount ?? payload?.salaryAmount ?? payload?.finalAmount ?? null,
   currency: payload?.currency || null,
   orderNumber: payload?.orderNumber || null,
@@ -109,9 +123,15 @@ const validateWebhookResult = (payload, json, expectedRow = sheetMapper.buildLeg
   if (scriptVersion !== EXPECTED_SCRIPT_VERSION) {
     throw new Error(`Google Sheets script version mismatch: expected ${EXPECTED_SCRIPT_VERSION}, received ${scriptVersion || "missing"}`);
   }
+  if (json?.branchCode !== payload?.branchCode) {
+    throw new Error(`Google Sheets branch mismatch: expected ${payload?.branchCode}, received ${json?.branchCode || "missing"}`);
+  }
   const expectedSpreadsheetId = EXPECTED_SPREADSHEET_ID_BY_BRANCH_CODE[payload?.branchCode];
   if (expectedSpreadsheetId && json?.spreadsheetId !== expectedSpreadsheetId) {
     throw new Error(`Google Sheets spreadsheet mismatch for ${payload.branchCode}: expected ${expectedSpreadsheetId}, received ${json?.spreadsheetId || "missing"}`);
+  }
+  if (!json?.spreadsheetName || !json?.sheetName) {
+    throw new Error("Google Sheets response is missing spreadsheetName or sheetName");
   }
   const row = Array.isArray(json?.finalRow) ? json.finalRow : expectedRow;
   if (!Array.isArray(row) || row.length !== 22) {
@@ -325,11 +345,6 @@ const postWebhook = async (payload) => {
       signal: controller.signal,
     });
 
-    if (!response.ok) {
-      const body = await response.text();
-      throw new Error(`Google Sheets webhook failed: ${response.status} ${body}`);
-    }
-
     const responseBody = await response.text().catch(() => "");
     let json = null;
     let responseParseError = null;
@@ -337,7 +352,7 @@ const postWebhook = async (payload) => {
       json = responseBody ? JSON.parse(responseBody) : null;
     } catch (error) {
       json = null;
-      responseParseError = `Non-JSON Google Sheets response: ${responseBody.slice(0, 500) || error.message}`;
+      responseParseError = `Non-JSON Google Sheets response: ${summarizeWebhookBody(responseBody) || error.message}`;
     }
     logger.info("[GoogleSheets] response", {
       success: json?.success === true || json?.ok === true,
@@ -345,9 +360,13 @@ const postWebhook = async (payload) => {
       branchCode: json?.branchCode || null,
       spreadsheetId: json?.spreadsheetId || null,
       spreadsheetName: json?.spreadsheetName || null,
+      sheetName: json?.sheetName || null,
       row: Number.isInteger(json?.row) ? json.row : null,
-      error: json?.error || responseParseError,
+      error: json?.error || (!response.ok ? `HTTP ${response.status}: ${summarizeWebhookBody(responseBody)}` : responseParseError),
     });
+    if (!response.ok) {
+      throw new Error(`Google Sheets webhook failed: HTTP ${response.status}: ${json?.error || summarizeWebhookBody(responseBody) || "empty response"}`);
+    }
     if (!json) throw new Error(responseParseError || "Google Sheets webhook returned an empty response");
     if (json && (json.success === false || json.ok === false || json.error || ["error", "failed", "fail"].includes(String(json.status || "").toLowerCase()))) {
       throw new Error(`Google Sheets webhook rejected payload: ${responseBody}`);
@@ -825,7 +844,14 @@ const sendTestEvent = async (user, body) => {
   return {
     action,
     branchCode: code,
+    success: Boolean(result?.ok),
     sent: Boolean(result?.ok),
+    scriptVersion: result?.scriptVersion || result?.responseJson?.scriptVersion || null,
+    spreadsheetId: result?.responseJson?.spreadsheetId || null,
+    spreadsheetName: result?.responseJson?.spreadsheetName || null,
+    sheetName: result?.responseJson?.sheetName || null,
+    row: Number.isInteger(result?.responseJson?.row) ? result.responseJson.row : null,
+    error: result?.error || null,
     result,
     idempotencyKey: payload.idempotencyKey,
   };
@@ -850,6 +876,8 @@ module.exports = {
     branchNameByCode,
     normalizeBranchCode,
     getWebhookUrl,
+    maskWebhookUrl,
+    summarizeWebhookBody,
     isEnabled,
     orderPayload,
     newOrderSheetAmount,

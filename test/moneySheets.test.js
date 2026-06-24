@@ -170,7 +170,10 @@ test("backend accepts only versioned 22-column INKASSA webhook results", () => {
   const result = sheets._internals.validateWebhookResult(payload, {
     success: true,
     scriptVersion: "v4-final-sheets-mapping-2026-06-24",
+    branchCode: "TJV",
     spreadsheetId: "10-h62nZAEp-puvFF_MurFu1UE0Xdjdx5Qtlv3Qpd0L8",
+    spreadsheetName: "Toshkent Janubiy vokzal",
+    sheetName: "Камера хранения Южный вокзал 🛅",
     row: 1885,
   });
 
@@ -186,6 +189,7 @@ test("backend accepts only versioned 22-column INKASSA webhook results", () => {
     () => sheets._internals.validateWebhookResult(payload, {
       success: true,
       scriptVersion: "v4-final-sheets-mapping-2026-06-24",
+      branchCode: "TJV",
       row: 1885,
     }),
     /spreadsheet mismatch/,
@@ -197,7 +201,10 @@ test("backend accepts only versioned 22-column INKASSA webhook results", () => {
     () => sheets._internals.validateWebhookResult(payload, {
       success: true,
       scriptVersion: "v4-final-sheets-mapping-2026-06-24",
+      branchCode: "TJV",
       spreadsheetId: "10-h62nZAEp-puvFF_MurFu1UE0Xdjdx5Qtlv3Qpd0L8",
+      spreadsheetName: "Toshkent Janubiy vokzal",
+      sheetName: "Камера хранения Южный вокзал 🛅",
       row: 1886,
       finalRow: wrongRow,
     }),
@@ -224,6 +231,9 @@ test("Janubiy vokzal aliases normalize to TJV and use its dedicated spreadsheet"
     sheets._internals.EXPECTED_SPREADSHEET_ID_BY_BRANCH_CODE.TJV,
     "10-h62nZAEp-puvFF_MurFu1UE0Xdjdx5Qtlv3Qpd0L8",
   );
+  const maskedWebhook = sheets._internals.maskWebhookUrl("https://script.google.com/macros/s/1234567890abcdefghijkl/exec");
+  assert.equal(maskedWebhook.slice(-20), "67890abcdefghijkl/exec".slice(-20));
+  assert.doesNotMatch(maskedWebhook.slice(0, -20), /script\.google/);
 });
 
 test("orders and doplata alone can write F-K, Click, Payme and Terminal revenue columns", () => {
