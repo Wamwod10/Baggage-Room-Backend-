@@ -38,7 +38,7 @@ const SHEET_NAME_PATTERN_BY_BRANCH_CODE = {
 const WRITABLE_ACTIONS = new Set(["NEW_ORDER", "DOPLATA", "EXPENSE", "INKASSA", "SALARY"]);
 const SCRIPT_VERSION = "v4-final-sheets-mapping-2026-06-24";
 const LEGACY_WIDTH = 22; // A:V
-const IDEMPOTENCY_COLUMN = 23; // hidden/helper column W
+const LEGACY_TECHNICAL_COLUMN = 23; // W; cleaned once and never written again
 
 const COLUMN = {
   DATE: 1,
@@ -128,10 +128,12 @@ function doPost(e) {
         sheetName: sheet.getName(),
         sheetId: sheet.getSheetId(),
       }));
-      ensureColumns_(sheet, IDEMPOTENCY_COLUMN);
+      cleanupLegacyTechnicalColumn_(spreadsheet, sheet);
+      ensureColumns_(sheet, LEGACY_WIDTH);
 
       const idempotencyKey = String(payload.idempotencyKey || buildIdempotencyKey_(payload));
-      if (hasDuplicate_(sheet, idempotencyKey)) {
+      const duplicateRow = getCachedDeliveryRow_(idempotencyKey);
+      if (duplicateRow) {
         return json_({
           success: true,
           ok: true,
@@ -141,8 +143,8 @@ function doPost(e) {
           spreadsheetName: spreadsheet.getName(),
           sheetName: sheet.getName(),
           sheetId: sheet.getSheetId(),
+          row: duplicateRow,
           duplicate: true,
-          idempotencyKey,
         });
       }
 
@@ -153,10 +155,10 @@ function doPost(e) {
       // C contains only grouped size counts; locker numbers and # are never accepted.
       sheet.getRange(targetRow, COLUMN.PLACE).setNumberFormat("@");
       sheet.getRange(targetRow, 1, 1, LEGACY_WIDTH).setValues([row]);
-      sheet.getRange(targetRow, IDEMPOTENCY_COLUMN).setValue(idempotencyKey);
       applyMoneyFormat_(sheet, targetRow, payload);
       styleRow_(sheet, targetRow, action);
-      verifyWrittenRow_(sheet, targetRow, row, idempotencyKey);
+      verifyWrittenRow_(sheet, targetRow, row);
+      cacheDeliveryRow_(idempotencyKey, targetRow);
 
       if (spreadsheet.getId() !== SHEETS.TJV && branchCode === "TJV") {
         throw new Error("TJV write reached the wrong spreadsheet: " + spreadsheet.getId());
@@ -172,7 +174,6 @@ function doPost(e) {
         sheetName: sheet.getName(),
         sheetId: sheet.getSheetId(),
         row: targetRow,
-        idempotencyKey,
         finalRow: row,
       });
     } finally {
@@ -392,13 +393,52 @@ function ensureColumns_(sheet, minColumns) {
   }
 }
 
-function verifyWrittenRow_(sheet, targetRow, expectedRow, idempotencyKey) {
+function cleanupLegacyTechnicalColumn_(spreadsheet, sheet) {
+  if (sheet.getMaxColumns() < LEGACY_TECHNICAL_COLUMN) return;
+  const propertyKey = "GS_W_CLEANED_" + spreadsheet.getId() + "_" + sheet.getSheetId();
+  const properties = typeof PropertiesService !== "undefined"
+    ? PropertiesService.getScriptProperties()
+    : null;
+  if (properties && properties.getProperty(propertyKey) === "1") return;
+
+  sheet.getRange(1, LEGACY_TECHNICAL_COLUMN, sheet.getMaxRows(), 1).clearContent();
+  if (properties) properties.setProperty(propertyKey, "1");
+  console.log("[GoogleSheets] legacyTechnicalColumnCleared " + JSON.stringify({
+    spreadsheetId: spreadsheet.getId(),
+    sheetName: sheet.getName(),
+    sheetId: sheet.getSheetId(),
+    column: "W",
+  }));
+}
+
+function idempotencyCacheKey_(value) {
+  const text = String(value || "");
+  if (typeof Utilities === "undefined") return "gs:" + text.slice(-200);
+  const digest = Utilities.computeDigest(
+    Utilities.DigestAlgorithm.SHA_256,
+    text,
+    Utilities.Charset.UTF_8,
+  );
+  return "gs:" + digest.map(function (byte) {
+    return ((byte + 256) % 256).toString(16).padStart(2, "0");
+  }).join("");
+}
+
+function getCachedDeliveryRow_(idempotencyKey) {
+  if (!idempotencyKey || typeof CacheService === "undefined") return null;
+  const value = CacheService.getScriptCache().get(idempotencyCacheKey_(idempotencyKey));
+  const row = Number(value);
+  return Number.isInteger(row) && row > 0 ? row : null;
+}
+
+function cacheDeliveryRow_(idempotencyKey, row) {
+  if (!idempotencyKey || typeof CacheService === "undefined") return;
+  CacheService.getScriptCache().put(idempotencyCacheKey_(idempotencyKey), String(row), 21600);
+}
+
+function verifyWrittenRow_(sheet, targetRow, expectedRow) {
   SpreadsheetApp.flush();
   const actualRow = sheet.getRange(targetRow, 1, 1, LEGACY_WIDTH).getValues()[0];
-  const actualKey = String(sheet.getRange(targetRow, IDEMPOTENCY_COLUMN).getDisplayValue() || "").trim();
-  if (actualKey !== String(idempotencyKey || "").trim()) {
-    throw new Error("Google Sheets write verification failed: idempotency key mismatch at row " + targetRow);
-  }
 
   for (let index = 0; index < expectedRow.length; index += 1) {
     const expected = expectedRow[index];
@@ -419,7 +459,7 @@ function verifyWrittenRow_(sheet, targetRow, expectedRow, idempotencyKey) {
 
 function findNextOrderRow(sheet) {
   const startRow = legacyDataStartRow_(sheet);
-  ensureColumns_(sheet, IDEMPOTENCY_COLUMN);
+  ensureColumns_(sheet, LEGACY_WIDTH);
 
   const maxRows = Math.max(sheet.getMaxRows(), startRow);
   const watchedColumns = [
@@ -474,13 +514,6 @@ function legacyDataStartRow_(sheet) {
     }
   }
   return 5;
-}
-
-function hasDuplicate_(sheet, idempotencyKey) {
-  if (!idempotencyKey || IDEMPOTENCY_COLUMN > sheet.getMaxColumns()) return false;
-  const maxRows = Math.max(sheet.getMaxRows(), 2);
-  const values = sheet.getRange(2, IDEMPOTENCY_COLUMN, maxRows - 1, 1).getDisplayValues();
-  return values.some((row) => String(row[0] || "").trim() === idempotencyKey);
 }
 
 function buildLegacyRow_(payload) {
