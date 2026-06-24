@@ -26,7 +26,7 @@ test("decimal currency minor units normalize to exact Google Sheets major number
   }
 });
 
-test("NEW_ORDER keeps baggage places, check and period in their own columns", () => {
+test("NEW_ORDER M=1 XL=1 writes only 1-M 1-XL to column C", () => {
   const payload = sheets._internals.orderPayload("NEW_ORDER", {
     id: "order-test",
     branch: { code: "TIA", name: "Toshkent aeroport" },
@@ -34,9 +34,8 @@ test("NEW_ORDER keeps baggage places, check and period in their own columns", ()
     clientName: "Test Client",
     tariffHours: 75,
     items: [
-      { size: "S", count: 1 },
-      { size: "M", count: 2 },
-      { size: "L", count: 1 },
+      { size: "M", count: 1, lockerNumber: 21 },
+      { size: "XL", count: 1, locker: { number: 25, size: "XL" } },
     ],
     finalAmount: parseCurrency(214.29, "RUB"),
     currency: "RUB",
@@ -44,7 +43,8 @@ test("NEW_ORDER keeps baggage places, check and period in their own columns", ()
   });
   const row = appsScript.buildLegacyRow_(payload);
 
-  assert.equal(row[COLUMN.PLACE - 1], "1-S 2-M 1-L");
+  assert.deepEqual(payload.sizeCounts, { S: 0, M: 1, L: 0, XL: 1 });
+  assert.equal(row[COLUMN.PLACE - 1], "1-M 1-XL");
   assert.equal(row[COLUMN.CHECK - 1], "TIA-1001");
   assert.equal(row[COLUMN.PERIOD - 1], "75 soat");
   assert.equal(row[COLUMN.CASH_RUB - 1], 214.29);
@@ -72,12 +72,20 @@ test("NEW_ORDER sends real paid amount when present and calculated final amount 
     paymentType: "CASH",
   }, { amount: sheets._internals.newOrderSheetAmount({ realPaidAmount: 175000, finalAmount: 200000 }) });
 
-  const row = appsScript.buildOrderRow(payload);
+  const row = appsScript.buildNewOrderRow(payload);
   assert.equal(row[COLUMN.CASH_UZS - 1], 175000);
 });
 
-test("legacy place fallback strips hash signs from column C", () => {
-  assert.equal(appsScript.formatPlaces_({ place: "#1-S #2-M #1-L" }), "1-S 2-M 1-L");
+test("column C falls back only to items and never to locker numbers or legacy # text", () => {
+  assert.equal(appsScript.formatSizeCounts_({
+    items: [
+      { size: "M", count: 1, lockerNumber: 21 },
+      { locker: { size: "XL", number: 25 }, count: 1 },
+    ],
+    lockers: [{ size: "S", lockerNumber: 99 }],
+    place: "#21-M #-XL",
+  }), "1-M 1-XL");
+  assert.equal(appsScript.formatSizeCounts_({ place: "#-M #-XL", lockers: [{ size: "M" }] }), "");
 });
 
 test("EXPENSE, SALARY and INKASSA map only to their financial blocks", () => {
@@ -118,71 +126,6 @@ test("EXPENSE, SALARY and INKASSA map only to their financial blocks", () => {
   assert.equal(inkassaRow[COLUMN.NAME - 1], "Inkassa USD - Bosh kassir");
   assert.deepEqual(inkassaRow.slice(COLUMN.CASH_UZS - 1, COLUMN.TERMINAL), new Array(9).fill(""));
   assert.deepEqual(salaryRow.slice(COLUMN.CASH_UZS - 1, COLUMN.TERMINAL), new Array(9).fill(""));
-});
-
-test("EXPENSE and INKASSA preserve every source field in the full-data block", () => {
-  const createdAt = "2026-06-23T10:11:12+05:00";
-  const createdBy = { id: "user-1", name: "Ali Admin", login: "ali.admin" };
-  const branch = { id: "branch-1", code: "TIA", name: "Toshkent aeroport" };
-  const expense = sheets._internals.expensePayload({
-    id: "expense-full",
-    branchId: branch.id,
-    shiftId: "shift-1",
-    createdById: createdBy.id,
-    branch,
-    createdBy,
-    category: "Transport",
-    reason: "Aeroportga taxi",
-    amount: parseCurrency(99.5, "EUR"),
-    currency: "EUR",
-    createdAt,
-  });
-  const inkassa = sheets._internals.inkassaPayload({
-    id: "inkassa-full",
-    branchId: branch.id,
-    shiftId: "shift-1",
-    createdById: createdBy.id,
-    branch,
-    createdBy,
-    receiverName: "Bosh kassir",
-    note: "Kunlik topshiruv",
-    amount: parseCurrency(123.45, "USD"),
-    currency: "USD",
-    createdAt,
-  });
-
-  assert.deepEqual(expense.sourceData, {
-    id: "expense-full",
-    branchId: "branch-1",
-    branchCode: "TIA",
-    branchName: "Toshkent aeroport",
-    shiftId: "shift-1",
-    category: "Transport",
-    reason: "Aeroportga taxi",
-    amountMinor: 9950,
-    amount: 99.5,
-    currency: "EUR",
-    createdById: "user-1",
-    adminName: "Ali Admin",
-    adminLogin: "ali.admin",
-    createdAt: expense.createdAt,
-  });
-  assert.equal(inkassa.sourceData.receiverName, "Bosh kassir");
-  assert.equal(inkassa.sourceData.note, "Kunlik topshiruv");
-  assert.equal(inkassa.sourceData.amountMinor, 12345);
-  assert.equal(inkassa.sourceData.amount, 123.45);
-
-  const headerIndex = (name) => appsScript.FULL_DATA_HEADERS.indexOf(name);
-  for (const payload of [expense, inkassa]) {
-    const detailRow = appsScript.buildFullDataRow_(payload);
-    assert.equal(detailRow.length, appsScript.FULL_DATA_HEADERS.length);
-    assert.equal(detailRow[headerIndex("YOZUV ID")], payload.entityId);
-    assert.equal(detailRow[headerIndex("FILIAL ID")], "branch-1");
-    assert.equal(detailRow[headerIndex("SMENA ID")], "shift-1");
-    assert.equal(detailRow[headerIndex("ADMIN")], "Ali Admin");
-    assert.equal(detailRow[headerIndex("ADMIN LOGIN")], "ali.admin");
-    assert.deepEqual(JSON.parse(detailRow[headerIndex("TO'LIQ JSON")]), payload);
-  }
 });
 
 test("INKASSA currencies use O-T only and never F-N revenue columns", () => {
@@ -236,65 +179,77 @@ test("orders and doplata alone can write F-K, Click, Payme and Terminal revenue 
   }
 });
 
-test("each action builder returns an exact A:V row with isolated financial columns", () => {
-  const common = { createdAt: "2026-06-23T10:00:00+05:00", sheetAmount: "214,29", currency: "RUB" };
-  const order = appsScript.buildOrderRow({
-    ...common,
+test("required NEW_ORDER, INKASSA, EXPENSE, SALARY and DOPLATA A:V mappings are exact", () => {
+  const createdAt = "2026-06-24T10:00:00+05:00";
+  const order = appsScript.buildNewOrderRow({
     action: "NEW_ORDER",
+    createdAt,
     clientName: "Ali",
     orderNumber: "TIA-22",
-    lockers: [{ size: "S", count: 1 }],
+    sizeCounts: { S: 0, M: 1, L: 0, XL: 1 },
     period: "3 soat",
     paymentType: "CASH",
-  });
-  const doplata = appsScript.buildDoplataRow({
-    ...common,
-    action: "DOPLATA",
-    clientName: "Ali",
-    orderNumber: "TIA-22",
-    doplataPeriod: "ДОПЛАТА 3ч",
-    paymentType: "PAYME",
-  });
-  const expense = appsScript.buildExpenseRow({
-    action: "EXPENSE",
-    createdAt: common.createdAt,
-    category: "Internet",
-    reason: "oylik to'lov",
-    adminName: "Admin",
-    currency: "UZS",
-    sheetAmount: "60 000",
-  });
-  const salary = appsScript.buildSalaryRow({
-    action: "SALARY",
-    createdAt: common.createdAt,
-    salaryReceiver: "Vali",
     currency: "UZS",
     sheetAmount: 250000,
   });
   const inkassa = appsScript.buildInkassaRow({
     action: "INKASSA",
-    createdAt: common.createdAt,
-    receiverName: "Murod aka",
-    currency: "RUB",
-    sheetAmount: "214,29",
+    createdAt,
+    receiverName: "Admin",
+    note: "Kunlik inkassa",
+    currency: "UZS",
+    sheetAmount: 500000,
+  });
+  const expense = appsScript.buildExpenseRow({
+    action: "EXPENSE",
+    createdAt,
+    category: "Internet",
+    reason: "oylik to'lov",
+    adminName: "Admin",
+    currency: "UZS",
+    sheetAmount: 60000,
+  });
+  const salary = appsScript.buildSalaryRow({
+    action: "SALARY",
+    createdAt,
+    salaryReceiver: "Vali",
+    currency: "UZS",
+    sheetAmount: 300000,
+  });
+  const doplata = appsScript.buildDoplataRow({
+    action: "DOPLATA",
+    createdAt,
+    clientName: "Ali",
+    orderNumber: "TIA-22",
+    sizeCounts: { S: 0, M: 1, L: 0, XL: 1 },
+    doplataPeriod: "DOPLATA 3ч",
+    paymentType: "PAYME",
+    currency: "UZS",
+    sheetAmount: 75000,
   });
 
-  for (const row of [order, doplata, expense, salary, inkassa]) assert.equal(row.length, 22);
-  assert.equal(order[COLUMN.CASH_RUB - 1], 214.29);
-  assert.equal(doplata[COLUMN.PAYME - 1], 214.29);
-  assert.equal(doplata[COLUMN.PERIOD - 1], "ДОПЛАТА 3ч");
+  for (const row of [order, inkassa, expense, salary, doplata]) assert.equal(row.length, 22);
+
+  assert.equal(order[COLUMN.PLACE - 1], "1-M 1-XL");
+  assert.equal(order[COLUMN.CASH_UZS - 1], 250000);
+  assert.equal(order[COLUMN.NAME - 1], "Хранение багажа");
+
+  assert.equal(inkassa[COLUMN.FIO - 1], "Admin");
+  assert.equal(inkassa[COLUMN.BALANCE_UZS - 1], 500000);
+  assert.equal(inkassa[COLUMN.NAME - 1], "Inkassa - Admin");
+  assert.deepEqual(inkassa.slice(COLUMN.CASH_UZS - 1, COLUMN.TERMINAL), new Array(9).fill(""));
+  assert.equal(inkassa[COLUMN.EXPENSE - 1], "");
+
   assert.equal(expense[COLUMN.FIO - 1], "Admin");
   assert.equal(expense[COLUMN.EXPENSE - 1], 60000);
   assert.equal(expense[COLUMN.NAME - 1], "Internet - oylik to'lov");
-  assert.equal(salary[COLUMN.EXPENSE - 1], 250000);
-  assert.equal(salary[COLUMN.CHECK - 1], "");
-  assert.equal(salary[COLUMN.PERIOD - 1], "");
-  assert.equal(inkassa[COLUMN.BALANCE_RUB - 1], 214.29);
-  assert.equal(inkassa[COLUMN.EXPENSE - 1], "");
-  assert.equal(inkassa[COLUMN.NAME - 1], "Inkassa RUB - Murod aka");
-  assert.deepEqual(expense.slice(COLUMN.CASH_UZS - 1, COLUMN.TERMINAL), new Array(9).fill(""));
-  assert.deepEqual(salary.slice(COLUMN.BALANCE_UZS - 1, COLUMN.BALANCE_TJS), new Array(6).fill(""));
-  assert.deepEqual(inkassa.slice(COLUMN.CASH_UZS - 1, COLUMN.TERMINAL), new Array(9).fill(""));
+
+  assert.equal(salary[COLUMN.FIO - 1], "Vali");
+  assert.equal(salary[COLUMN.EXPENSE - 1], 300000);
+  assert.equal(salary[COLUMN.NAME - 1], "Oylik - Vali");
+
+  assert.equal(doplata[COLUMN.PAYME - 1], 75000);
+  assert.equal(doplata[COLUMN.PERIOD - 1], "DOPLATA 3ч");
 });
 
 test("localized decimal strings stay decimals instead of becoming 100x larger", () => {

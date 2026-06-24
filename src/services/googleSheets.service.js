@@ -101,26 +101,28 @@ const positiveMoneyFields = (amount) => {
 
 const INKASSA_ROW_LABEL = "INKASSA";
 
-const lockerItems = (order) => {
+const orderItems = (order) => {
   if (!Array.isArray(order?.items)) return [];
-  const counts = order.items.reduce((acc, item) => {
-    const size = item.size || item.locker?.size;
-    if (!size) return acc;
-    acc[size] = (acc[size] || 0) + Number(item.count || 1);
-    return acc;
-  }, {});
-
-  return ["S", "M", "L", "XL"]
-    .filter((size) => Number(counts[size] || 0) > 0)
-    .map((size) => ({ size, count: counts[size] }));
+  return order.items
+    .map((item) => ({
+      size: String(item?.size || item?.locker?.size || "").toUpperCase(),
+      count: Number(item?.count || 1),
+    }))
+    .filter((item) => ["S", "M", "L", "XL"].includes(item.size));
 };
 
-const formatBaggagePlaces = (items = []) =>
+const orderSizeCounts = (order) => {
+  const counts = { S: 0, M: 0, L: 0, XL: 0 };
+  for (const item of orderItems(order)) {
+    counts[item.size] += Number.isFinite(item.count) && item.count > 0 ? item.count : 1;
+  }
+  return counts;
+};
+
+const formatSizeCounts = (sizeCounts = {}) =>
   ["S", "M", "L", "XL"]
     .map((size) => {
-      const count = items
-        .filter((item) => item.size === size)
-        .reduce((total, item) => total + Number(item.count || 0), 0);
+      const count = Number(sizeCounts[size] || 0);
       return count > 0 ? `${count}-${size}` : null;
     })
     .filter(Boolean)
@@ -139,7 +141,8 @@ const sheetAmount = (amount, currency) => {
 };
 
 const orderPayload = (action, order, overrides = {}) => {
-  const lockers = lockerItems(order);
+  const items = orderItems(order);
+  const sizeCounts = orderSizeCounts(order);
   const payload = {
     branchCode: branchCode(order),
     branch: branchName(order),
@@ -148,9 +151,8 @@ const orderPayload = (action, order, overrides = {}) => {
     clientName: order?.clientName || null,
     phone: order?.phone || null,
     passport: order?.passport || null,
-    lockers,
-    places: formatBaggagePlaces(lockers),
-    place: formatBaggagePlaces(lockers),
+    sizeCounts,
+    items,
     checkIn: toIso(order?.checkIn),
     checkOut: toIso(order?.realPickupTime || order?.plannedCheckOut || order?.closedAt),
     period: order?.tariffHours ? `${order.tariffHours} soat` : "",
@@ -349,8 +351,8 @@ const sendDoplata = (order) =>
     currency: order?.overtimeCurrency || order?.currency || "UZS",
     paymentType: order?.overtimePaymentType || order?.paymentType || "CASH",
     checkOut: toIso(order?.realPickupTime || order?.updatedAt),
-    period: `ДОПЛАТА ${Number(order?.overtimeHours || 0)}ч`,
-    doplataPeriod: `ДОПЛАТА ${Number(order?.overtimeHours || 0)}ч`,
+    period: `DOPLATA ${Number(order?.overtimeHours || 0)}ч`,
+    doplataPeriod: `DOPLATA ${Number(order?.overtimeHours || 0)}ч`,
     operationName: "Доплата",
     note: "DOPLATA",
   }));
@@ -727,7 +729,8 @@ module.exports = {
     isEnabled,
     orderPayload,
     newOrderSheetAmount,
-    formatBaggagePlaces,
+    orderSizeCounts,
+    formatSizeCounts,
     basePayload,
     expensePayload,
     inkassaPayload,

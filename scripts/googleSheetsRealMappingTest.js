@@ -9,32 +9,48 @@ const batch = `GS-MAPPING-TEST-${Date.now()}`;
 const createdAt = new Date().toISOString();
 const common = { branchCode, createdAt, amountUnit: "MAJOR" };
 
-const order = (name, paymentType, currency, sheetAmount) => ({
-  ...common,
-  action: "NEW_ORDER",
-  entityId: `${batch}:${name}`,
-  idempotencyKey: `${batch}:${name}`,
-  orderNumber: `${batch}-${name}`,
-  clientName: `TEST ${name}`,
-  lockers: [{ size: "S", count: 1 }, { size: "M", count: 2 }, { size: "L", count: 1 }],
-  period: "3 soat",
-  paymentType,
-  currency,
-  amount: sheetAmount,
-  sheetAmount,
-});
-
 const cases = [
-  ["order-cash-uzs-F", order("CASH-UZS-F", "CASH", "UZS", 250000)],
-  ["order-cash-usd-G", order("CASH-USD-G", "CASH", "USD", 123.45)],
-  ["order-click-L", order("CLICK-L", "CLICK", "UZS", 1000)],
-  ["order-payme-M", order("PAYME-M", "PAYME", "UZS", 2000)],
-  ["order-terminal-N", order("TERMINAL-N", "TERMINAL", "UZS", 3000)],
-  ["expense-U-V", {
+  ["new-order-size-counts", {
+    ...common,
+    action: "NEW_ORDER",
+    entityId: `${batch}:NEW-ORDER`,
+    idempotencyKey: `${batch}:NEW-ORDER`,
+    orderNumber: `${batch}-ORDER`,
+    clientName: "TEST CLIENT",
+    sizeCounts: { S: 0, M: 1, L: 0, XL: 1 },
+    items: [{ size: "M", count: 1 }, { size: "XL", count: 1 }],
+    period: "3 soat",
+    paymentType: "CASH",
+    currency: "UZS",
+    amount: 250000,
+    sheetAmount: 250000,
+  }, (row) => {
+    if (row[2] !== "1-M 1-XL") throw new Error(`NEW_ORDER C expected 1-M 1-XL, got ${row[2]}`);
+    if (row[5] !== 250000) throw new Error(`NEW_ORDER F expected 250000, got ${row[5]}`);
+    if (String(row[2]).includes("#")) throw new Error(`NEW_ORDER C contains forbidden #: ${row[2]}`);
+  }],
+  ["inkassa-uzs-O", {
+    ...common,
+    action: "INKASSA",
+    entityId: `${batch}:INKASSA`,
+    idempotencyKey: `${batch}:INKASSA`,
+    receiverName: "Admin",
+    note: "Kunlik inkassa",
+    currency: "UZS",
+    amount: 500000,
+    inkassaAmount: 500000,
+    sheetAmount: 500000,
+  }, (row) => {
+    if (row[1] !== "Admin") throw new Error(`INKASSA B expected Admin, got ${row[1]}`);
+    if (row[14] !== 500000) throw new Error(`INKASSA O expected 500000, got ${row[14]}`);
+    if (row[5] !== "" || row[20] !== "") throw new Error("INKASSA must keep F and U empty");
+    if (row[21] !== "Inkassa - Admin") throw new Error(`INKASSA V mismatch: ${row[21]}`);
+  }],
+  ["expense-U", {
     ...common,
     action: "EXPENSE",
-    entityId: `${batch}:EXPENSE-U-V`,
-    idempotencyKey: `${batch}:EXPENSE-U-V`,
+    entityId: `${batch}:EXPENSE`,
+    idempotencyKey: `${batch}:EXPENSE`,
     adminName: "GS Test Admin",
     category: "Internet",
     reason: "mapping test",
@@ -42,63 +58,49 @@ const cases = [
     amount: 60000,
     expenseAmount: 60000,
     sheetAmount: 60000,
+  }, (row) => {
+    if (row[20] !== 60000) throw new Error(`EXPENSE U expected 60000, got ${row[20]}`);
+    if (row[21] !== "Internet - mapping test") throw new Error(`EXPENSE V mismatch: ${row[21]}`);
   }],
-  ["salary-U-V", {
+  ["salary-U", {
     ...common,
     action: "SALARY",
-    entityId: `${batch}:SALARY-U-V`,
-    idempotencyKey: `${batch}:SALARY-U-V`,
-    salaryReceiver: "GS Test Employee",
+    entityId: `${batch}:SALARY`,
+    idempotencyKey: `${batch}:SALARY`,
+    salaryReceiver: "Vali",
     currency: "UZS",
-    amount: 70000,
-    salaryAmount: 70000,
-    sheetAmount: 70000,
+    amount: 300000,
+    salaryAmount: 300000,
+    sheetAmount: 300000,
+  }, (row) => {
+    if (row[20] !== 300000) throw new Error(`SALARY U expected 300000, got ${row[20]}`);
+    if (row[21] !== "Oylik - Vali") throw new Error(`SALARY V mismatch: ${row[21]}`);
   }],
-  ["inkassa-uzs-O-V", {
+  ["doplata-payme-M", {
     ...common,
-    action: "INKASSA",
-    entityId: `${batch}:INKASSA-UZS-O-V`,
-    idempotencyKey: `${batch}:INKASSA-UZS-O-V`,
-    receiverName: "GS Test Receiver",
-    currency: "UZS",
-    amount: 302000,
-    inkassaAmount: 302000,
-    sheetAmount: 302000,
-  }],
-  ["inkassa-usd-P-V", {
-    ...common,
-    action: "INKASSA",
-    entityId: `${batch}:INKASSA-USD-P-V`,
-    idempotencyKey: `${batch}:INKASSA-USD-P-V`,
-    receiverName: "GS Test Receiver",
-    currency: "USD",
-    amount: 100,
-    inkassaAmount: 100,
-    sheetAmount: 100,
-  }],
-  ["inkassa-rub-R-V", {
-    ...common,
-    action: "INKASSA",
-    entityId: `${batch}:INKASSA-RUB-R-V`,
-    idempotencyKey: `${batch}:INKASSA-RUB-R-V`,
-    receiverName: "GS Test Receiver",
-    currency: "RUB",
-    amount: 214.29,
-    inkassaAmount: 214.29,
-    sheetAmount: 214.29,
-  }],
-  ["doplata-rub-I-V", {
-    ...order("DOPLATA-RUB-I-V", "CASH", "RUB", 17.39),
     action: "DOPLATA",
-    doplataPeriod: "ДОПЛАТА 3ч",
-    period: "ДОПЛАТА 3ч",
+    entityId: `${batch}:DOPLATA`,
+    idempotencyKey: `${batch}:DOPLATA`,
+    orderNumber: `${batch}-DOPLATA`,
+    clientName: "TEST CLIENT",
+    sizeCounts: { S: 0, M: 1, L: 0, XL: 1 },
+    items: [{ size: "M", count: 1 }, { size: "XL", count: 1 }],
+    doplataPeriod: "DOPLATA 3ч",
+    period: "DOPLATA 3ч",
     operationName: "Доплата",
+    paymentType: "PAYME",
+    currency: "UZS",
+    amount: 75000,
+    sheetAmount: 75000,
+  }, (row) => {
+    if (row[12] !== 75000) throw new Error(`DOPLATA M expected 75000, got ${row[12]}`);
+    if (row[4] !== "DOPLATA 3ч") throw new Error(`DOPLATA E mismatch: ${row[4]}`);
   }],
 ];
 
 const run = async () => {
   const results = [];
-  for (const [name, payload] of cases) {
+  for (const [name, payload, verify] of cases) {
     const response = await fetch(webhook, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -112,14 +114,17 @@ const run = async () => {
       parsed = { raw: body };
     }
     const confirmedByCurrentMapper = parsed?.ok === true
-      && (Number.isInteger(parsed?.row) || parsed?.duplicate === true);
+      && Number.isInteger(parsed?.row)
+      && Array.isArray(parsed?.finalRow)
+      && parsed.finalRow.length === 22;
     if (!response.ok || parsed?.ok === false || parsed?.error || !confirmedByCurrentMapper) {
       if (response.ok && !confirmedByCurrentMapper) {
         throw new Error(`${name} reached an outdated Apps Script deployment: ${body}`);
       }
       throw new Error(`${name} failed: HTTP ${response.status} ${body}`);
     }
-    results.push({ name, status: response.status, row: parsed?.row ?? null, duplicate: Boolean(parsed?.duplicate) });
+    verify(parsed.finalRow);
+    results.push({ name, status: response.status, sheetRow: parsed.row, finalRow: parsed.finalRow });
   }
   console.log(JSON.stringify({ batch, branchCode, results }, null, 2));
 };

@@ -26,29 +26,8 @@ const SHEET_NAME_PATTERN_BY_BRANCH_CODE = {
 };
 
 const WRITABLE_ACTIONS = new Set(["NEW_ORDER", "DOPLATA", "EXPENSE", "INKASSA", "SALARY"]);
-const FULL_DATA_ACTIONS = new Set(["EXPENSE", "INKASSA"]);
 const LEGACY_WIDTH = 22; // A:V
 const IDEMPOTENCY_COLUMN = 23; // hidden/helper column W
-const FULL_DATA_START_COLUMN = 24; // X
-const FULL_DATA_HEADERS = [
-  "AMAL",
-  "YOZUV ID",
-  "FILIAL ID",
-  "FILIAL KODI",
-  "FILIAL NOMI",
-  "SMENA ID",
-  "TURI / KATEGORIYA",
-  "QABUL QILUVCHI",
-  "IZOH / SABAB",
-  "SUMMA",
-  "VALYUTA",
-  "ADMIN ID",
-  "ADMIN",
-  "ADMIN LOGIN",
-  "YARATILGAN VAQT",
-  "TO'LIQ JSON",
-];
-const FULL_DATA_END_COLUMN = FULL_DATA_START_COLUMN + FULL_DATA_HEADERS.length - 1; // AM
 
 const COLUMN = {
   DATE: 1,
@@ -127,8 +106,7 @@ function doPost(e) {
     lock.waitLock(30000);
     try {
       const sheet = getOrCreateSheet_(branchCode);
-      ensureColumns_(sheet, FULL_DATA_ACTIONS.has(action) ? FULL_DATA_END_COLUMN : IDEMPOTENCY_COLUMN);
-      if (FULL_DATA_ACTIONS.has(action)) ensureFullDataHeaders_(sheet);
+      ensureColumns_(sheet, IDEMPOTENCY_COLUMN);
 
       const idempotencyKey = String(payload.idempotencyKey || buildIdempotencyKey_(payload));
       if (hasDuplicate_(sheet, idempotencyKey)) {
@@ -137,20 +115,16 @@ function doPost(e) {
 
       const row = buildLegacyRow_(payload);
       if (row.length !== LEGACY_WIDTH) throw new Error("Row must contain exactly 22 columns (A:V)");
+      console.log("[GoogleSheets] finalRow " + JSON.stringify({ action, branchCode, row }));
       const targetRow = findNextOrderRow(sheet);
-      // C (№ места / Кол-во место) is plain text, for example "1-S 2-M 1-L".
+      // C contains only grouped size counts; locker numbers and # are never accepted.
       sheet.getRange(targetRow, COLUMN.PLACE).setNumberFormat("@");
       sheet.getRange(targetRow, 1, 1, LEGACY_WIDTH).setValues([row]);
       sheet.getRange(targetRow, IDEMPOTENCY_COLUMN).setValue(idempotencyKey);
-      if (FULL_DATA_ACTIONS.has(action)) {
-        sheet
-          .getRange(targetRow, FULL_DATA_START_COLUMN, 1, FULL_DATA_HEADERS.length)
-          .setValues([buildFullDataRow_(payload)]);
-      }
       applyMoneyFormat_(sheet, targetRow, payload);
       styleRow_(sheet, targetRow, action);
 
-      return json_({ ok: true, row: targetRow, idempotencyKey });
+      return json_({ ok: true, row: targetRow, idempotencyKey, finalRow: row });
     } finally {
       lock.releaseLock();
     }
@@ -178,17 +152,6 @@ function ensureColumns_(sheet, minColumns) {
   if (currentColumns < minColumns) {
     sheet.insertColumnsAfter(currentColumns, minColumns - currentColumns);
   }
-}
-
-function ensureFullDataHeaders_(sheet) {
-  const headerRow = Math.max(1, legacyDataStartRow_(sheet) - 1);
-  const range = sheet.getRange(headerRow, FULL_DATA_START_COLUMN, 1, FULL_DATA_HEADERS.length);
-  const existing = range.getDisplayValues()[0];
-  const headers = FULL_DATA_HEADERS.map(function (header, index) {
-    return String(existing[index] || "").trim() || header;
-  });
-  range.setValues([headers]);
-  range.setFontWeight("bold");
 }
 
 function findNextOrderRow(sheet) {
@@ -259,7 +222,7 @@ function hasDuplicate_(sheet, idempotencyKey) {
 
 function buildLegacyRow_(payload) {
   const action = String(payload.action || "").toUpperCase();
-  if (action === "NEW_ORDER") return buildOrderRow(payload);
+  if (action === "NEW_ORDER") return buildNewOrderRow(payload);
   if (action === "DOPLATA") return buildDoplataRow(payload);
   if (action === "EXPENSE") return buildExpenseRow(payload);
   if (action === "SALARY") return buildSalaryRow(payload);
@@ -273,10 +236,10 @@ function createRow_(payload) {
   return row;
 }
 
-function buildOrderRow(payload) {
+function buildNewOrderRow(payload) {
   const row = createRow_(payload);
   row[COLUMN.FIO - 1] = payload.clientName || payload.fio || "";
-  row[COLUMN.PLACE - 1] = formatPlaces_(payload);
+  row[COLUMN.PLACE - 1] = formatSizeCounts_(payload);
   row[COLUMN.CHECK - 1] = payload.orderNumber || payload.checkNumber || "";
   row[COLUMN.PERIOD - 1] = payload.period || payload.tariffHours || payload.storagePeriod || "";
   row[COLUMN.NAME - 1] = payload.operationName || "Хранение багажа";
@@ -305,9 +268,9 @@ function writeRevenue_(row, payload, amount) {
 function buildDoplataRow(payload) {
   const row = createRow_(payload);
   row[COLUMN.FIO - 1] = payload.clientName || payload.fio || "";
-  row[COLUMN.PLACE - 1] = formatPlaces_(payload);
+  row[COLUMN.PLACE - 1] = formatSizeCounts_(payload);
   row[COLUMN.CHECK - 1] = payload.orderNumber || payload.checkNumber || "";
-  row[COLUMN.PERIOD - 1] = payload.doplataPeriod || payload.period || payload.storagePeriod || "ДОПЛАТА";
+  row[COLUMN.PERIOD - 1] = payload.doplataPeriod || payload.period || payload.storagePeriod || "DOPLATA";
   row[COLUMN.NAME - 1] = payload.operationName || "Доплата";
 
   const amount = sheetAmount_(payload, payload.amount, payload.overtimeAmount, payload.finalAmount, payload.realPaidAmount);
@@ -347,34 +310,6 @@ function buildInkassaRow(payload) {
   const label = currency === "UZS" ? "Inkassa" : "Inkassa " + currency;
   row[COLUMN.NAME - 1] = [label, receiver || cleanNote].filter(Boolean).join(" - ");
   return row;
-}
-
-function buildFullDataRow_(payload) {
-  const source = payload.sourceData || {};
-  const action = String(payload.action || "").toUpperCase();
-  const amount = sheetAmount_(payload, source.amount, payload.amount, payload.finalAmount);
-  const typeOrCategory = action === "EXPENSE"
-    ? (source.category || payload.category || "Xarajat")
-    : (payload.operationName || "INKASSA");
-
-  return [
-    action,
-    firstValue_(source.id, payload.entityId, payload.orderId),
-    firstValue_(source.branchId, payload.branchId),
-    firstValue_(source.branchCode, payload.branchCode),
-    firstValue_(source.branchName, payload.branchName, payload.branch),
-    firstValue_(source.shiftId, payload.shiftId),
-    typeOrCategory,
-    firstValue_(source.receiverName, payload.receiverName, payload.recipientName),
-    firstValue_(source.reason, source.note, payload.reason, payload.note),
-    amount,
-    firstValue_(source.currency, payload.currency),
-    firstValue_(source.createdById, payload.createdById),
-    firstValue_(source.adminName, payload.adminName),
-    firstValue_(source.adminLogin, payload.adminLogin),
-    firstValue_(source.createdAt, payload.createdAt),
-    JSON.stringify(payload),
-  ];
 }
 
 function parseNumber_(value) {
@@ -440,27 +375,37 @@ function firstValue_() {
   return "";
 }
 
-function formatPlaces_(payload) {
-  const lockers = Array.isArray(payload.lockers) ? payload.lockers : [];
-  const counts = lockers.reduce(function (acc, locker) {
-    const size = String(locker.size || "").toUpperCase();
-    if (!size) return acc;
-    acc[size] = (acc[size] || 0) + Number(locker.count || 1);
-    return acc;
-  }, {});
-  const fromCounts = ["S", "M", "L", "XL"]
+function buildSizeCounts_(payload) {
+  const sizes = ["S", "M", "L", "XL"];
+  const counts = { S: 0, M: 0, L: 0, XL: 0 };
+  const hasSizeCounts = payload.sizeCounts && typeof payload.sizeCounts === "object" && !Array.isArray(payload.sizeCounts);
+
+  if (hasSizeCounts) {
+    sizes.forEach(function (size) {
+      const count = Number(payload.sizeCounts[size] || 0);
+      counts[size] = Number.isFinite(count) && count > 0 ? count : 0;
+    });
+    return counts;
+  }
+
+  const items = Array.isArray(payload.items) ? payload.items : [];
+  items.forEach(function (item) {
+    const size = String((item && (item.size || (item.locker && item.locker.size))) || "").toUpperCase();
+    if (sizes.indexOf(size) === -1) return;
+    const count = Number(item.count || 1);
+    counts[size] += Number.isFinite(count) && count > 0 ? count : 1;
+  });
+  return counts;
+}
+
+function formatSizeCounts_(payload) {
+  const counts = buildSizeCounts_(payload);
+  return ["S", "M", "L", "XL"]
     .map(function (size) {
       return counts[size] > 0 ? counts[size] + "-" + size : "";
     })
     .filter(Boolean)
     .join(" ");
-  if (fromCounts) return fromCounts;
-
-  // Backward-compatible fallback for older payloads; never allow # in column C.
-  return String(payload.place || payload.places || "")
-    .replace(/#/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
 }
 
 function formatSheetDate_(dateValue) {
@@ -501,15 +446,13 @@ if (typeof module !== "undefined" && module.exports) {
     COLUMN,
     SHEET_BY_BRANCH_CODE,
     buildLegacyRow_,
-    buildOrderRow,
+    buildNewOrderRow,
     buildDoplataRow,
     buildExpenseRow,
     buildSalaryRow,
     buildInkassaRow,
-    buildFullDataRow_,
-    FULL_DATA_HEADERS,
-    FULL_DATA_START_COLUMN,
-    formatPlaces_,
+    buildSizeCounts_,
+    formatSizeCounts_,
     amountAbs_,
     parseNumber_,
     sheetAmount_,
