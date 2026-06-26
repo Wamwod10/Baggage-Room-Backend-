@@ -34,12 +34,19 @@ const eventFlag = {
   lockerService: "lockerServiceEnabled",
 };
 
-const sendRaw = async (setting, text) => {
-  if (!setting?.enabled || !setting.botToken || !setting.groupId) return { skipped: true };
-  const response = await fetch(`https://api.telegram.org/bot${setting.botToken}/sendMessage`, {
+const hasAnyEventEnabled = (setting) => Object.values(eventFlag).some((field) => setting?.[field] !== false);
+
+const sendRaw = async (setting, text, { requireEnabled = true } = {}) => {
+  if (!setting?.botToken || !setting.groupId) return { skipped: true, reason: "missing_credentials" };
+  if (requireEnabled && !setting.enabled) return { skipped: true, reason: "disabled" };
+  const botToken = String(setting.botToken).trim();
+  const groupId = String(setting.groupId).trim();
+  if (!botToken || !groupId) return { skipped: true, reason: "missing_credentials" };
+
+  const response = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: setting.groupId, text }),
+    body: JSON.stringify({ chat_id: groupId, text }),
   });
   if (!response.ok) {
     const body = await response.text();
@@ -51,7 +58,7 @@ const sendRaw = async (setting, text) => {
 const sendBranchEvent = async (branchId, event, text) => {
   const setting = await prisma.telegramSetting.findUnique({ where: { branchId } });
   const flag = eventFlag[event];
-  if (!setting || (flag && !setting[flag])) return { skipped: true };
+  if (!setting || (flag && setting[flag] === false && hasAnyEventEnabled(setting))) return { skipped: true };
   return sendRaw(setting, text);
 };
 
@@ -67,7 +74,12 @@ const sendExpense = (expense) => sendBranchEvent(expense.branchId, "expense", ex
 const sendOrderEdit = (order, changes) => sendBranchEvent(order.branchId, "orderEdit", orderEditMessage(order, changes));
 const sendLockerTransfer = (payload, transfer) => sendBranchEvent(payload.branchId || transfer.branchId, "lockerTransfer", lockerTransferMessage(payload, transfer));
 const sendLockerService = (payload) => sendBranchEvent(payload.branchId, "lockerService", lockerServiceMessage(payload));
-const testSend = async (branchId) => sendBranchEvent(branchId, "newOrder", "🧾 Test xabari: Telegram sozlamalari tekshirilmoqda");
+const testSend = async (branchId) => {
+  const setting = await prisma.telegramSetting.findUnique({ where: { branchId } });
+  if (!setting) throw new AppError("Telegram settings not found for this branch", 404);
+  if (!setting.botToken || !setting.groupId) throw new AppError("Telegram bot token and group ID are required", 400);
+  return sendRaw({ ...setting, enabled: true }, "🧾 Test xabari: Telegram sozlamalari tekshirilmoqda", { requireEnabled: false });
+};
 
 const deliveryKey = ({ action, entityType, entityId }) => `telegram:${action}:${entityType}:${entityId}`;
 

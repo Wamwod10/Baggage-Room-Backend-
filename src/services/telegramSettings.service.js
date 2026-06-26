@@ -14,10 +14,12 @@ const listSettings = async (user, query) => {
 
 const updateSettings = async (user, branchId, body) => {
   if (user.role !== "SUPER_ADMIN") throw new AppError("Only super admin can update Telegram settings", 403);
-  if (body.enabled && (!body.botToken || !body.groupId)) {
+  const oldValue = await prisma.telegramSetting.findUnique({ where: { branchId } });
+  const nextBotToken = body.botToken !== undefined ? body.botToken : oldValue?.botToken;
+  const nextGroupId = body.groupId !== undefined ? body.groupId : oldValue?.groupId;
+  if (body.enabled && (!String(nextBotToken || "").trim() || !String(nextGroupId || "").trim())) {
     throw new AppError("botToken and groupId are required when Telegram is enabled", 400);
   }
-  const oldValue = await prisma.telegramSetting.findUnique({ where: { branchId } });
   const updated = await prisma.telegramSetting.upsert({
     where: { branchId },
     create: { branchId, ...body },
