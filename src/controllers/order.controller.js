@@ -7,5 +7,6 @@ const create = asyncHandler(async (req, res) => success(res, await orderService.
 const update = asyncHandler(async (req, res) => success(res, await orderService.updateOrder(req.user, req.params.id, req.body)));
 const pickup = asyncHandler(async (req, res) => success(res, await orderService.pickupOrder(req.user, req.params.id, req.body)));
 const cancel = asyncHandler(async (req, res) => success(res, await orderService.cancelOrder(req.user, req.params.id, req.body)));
+const sendTelegram = asyncHandler(async (req, res) => success(res, await orderService.sendOrderTelegram(req.user, req.params.id)));
 
-module.exports = { list, get, create, update, pickup, cancel };
+module.exports = { list, get, create, update, pickup, cancel, sendTelegram };

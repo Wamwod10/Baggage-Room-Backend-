@@ -25,6 +25,39 @@ const includeOrder = {
   debt: true,
 };
 
+const telegramReasonText = {
+  settings_not_found: "Telegram sozlamalari topilmadi",
+  missing_credentials: "Bot token yoki chat ID kiritilmagan",
+  disabled: "Telegram o'chirilgan",
+  newOrderEnabled_disabled: "Yangi buyurtma xabari o'chirilgan",
+};
+
+const normalizeTelegramResult = (result = {}) => {
+  const sent = !result?.skipped && result?.ok !== false;
+  const reason = result?.error || result?.reason || "";
+  return {
+    sent,
+    skipped: Boolean(result?.skipped),
+    reason,
+    message: sent ? "Telegram xabari yuborildi" : telegramReasonText[reason] || reason || "Telegram yuborilmadi",
+    messageId: result?.result?.message_id || null,
+  };
+};
+
+const sendNewOrderTelegram = async (order, meta = {}) => {
+  const result = await telegram.sendSafely(
+    () => telegram.sendNewOrder(order),
+    {
+      action: meta.action || "NEW_ORDER",
+      branchId: order.branchId,
+      userId: meta.userId || null,
+      entityType: meta.entityType || "Order",
+      entityId: meta.entityId || order.id,
+    },
+  );
+  return normalizeTelegramResult(result);
+};
+
 const normalizeOrderItems = (body) => {
   if (Array.isArray(body.items) && body.items.length) {
     const invalid = body.items.find((item) => !item || !item.lockerId);
@@ -276,9 +309,24 @@ const createOrder = async (user, body) => {
     return tx.order.findUnique({ where: { id: order.id }, include: includeOrder });
   });
 
-  telegram.sendSafely(() => telegram.sendNewOrder(created), { action: "NEW_ORDER", branchId, userId: user.id, entityType: "Order", entityId: created.id });
+  const telegramResult = await sendNewOrderTelegram(created, { userId: user.id });
+  if (!telegramResult.sent) {
+    warnings.push({ type: "TELEGRAM_NOT_SENT", message: telegramResult.message, reason: telegramResult.reason });
+  }
   googleSheets.sendSafely(() => googleSheets.sendNewOrder(created), { action: "NEW_ORDER", branchId, userId: user.id, entityType: "Order", entityId: created.id });
-  return { order: created, warnings };
+  return { order: created, warnings, telegram: telegramResult };
+};
+
+const sendOrderTelegram = async (user, id) => {
+  const order = await getOrder(user, id);
+  const result = await sendNewOrderTelegram(order, {
+    action: "NEW_ORDER_MANUAL",
+    userId: user.id,
+    entityType: "OrderTelegram",
+    entityId: `${id}:manual:${Date.now()}`,
+  });
+  if (!result.sent) throw new AppError(`Telegram yuborilmadi: ${result.message}`, 502);
+  return result;
 };
 
 const updateOrder = async (user, id, body) => {
@@ -486,4 +534,4 @@ const markDelayedOrders = async (branchId = undefined) => {
   return markedCount;
 };
 
-module.exports = { listOrders, getOrder, createOrder, updateOrder, pickupOrder, cancelOrder, markDelayedOrders };
+module.exports = { listOrders, getOrder, createOrder, updateOrder, pickupOrder, cancelOrder, markDelayedOrders, sendOrderTelegram };

@@ -43,11 +43,19 @@ const sendRaw = async (setting, text, { requireEnabled = true } = {}) => {
   const groupId = String(setting.groupId).trim();
   if (!botToken || !groupId) return { skipped: true, reason: "missing_credentials" };
 
-  const response = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: groupId, text }),
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  let response;
+  try {
+    response = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: groupId, text }),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
   if (!response.ok) {
     const body = await response.text();
     throw new AppError(`Telegram send failed: ${body}`, 502);
@@ -58,7 +66,10 @@ const sendRaw = async (setting, text, { requireEnabled = true } = {}) => {
 const sendBranchEvent = async (branchId, event, text) => {
   const setting = await prisma.telegramSetting.findUnique({ where: { branchId } });
   const flag = eventFlag[event];
-  if (!setting || (flag && setting[flag] === false && hasAnyEventEnabled(setting))) return { skipped: true };
+  if (!setting) return { skipped: true, reason: "settings_not_found" };
+  if (flag && setting[flag] === false && hasAnyEventEnabled(setting)) {
+    return { skipped: true, reason: `${flag}_disabled` };
+  }
   return sendRaw(setting, text);
 };
 

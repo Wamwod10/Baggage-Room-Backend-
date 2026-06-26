@@ -19,6 +19,7 @@ router.get(
   orderController.list
 );
 router.get("/:id", validate(idParam), orderController.get);
+router.post("/:id/telegram", validate(idParam), orderController.sendTelegram);
 router.post(
   "/",
   validate(
