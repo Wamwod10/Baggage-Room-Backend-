@@ -6,6 +6,7 @@ const { computeShiftReport, normalizeCurrencyMap } = require("../src/services/sh
 const {
   formatMoney,
   inkassaMessage,
+  orderCancelledMessage,
   overtimePaymentMessage,
   shiftClosedMessage,
 } = require("../src/utils/formatTelegramMessage");
@@ -56,6 +57,22 @@ test("Inkassa and doplata Telegram messages use real admin and safe business ide
   assert.match(doplata, /Buyurtma: TIA-20260622-1001/);
   assert.match(doplata, /Admin: Ali/);
   assert.doesNotMatch(`${inkassa}\n${doplata}`, /undefined|null|branchId|order\.id/);
+});
+
+test("Telegram admin labels do not use branch names as admin names", () => {
+  const message = orderCancelledMessage({
+    branch: { name: "Toshkent Shimoliy vokzal" },
+    orderNumber: "TSV-000010",
+    clientName: "Karazhanova Aliya",
+    cancelReason: "Klient terminalda tolov qiladigan boldi",
+    cancelledBy: { name: "Toshkent Shimoliy vokzal", login: "tosh_shimoliy" },
+    items: [{ lockerNumber: 3 }],
+    updatedAt: new Date("2026-06-26T07:30:14.000Z"),
+  });
+
+  assert.match(message, /Filial: Toshkent Shimoliy vokzal/);
+  assert.match(message, /Bekor qildi: tosh_shimoliy/);
+  assert.doesNotMatch(message, /Bekor qildi: Toshkent Shimoliy vokzal/);
 });
 
 test("Telegram shift report separates payment and currency balances", () => {

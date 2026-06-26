@@ -1,6 +1,7 @@
 const logger = require("../utils/logger");
 const prisma = require("../config/prisma");
 const { formatTashkentIso } = require("../utils/date");
+const { formatAdminName } = require("../utils/displayName");
 const { normalizeCurrencyAmount } = require("../utils/money");
 const sheetMapper = require("../../scripts/googleSheetsAppsScript");
 
@@ -88,6 +89,11 @@ const branchName = (entity) => {
   const code = branchCode(entity);
   return branchNameByCode[code] || entity?.branchName || entity?.branch?.name || entity?.branch || null;
 };
+
+const adminNameFor = (entity, relationName = "createdBy") => formatAdminName(
+  entity?.[relationName] || { name: entity?.adminName, login: entity?.adminLogin },
+  { branch: entity?.branch || entity?.branchName || branchName(entity), fallback: null },
+);
 
 const validateBranchCode = (payload) => {
   const normalized = normalizeBranchCode(payload.branchCode || payload.branchName || payload.branch);
@@ -533,7 +539,7 @@ const sendDoplata = (order) =>
 const expensePayload = (expense) =>
   (() => {
     const expenseName = expense?.category || "Xarajat";
-    const adminName = expense?.createdBy?.name || expense?.createdBy?.login || expense?.adminName || null;
+    const adminName = adminNameFor(expense);
     const adminLogin = expense?.createdBy?.login || expense?.adminLogin || null;
     const createdAt = toIso(expense?.createdAt || new Date());
     const sourceData = {
@@ -626,7 +632,7 @@ const salaryPayload = (salary) =>
     currency: salary?.currency || "UZS",
     paymentType: "SALARY",
     skipRevenueColumns: true,
-    adminName: salary?.closedBy?.name || salary?.closedBy?.login || salary?.adminName || null,
+    adminName: adminNameFor(salary, "closedBy"),
     createdAt: toIso(salary?.closedAt || salary?.createdAt || new Date()),
   });
 
@@ -658,7 +664,7 @@ const sendSalary = (salary) => postWebhook(salaryPayload(salary));
 const inkassaPayload = (inkassa) => {
   const receiver = inkassa?.receiverName || inkassa?.recipientName || null;
   const receiverLabel = receiver || INKASSA_ROW_LABEL;
-  const adminName = inkassa?.createdBy?.name || inkassa?.createdBy?.login || inkassa?.adminName || null;
+  const adminName = adminNameFor(inkassa);
   const adminLogin = inkassa?.createdBy?.login || inkassa?.adminLogin || null;
   const createdAt = toIso(inkassa?.createdAt || new Date());
   const sourceData = {
@@ -778,7 +784,7 @@ const testPayload = (action, branchCodeValue, branch, user) => {
     branch: branch?.name || branchNameByCode[branchCodeValue] || null,
     entityId,
     currency: "UZS",
-    adminName: user?.name || user?.login || "SUPER_ADMIN",
+    adminName: formatAdminName(user, { branch, fallback: "SUPER_ADMIN" }),
     createdAt,
   };
 

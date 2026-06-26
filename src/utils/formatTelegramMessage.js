@@ -1,5 +1,6 @@
 const { CURRENCIES, currencyFractionDigits } = require("./money");
 const { formatTashkentDateTime } = require("./date");
+const { cleanDisplayText, formatAdminName } = require("./displayName");
 
 const safe = (value, fallback = "-") => {
   if (value === undefined || value === null) return fallback;
@@ -7,18 +8,7 @@ const safe = (value, fallback = "-") => {
   return value;
 };
 
-const isLikelyDatabaseId = (value = "") => {
-  if (typeof value !== "string") return false;
-  const trimmed = value.trim();
-  return /^c[a-z0-9]{20,}$/i.test(trimmed) ||
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(trimmed);
-};
-
-const cleanText = (value, fallback = "-") => {
-  const result = safe(value, fallback);
-  if (typeof result === "string" && isLikelyDatabaseId(result)) return fallback;
-  return result;
-};
+const cleanText = (value, fallback = "-") => cleanDisplayText(safe(value, fallback), fallback);
 
 const formatMoney = (amount, currency = "UZS") => {
   const code = (currency || "UZS").toUpperCase();
@@ -78,11 +68,7 @@ const formatBranch = (branch) => {
   return cleanText(branch);
 };
 
-const formatAdmin = (user) => {
-  if (!user) return "-";
-  if (typeof user === "object") return cleanText(user.name || user.fullName || user.login || user.adminName);
-  return cleanText(user);
-};
+const formatAdmin = (user, branch = null) => formatAdminName(user, { branch });
 
 const shiftCashLeft = (shift = {}) => shift.systemExpectedCash ?? shift.closingCash ?? 0;
 const shiftRegularExpense = (shift = {}) => Math.max(Number(shift.expenseAmount || 0) - Number(shift.salaryAmount || 0), 0);
@@ -133,7 +119,7 @@ const shiftOpenedMessage = (shift = {}) => [
   "🟢 Kassa ochildi",
   "",
   line("🏢 Filial", formatBranch(shift.branch || shift.branchName)),
-  line("👤 Admin", formatAdmin(shift.openedBy || shift.admin || shift.openedByName)),
+  line("👤 Admin", formatAdmin(shift.openedBy || shift.admin || shift.openedByName, shift.branch || shift.branchName)),
   ...(shift.shiftTime ? [line("🕘 Smena", shift.shiftTime), ""] : [""]),
   line("🕒 Ochildi", formatDate(shift.openedAt || shift.createdAt)),
   line("💵 Boshlang'ich kassa", formatMoney(shift.openingCash || 0, shift.currency || "UZS")),
@@ -145,8 +131,8 @@ const shiftClosedMessage = (shift = {}) => [
   "🔴 Smena yopildi",
   "",
   line("🏢 Filial", formatBranch(shift.branch || shift.branchName)),
-  line("👤 Topshirgan", formatAdmin(shift.openedBy || shift.admin || shift.openedByName)),
-  line("👤 Yopgan", formatAdmin(shift.closedBy || shift.closedByName)),
+  line("👤 Topshirgan", formatAdmin(shift.openedBy || shift.admin || shift.openedByName, shift.branch || shift.branchName)),
+  line("👤 Yopgan", formatAdmin(shift.closedBy || shift.closedByName, shift.branch || shift.branchName)),
   ...(shift.shiftTime ? [line("🕘 Smena", shift.shiftTime)] : []),
   "",
   line("📦 Buyurtmalar", `${Number(shift.ordersCount || shift.orders || 0)} ta`),
@@ -177,7 +163,7 @@ const orderCancelledMessage = (order = {}) => {
     line("👤 Mijoz", order.clientName || order.client),
     line("🔐 Yacheyka", formatLockerNumber(firstItem?.lockerNumber || firstItem?.locker?.number || order.lockerNumber)),
     line("📝 Sabab", order.cancelReason || order.cancellationReason || order.reason),
-    line("👤 Bekor qildi", formatAdmin(order.cancelledBy || order.cancelledByName || order.admin || order.createdBy)),
+    line("👤 Bekor qildi", formatAdmin(order.cancelledBy || order.cancelledByName || order.admin || order.createdBy, order.branch || order.branchName)),
     line("🕘 Vaqt", formatDate(order.cancelledAt || order.updatedAt || order.createdAt)),
   ].join("\n");
 };
@@ -210,7 +196,7 @@ const overtimePaymentMessage = (order = {}) => [
   line("💰 Qo'shimcha summa", formatMoney(order.overtimeAmount || order.extraPayment || 0, order.currency || "UZS")),
   line("💳 To'lov", formatPayment(order.overtimePaymentType || order.paymentType)),
   "",
-  line("👨‍💼 Admin", formatAdmin(order.pickedUpBy || order.admin || order.createdBy)),
+  line("👨‍💼 Admin", formatAdmin(order.pickedUpBy || order.admin || order.createdBy, order.branch || order.branchName)),
   line("📅 Sana", formatDateMinute(order.realPickupTime || order.updatedAt || new Date())),
 ].join("\n");
 
@@ -223,7 +209,7 @@ const debtClosedMessage = (debt = {}) => [
   line("📞 Telefon", debt.phone),
   line("💰 Qarz summa", formatMoney(debt.amount || 0, debt.currency || "UZS")),
   line("💳 To'lov", formatPayment(debt.paymentType || debt.payment)),
-  line("👤 Yopdi", formatAdmin(debt.closedBy || debt.admin || debt.closedByName)),
+  line("👤 Yopdi", formatAdmin(debt.closedBy || debt.admin || debt.closedByName, debt.branch || debt.branchName)),
 ].join("\n");
 
 const debtPaymentMessage = (debt = {}) => [
@@ -238,7 +224,7 @@ const debtPaymentMessage = (debt = {}) => [
   line("📝 Qarz holati", debt.status === "CLOSED" ? "Yopildi" : "Qisman to'landi"),
   line("💳 To'lov", formatPayment(debt.paymentType || debt.payment)),
   "",
-  line("👨‍💼 Admin", formatAdmin(debt.closedBy || debt.admin || debt.closedByName)),
+  line("👨‍💼 Admin", formatAdmin(debt.closedBy || debt.admin || debt.closedByName, debt.branch || debt.branchName)),
   line("📅 Sana", formatDateMinute(debt.closedAt || debt.paidAt || new Date())),
 ].join("\n");
 
@@ -249,7 +235,7 @@ const inkassaMessage = (inkassa = {}) => [
   line("👤 Kimga", inkassa.receiverName || inkassa.receiver || inkassa.recipient),
   line("💰 Summa", formatMoney(inkassa.amount || 0, inkassa.currency || "UZS")),
   line("📝 Izoh", inkassa.note || inkassa.description),
-  line("👤 Admin", formatAdmin(inkassa.createdBy || inkassa.admin || inkassa.adminName)),
+  line("👤 Admin", formatAdmin(inkassa.createdBy || inkassa.admin || inkassa.adminName, inkassa.branch || inkassa.branchName)),
   line("🕘 Sana", formatDate(inkassa.createdAt || new Date())),
 ].join("\n");
 
@@ -260,7 +246,7 @@ const expenseMessage = (expense = {}) => [
   line("📂 Turi", expense.category || expense.type),
   line("💰 Summa", formatMoney(expense.amount || 0, expense.currency || "UZS")),
   line("📝 Sabab", expense.reason || expense.note || expense.description),
-  line("👤 Admin", formatAdmin(expense.createdBy || expense.admin || expense.adminName)),
+  line("👤 Admin", formatAdmin(expense.createdBy || expense.admin || expense.adminName, expense.branch || expense.branchName)),
 ].join("\n");
 
 const orderEditMessage = (order = {}, changes = {}) => {
@@ -273,7 +259,7 @@ const orderEditMessage = (order = {}, changes = {}) => {
     "",
     line("🆔 Buyurtma", orderNumber(order)),
     line("🏢 Filial", formatBranch(order.branch || order.branchName)),
-    line("👤 Admin", formatAdmin(order.updatedBy || order.admin || order.createdBy)),
+    line("👤 Admin", formatAdmin(order.updatedBy || order.admin || order.createdBy, order.branch || order.branchName)),
     line("📝 O'zgargan", lines.length ? lines.join("; ") : "-"),
     line("🕘 Sana", formatDate(order.updatedAt || new Date())),
   ].join("\n");
@@ -287,7 +273,7 @@ const lockerTransferMessage = (payload = {}, transfer = {}) => [
   line("Eski yacheyka", formatLockerNumber(transfer.from?.number || payload.from)),
   line("Yangi yacheyka", formatLockerNumber(transfer.to?.number || payload.to)),
   line("📝 Sabab", transfer.reason || payload.reason || payload.note),
-  line("👤 Admin", formatAdmin(transfer.admin || payload.admin || payload.createdBy)),
+  line("👤 Admin", formatAdmin(transfer.admin || payload.admin || payload.createdBy, payload.branch || payload.branchName)),
 ].join("\n");
 
 const lockerServiceMessage = (payload = {}) => [
@@ -296,7 +282,7 @@ const lockerServiceMessage = (payload = {}) => [
   line("🏢 Filial", formatBranch(payload.branch || payload.branchName)),
   line("🔐 Yacheyka", formatLockerNumber(payload.locker || payload.lockerNumber)),
   line("📝 Sabab", payload.reason || payload.note),
-  line("👤 Admin", formatAdmin(payload.admin || payload.createdBy)),
+  line("👤 Admin", formatAdmin(payload.admin || payload.createdBy, payload.branch || payload.branchName)),
 ].join("\n");
 
 const shiftOpenedMessageV2 = (shift = {}) => [
@@ -305,7 +291,7 @@ const shiftOpenedMessageV2 = (shift = {}) => [
   line("🏢 Filial", formatBranch(shift.branch || shift.branchName)),
   "",
   line("👤 Kim topshirdi", shift.acceptedFromName || shift.receivedFrom),
-  line("👤 Kim qabul qildi", shift.acceptedByName || formatAdmin(shift.openedBy || shift.admin || shift.openedByName)),
+  line("👤 Kim qabul qildi", shift.acceptedByName || formatAdmin(shift.openedBy || shift.admin || shift.openedByName, shift.branch || shift.branchName)),
   "",
   line("💼 Boshlang'ich kassa", formatCurrencyMap(shift.openingCashByCurrency || { UZS: shift.openingCash || 0 })),
   line("🤝 Qabul qilingan", formatCurrencyMap(shift.acceptedCashByCurrency || { UZS: shift.acceptedCash || 0 })),
@@ -320,9 +306,9 @@ const shiftClosedMessageV2 = (shift = {}) => {
   "",
   line("🏢 Filial", formatBranch(shift.branch || shift.branchName)),
   "",
-  line("👤 Kim topshirdi", shift.acceptedByName || formatAdmin(shift.openedBy || shift.admin || shift.openedByName)),
-  line("👤 Kim qabul qildi", shift.handoverToName || shift.handoverTo || formatAdmin(shift.closedBy || shift.closedByName)),
-  line("👤 Yopgan admin", formatAdmin(shift.closedBy || shift.closedByName)),
+  line("👤 Kim topshirdi", shift.acceptedByName || formatAdmin(shift.openedBy || shift.admin || shift.openedByName, shift.branch || shift.branchName)),
+  line("👤 Kim qabul qildi", shift.handoverToName || shift.handoverTo || formatAdmin(shift.closedBy || shift.closedByName, shift.branch || shift.branchName)),
+  line("👤 Yopgan admin", formatAdmin(shift.closedBy || shift.closedByName, shift.branch || shift.branchName)),
   "",
   line("💼 Boshlang'ich kassa", formatCurrencyMap(shift.openingCashByCurrency || report.openingCashByCurrency)),
   line("🤝 Qabul qilingan", formatCurrencyMap(shift.acceptedCashByCurrency || report.acceptedCashByCurrency)),
@@ -354,7 +340,7 @@ const overtimePaymentMessageV2 = (order = {}) => [
   line("👤 Mijoz", order.clientName || order.client),
   line("⏰ Kechikkan vaqt", `${cleanText(order.overtimeHours || 0)} soat`),
   line("💰 Summa", formatMoney(order.overtimeAmount || order.extraPayment || 0, order.currency || "UZS")),
-  line("👤 Admin", formatAdmin(order.pickedUpBy || order.admin || order.createdBy)),
+  line("👤 Admin", formatAdmin(order.pickedUpBy || order.admin || order.createdBy, order.branch || order.branchName)),
 ].join("\n");
 
 module.exports = {

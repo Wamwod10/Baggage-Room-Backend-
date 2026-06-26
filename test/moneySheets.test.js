@@ -135,6 +135,22 @@ test("EXPENSE, SALARY and INKASSA map only to their financial blocks", () => {
   assert.deepEqual(salaryRow.slice(COLUMN.CASH_UZS - 1, COLUMN.TERMINAL), new Array(9).fill(""));
 });
 
+test("Google Sheets admin fields do not use branch names as admin names", () => {
+  const payload = sheets._internals.expensePayload({
+    id: "expense-branch-admin",
+    branch: { code: "TSV", name: "Toshkent Shimoliy vokzal" },
+    category: "Transport",
+    reason: "Taxi",
+    amount: 100000,
+    currency: "UZS",
+    createdBy: { name: "Toshkent Shimoliy vokzal", login: "tosh_shimoliy" },
+  });
+  const row = appsScript.buildLegacyRow_(payload);
+
+  assert.equal(payload.adminName, "tosh_shimoliy");
+  assert.equal(row[COLUMN.FIO - 1], "tosh_shimoliy");
+});
+
 test("INKASSA currencies use O-T only and never F-N revenue columns", () => {
   const expectedColumns = {
     UZS: COLUMN.BALANCE_UZS,
