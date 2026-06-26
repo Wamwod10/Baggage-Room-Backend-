@@ -68,7 +68,7 @@ const webhookError = (message, { status = null, body = null, json = null } = {})
   return error;
 };
 const isEnabled = () => ["true", "1", "yes", "on"].includes(String(enabledValue()).toLowerCase()) && Boolean(getWebhookUrl());
-const DELIVERABLE_ACTIONS = new Set(["NEW_ORDER", "DOPLATA", "EXPENSE", "INKASSA", "SALARY"]);
+const DELIVERABLE_ACTIONS = new Set(["NEW_ORDER", "DOPLATA", "DEBT_PAYMENT", "EXPENSE", "INKASSA", "SALARY"]);
 const shouldDeliver = (payload) => DELIVERABLE_ACTIONS.has(String(payload?.action || "").toUpperCase());
 
 const toIso = (value) => {
@@ -334,7 +334,7 @@ const postWebhook = async (payload) => {
     if (!shouldDeliver(payload)) {
       return {
         skipped: true,
-        reason: `Google Sheets only accepts NEW_ORDER, DOPLATA, EXPENSE, INKASSA, SALARY events (received ${payload.action || "UNKNOWN"})`,
+        reason: `Google Sheets only accepts NEW_ORDER, DOPLATA, DEBT_PAYMENT, EXPENSE, INKASSA, SALARY events (received ${payload.action || "UNKNOWN"})`,
       };
     }
     if (!isEnabled()) {
@@ -646,16 +646,21 @@ const sendPickup = (order, extra = {}) =>
     }),
   );
 
-const sendDebtClosed = (debt, extra = {}) =>
+const sendDebtPayment = (debt, extra = {}) =>
   postWebhook(
-    basePayload("DEBT_CLOSED", debt, {
-      amount: extra.amount ?? debt?.amount ?? null,
+    basePayload("DEBT_PAYMENT", debt, {
+      amount: extra.amount ?? debt?.paidAmount ?? debt?.amount ?? null,
+      paidAmount: extra.amount ?? debt?.paidAmount ?? debt?.amount ?? null,
       currency: extra.currency || debt?.currency || null,
       paymentType: extra.paymentType || null,
       checkOut: toIso(debt?.closedAt),
       createdAt: toIso(debt?.closedAt || debt?.createdAt || new Date()),
+      period: "QARZ",
+      operationName: "Qarz to'lovi",
     }),
   );
+
+const sendDebtClosed = sendDebtPayment;
 
 const sendExpense = (expense) => postWebhook(expensePayload(expense));
 
@@ -845,6 +850,27 @@ const testPayload = (action, branchCodeValue, branch, user) => {
     );
   }
 
+  if (action === "DEBT_PAYMENT") {
+    return basePayload("DEBT_PAYMENT", {
+      id: entityId,
+      branch: { code: branchCodeValue, name: common.branchName },
+      order: { id: entityId, orderNumber: `TEST-DEBT-${branchCodeValue}-${Date.now()}` },
+      clientName: "GOOGLE SHEETS TEST",
+      phone: "",
+      amount: 1000,
+      paidAmount: 1000,
+      currency: "UZS",
+      paymentType: "CASH",
+      createdAt: new Date(),
+    }, {
+      entityId,
+      amount: 1000,
+      paidAmount: 1000,
+      period: "QARZ",
+      operationName: "Qarz to'lovi",
+    });
+  }
+
   if (action === "INKASSA") {
     return inkassaPayload({
       id: entityId,
@@ -903,6 +929,7 @@ module.exports = {
   sendDoplata,
   sendPickup,
   sendDebtClosed,
+  sendDebtPayment,
   sendExpense,
   sendSalary,
   sendInkassa,

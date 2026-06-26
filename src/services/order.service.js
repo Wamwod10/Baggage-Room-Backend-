@@ -357,7 +357,7 @@ const pickupOrder = async (user, id, body) => {
     const overtimeAmount = Number(body.overtimeAmount || body.extraPayment || 0);
     const overtimeCurrency = body.currency || order.currency;
     const overtimePaymentType = body.paymentType || "CASH";
-    const updated = await tx.order.update({
+    let updated = await tx.order.update({
       where: { id },
       data: {
         status: "PICKED_UP",
@@ -407,6 +407,15 @@ const pickupOrder = async (user, id, body) => {
         await tx.debt.update({
           where: { id: order.debt.id },
           data: { amount: remainingDebtAmount },
+        });
+        const newRealPaidAmount = Number(order.realPaidAmount || 0) + debtPaidAmount;
+        updated = await tx.order.update({
+          where: { id },
+          data: {
+            realPaidAmount: newRealPaidAmount,
+            paymentDifference: newRealPaidAmount - Number(order.finalAmount || 0),
+          },
+          include: includeOrder,
         });
         debtPayment = {
           ...order.debt,
@@ -463,6 +472,20 @@ const pickupOrder = async (user, id, body) => {
     telegram.sendSafely(
       () => telegram.sendDebtClosed(result.debtPayment),
       { action: "DEBT_CLOSED", branchId: result.updated.branchId, userId: user.id, entityType: "Debt", entityId: result.debtPayment.id },
+    );
+    googleSheets.sendSafely(
+      () => googleSheets.sendDebtPayment(result.debtPayment, {
+        amount: result.debtPayment.paidAmount,
+        paymentType: result.debtPayment.paymentType,
+        currency: result.debtPayment.currency,
+      }),
+      {
+        action: "DEBT_PAYMENT",
+        branchId: result.updated.branchId,
+        userId: user.id,
+        entityType: "DebtPayment",
+        entityId: `${result.debtPayment.id}:${result.debtPayment.paidAt?.getTime?.() || result.updated.realPickupTime?.getTime?.() || Date.now()}`,
+      },
     );
   }
   if (Number(result.updated.overtimeAmount || 0) > 0) {

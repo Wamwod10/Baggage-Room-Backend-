@@ -1,9 +1,10 @@
 const prisma = require("../config/prisma");
 const { branchWhere, getScopedBranchId } = require("../utils/scope");
 const { dateRangeWhere, formatTashkentDateKey, getTashkentParts, startOfToday } = require("../utils/date");
-const { CURRENCIES, sum, byKeySum, byCurrency, subtractCurrencyMaps } = require("../utils/money");
+const { sum, byKeySum, byCurrency, subtractCurrencyMaps } = require("../utils/money");
 const { markDelayedOrders } = require("./order.service");
 const { computeShiftReport } = require("./shift.service");
+const { summarizeMovements, sumCurrencyMaps } = require("./cashAccounting.service");
 
 const asNumber = (value) => Number(value || 0);
 const dayKey = (date) => formatTashkentDateKey(date);
@@ -18,10 +19,6 @@ const countBy = (items, keySelector) =>
   }, {});
 
 const percent = (part, total) => (total > 0 ? Math.round((part / total) * 100) : 0);
-const sumCurrencyMaps = (maps = []) => CURRENCIES.reduce((result, currency) => {
-  result[currency] = maps.reduce((total, map) => total + Number(map?.[currency] || 0), 0);
-  return result;
-}, {});
 const paymentCurrencyBreakdown = (movements = []) =>
   ["CASH", "TERMINAL", "CLICK", "PAYME", "DEBT"].reduce((result, paymentType) => {
     const aliases = paymentType === "TERMINAL" ? ["TERMINAL", "CARD", "TRANSFER"] : [paymentType];
@@ -33,17 +30,10 @@ const buildBranchSummary = ({ branches, orders, lockers, movements }) =>
   branches.map((branch) => {
     const branchOrders = orders.filter((order) => order.branchId === branch.id);
     const branchLockers = lockers.filter((locker) => locker.branchId === branch.id);
-    const branchIn = movements.filter((movement) => movement.branchId === branch.id && movement.direction === "IN");
-    const branchExpenses = movements.filter(
-      (movement) => movement.branchId === branch.id && movement.direction === "OUT" && movement.type === "EXPENSE",
-    );
-    const branchInkassa = movements.filter(
-      (movement) => movement.branchId === branch.id && movement.direction === "OUT" && movement.type === "INKASSA",
-    );
-
-    const revenue = sum(branchIn);
-    const expenseAmount = sum(branchExpenses);
-    const inkassaAmount = sum(branchInkassa);
+    const branchSummary = summarizeMovements(movements.filter((movement) => movement.branchId === branch.id));
+    const revenue = sum(branchSummary.groups.revenueIn);
+    const expenseAmount = sum(branchSummary.groups.expenses);
+    const inkassaAmount = sum(branchSummary.groups.inkassa);
 
     return {
       id: branch.id,
@@ -103,14 +93,13 @@ const dashboard = async (user, query) => {
       return { ...shift, ...report, ordersCount };
     }),
   );
-  const todayPayments = todayMovements.filter((movement) => movement.direction === "IN");
-  const todayOut = todayMovements.filter((movement) => movement.direction === "OUT");
-  const todayExpenses = todayOut.filter((movement) => movement.type === "EXPENSE");
-  const todayInkassa = todayOut.filter((movement) => movement.type === "INKASSA");
+  const todaySummary = summarizeMovements(todayMovements);
+  const todayPayments = todaySummary.groups.revenueIn;
+  const todayOut = todaySummary.groups.balanceOut;
   const lockerCounts = countBy(lockers, (item) => item.status);
-  const revenueByCurrency = byCurrency(todayPayments);
-  const expensesByCurrency = byCurrency(todayExpenses);
-  const inkassaByCurrency = byCurrency(todayInkassa);
+  const revenueByCurrency = todaySummary.revenueByCurrency;
+  const expensesByCurrency = todaySummary.expenseByCurrency;
+  const inkassaByCurrency = todaySummary.inkassaByCurrency;
   const debtByCurrency = byCurrency(openDebts);
   const cashOnHandByCurrency = sumCurrencyMaps(shiftStatus.map((shift) => shift.cashBalanceByCurrency));
   const netProfitByCurrency = subtractCurrencyMaps(revenueByCurrency, expensesByCurrency, inkassaByCurrency);
@@ -187,11 +176,12 @@ const reports = async (user, query) => {
     }),
   );
 
-  const inMovements = movements.filter((m) => m.direction === "IN");
-  const outMovements = movements.filter((m) => m.direction === "OUT");
-  const expenseMovements = outMovements.filter((m) => m.type === "EXPENSE");
-  const inkassaMovements = outMovements.filter((m) => m.type === "INKASSA");
-  const revenueByCurrency = byCurrency(inMovements);
+  const movementSummary = summarizeMovements(movements);
+  const inMovements = movementSummary.groups.revenueIn;
+  const outMovements = movementSummary.groups.balanceOut;
+  const expenseMovements = movementSummary.groups.expenses;
+  const inkassaMovements = movementSummary.groups.inkassa;
+  const revenueByCurrency = movementSummary.revenueByCurrency;
   const expensesByCurrency = byCurrency(expenseMovements.length ? expenseMovements : expenses);
   const inkassaByCurrency = byCurrency(inkassaMovements.length ? inkassaMovements : inkassa);
   const debtByCurrency = byCurrency(debts.filter((item) => item.status === "OPEN"));

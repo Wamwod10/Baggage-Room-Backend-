@@ -2,11 +2,12 @@ const prisma = require("../config/prisma");
 const { AppError } = require("../utils/response");
 const { branchWhere, getScopedBranchId } = require("../utils/scope");
 const { dateRangeWhere } = require("../utils/date");
-const { CURRENCIES, sum, byCurrency, subtractCurrencyMaps } = require("../utils/money");
+const { CURRENCIES, byCurrency } = require("../utils/money");
 const { audit } = require("./activity.service");
 const telegram = require("./telegram.service");
 const googleSheets = require("./googleSheets.service");
 const { createCashMovement } = require("./cashMovement.service");
+const { summarizeMovements, cashBalanceByCurrency } = require("./cashAccounting.service");
 
 const include = {
   branch: { select: { id: true, name: true, code: true } },
@@ -76,41 +77,29 @@ const computeShiftReport = async (tx, shift) => {
   const debts = await tx.debt.findMany({ where: { branchId: shift.branchId, createdAt: { gte: shift.openedAt, lte: reportEnd } } });
   const ordersCount = await tx.order.count({ where: { branchId: shift.branchId, createdAt: { gte: shift.openedAt, lte: reportEnd } } });
 
-  const inMovements = movements.filter((item) => item.direction === "IN");
-  const outMovements = movements.filter((item) => item.direction === "OUT");
-  const cashMovements = inMovements.filter((item) => item.paymentType === "CASH");
-  const terminalMovements = inMovements.filter((item) => ["TERMINAL", "CARD", "TRANSFER"].includes(item.paymentType));
-  const clickMovements = inMovements.filter((item) => item.paymentType === "CLICK");
-  const paymeMovements = inMovements.filter((item) => item.paymentType === "PAYME");
-  const expenseMovements = outMovements.filter((item) => item.type === "EXPENSE");
-  const salaryMovements = outMovements.filter(isSalaryMovement);
-  const inkassaMovements = outMovements.filter((item) => item.type === "INKASSA");
   const openDebts = debts.filter((item) => item.status === "OPEN");
-  const manualInMovements = inMovements.filter((item) => item.type === "MANUAL_CORRECTION");
-  const manualOutMovements = outMovements.filter((item) => item.type === "MANUAL_CORRECTION");
-
-  const revenueByCurrency = byCurrency(inMovements);
-  const cashByCurrency = byCurrency(cashMovements);
-  const terminalByCurrency = byCurrency(terminalMovements);
-  const clickByCurrency = byCurrency(clickMovements);
-  const paymeByCurrency = byCurrency(paymeMovements);
-  const expenseByCurrency = byCurrency(expenseMovements);
+  const summary = summarizeMovements(movements);
+  const salaryMovements = summary.groups.expenses.filter(isSalaryMovement);
+  const revenueByCurrency = summary.revenueByCurrency;
+  const cashByCurrency = summary.cashByCurrency;
+  const terminalByCurrency = summary.terminalByCurrency;
+  const clickByCurrency = summary.clickByCurrency;
+  const paymeByCurrency = summary.paymeByCurrency;
+  const expenseByCurrency = summary.expenseByCurrency;
   const salaryByCurrency = byCurrency(salaryMovements);
-  const inkassaByCurrency = byCurrency(inkassaMovements);
+  const inkassaByCurrency = summary.inkassaByCurrency;
   const debtByCurrency = byCurrency(openDebts);
-  const manualInByCurrency = byCurrency(manualInMovements);
-  const manualOutByCurrency = byCurrency(manualOutMovements);
   const openingCashByCurrency = normalizeCurrencyMap(shift.openingCashByCurrency, shift.openingCash);
   const acceptedCashByCurrency = normalizeCurrencyMap(shift.acceptedCashByCurrency, shift.acceptedCash);
-  const cashBalanceByCurrency = subtractCurrencyMaps(
-    Object.fromEntries(CURRENCIES.map((currency) => [
-      currency,
-      openingCashByCurrency[currency] + acceptedCashByCurrency[currency] + cashByCurrency[currency] + manualInByCurrency[currency],
-    ])),
+  const balanceByCurrency = cashBalanceByCurrency({
+    openingCashByCurrency,
+    acceptedCashByCurrency,
+    cashRevenueByCurrency: cashByCurrency,
     expenseByCurrency,
     inkassaByCurrency,
-    manualOutByCurrency,
-  );
+    manualInByCurrency: summary.manualInByCurrency,
+    manualOutByCurrency: summary.manualOutByCurrency,
+  });
 
   // Legacy Shift columns remain UZS values. Complete multi-currency values are
   // returned in the breakdown maps below and are never added across currencies.
@@ -120,12 +109,12 @@ const computeShiftReport = async (tx, shift) => {
   const clickRevenue = clickByCurrency.UZS;
   const paymeRevenue = paymeByCurrency.UZS;
   const cardRevenue = terminalRevenue;
-  const transferRevenue = sum(inMovements.filter((item) => item.paymentType === "TRANSFER" && item.currency === "UZS"));
+  const transferRevenue = summary.transferByCurrency.UZS;
   const expenseAmount = expenseByCurrency.UZS;
   const salaryAmount = salaryByCurrency.UZS;
   const inkassaAmount = inkassaByCurrency.UZS;
   const debtAmount = debtByCurrency.UZS;
-  const systemExpectedCash = cashBalanceByCurrency.UZS;
+  const systemExpectedCash = balanceByCurrency.UZS;
 
   return {
     totalRevenue,
@@ -152,7 +141,7 @@ const computeShiftReport = async (tx, shift) => {
     salaryByCurrency,
     inkassaByCurrency,
     debtByCurrency,
-    cashBalanceByCurrency,
+    cashBalanceByCurrency: balanceByCurrency,
     paymentByCurrency: {
       CASH: cashByCurrency,
       TERMINAL: terminalByCurrency,
@@ -171,7 +160,7 @@ const computeShiftReport = async (tx, shift) => {
       salaryByCurrency,
       inkassaByCurrency,
       debtByCurrency,
-      cashBalanceByCurrency,
+      cashBalanceByCurrency: balanceByCurrency,
     },
   };
 };

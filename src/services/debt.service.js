@@ -5,6 +5,7 @@ const { dateRangeWhere } = require("../utils/date");
 const { audit } = require("./activity.service");
 const { findOpenShift, createCashMovement } = require("./cashMovement.service");
 const telegram = require("./telegram.service");
+const googleSheets = require("./googleSheets.service");
 
 const includeDebt = {
   order: { select: { id: true, orderNumber: true, status: true, passport: true, checkIn: true, plannedCheckOut: true, realPickupTime: true } },
@@ -34,7 +35,7 @@ const listDebts = async (user, query) => {
 };
 
 const closeDebt = async (user, id, body) => {
-  return prisma.$transaction(async (tx) => {
+  const result = await prisma.$transaction(async (tx) => {
     const debt = await tx.debt.findUnique({ where: { id }, include: { order: true } });
     if (!debt) throw new AppError("Debt not found", 404);
     if (debt.status === "CLOSED") throw new AppError("Debt is already closed", 400);
@@ -62,6 +63,14 @@ const closeDebt = async (user, id, body) => {
       note: body.note || `Debt closed for ${debt.order.orderNumber}`,
       createdById: user.id,
     });
+    const newRealPaidAmount = Number(debt.order.realPaidAmount || 0) + Number(paidAmount || 0);
+    await tx.order.update({
+      where: { id: debt.orderId },
+      data: {
+        realPaidAmount: newRealPaidAmount,
+        paymentDifference: newRealPaidAmount - Number(debt.order.finalAmount || 0),
+      },
+    });
     await audit({ tx, branchId: debt.branchId, userId: user.id, entityType: "Debt", entityId: id, action: "DEBT_CLOSE", oldValue: debt, newValue: updated, description: "Debt closed" });
     telegram.sendSafely(
       () => telegram.sendDebtClosed({
@@ -74,8 +83,18 @@ const closeDebt = async (user, id, body) => {
       }),
       { action: "DEBT_CLOSED", branchId: debt.branchId, userId: user.id, entityType: "Debt", entityId: id },
     );
-    return updated;
+    return {
+      ...updated,
+      paidAmount,
+      paymentType: body.paymentType || "CASH",
+      currency: body.currency || debt.currency,
+    };
   });
+  googleSheets.sendSafely(
+    () => googleSheets.sendDebtPayment(result, { amount: result.paidAmount, paymentType: result.paymentType, currency: result.currency }),
+    { action: "DEBT_PAYMENT", branchId: result.branchId, userId: user.id, entityType: "DebtPayment", entityId: `${id}:${result.closedAt?.getTime?.() || Date.now()}` },
+  );
+  return result;
 };
 
 module.exports = { listDebts, closeDebt };

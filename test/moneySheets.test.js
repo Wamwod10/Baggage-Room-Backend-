@@ -185,7 +185,7 @@ test("backend accepts only versioned 22-column INKASSA webhook results", () => {
   const row = appsScript.buildInkassaRow(payload);
   const result = sheets._internals.validateWebhookResult(payload, {
     success: true,
-    scriptVersion: "v5-month-tab-only-no-w-2026-06-25",
+    scriptVersion: "v6-debt-payment-cash-accounting-2026-06-26",
     branchCode: "TJV",
     spreadsheetId: "10-h62nZAEp-puvFF_MurFu1UE0Xdjdx5Qtlv3Qpd0L8",
     spreadsheetName: "Toshkent Janubiy vokzal",
@@ -193,8 +193,8 @@ test("backend accepts only versioned 22-column INKASSA webhook results", () => {
     row: 1885,
   });
 
-  assert.equal(appsScript.SCRIPT_VERSION, "v5-month-tab-only-no-w-2026-06-25");
-  assert.equal(result.scriptVersion, "v5-month-tab-only-no-w-2026-06-25");
+  assert.equal(appsScript.SCRIPT_VERSION, "v6-debt-payment-cash-accounting-2026-06-26");
+  assert.equal(result.scriptVersion, "v6-debt-payment-cash-accounting-2026-06-26");
   assert.equal(result.row[14], 500000);
   assert.deepEqual(result.row.slice(5, 14), new Array(9).fill(""));
   assert.throws(
@@ -204,7 +204,7 @@ test("backend accepts only versioned 22-column INKASSA webhook results", () => {
   assert.throws(
     () => sheets._internals.validateWebhookResult(payload, {
       success: true,
-      scriptVersion: "v5-month-tab-only-no-w-2026-06-25",
+      scriptVersion: "v6-debt-payment-cash-accounting-2026-06-26",
       branchCode: "TJV",
       row: 1885,
     }),
@@ -216,7 +216,7 @@ test("backend accepts only versioned 22-column INKASSA webhook results", () => {
   assert.throws(
     () => sheets._internals.validateWebhookResult(payload, {
       success: true,
-      scriptVersion: "v5-month-tab-only-no-w-2026-06-25",
+      scriptVersion: "v6-debt-payment-cash-accounting-2026-06-26",
       branchCode: "TJV",
       spreadsheetId: "10-h62nZAEp-puvFF_MurFu1UE0Xdjdx5Qtlv3Qpd0L8",
       spreadsheetName: "Toshkent Janubiy vokzal",
@@ -267,6 +267,7 @@ test("orders and doplata alone can write F-K, Click, Payme and Terminal revenue 
     ["CLICK", "UZS", COLUMN.CLICK],
     ["PAYME", "UZS", COLUMN.PAYME],
     ["TERMINAL", "UZS", COLUMN.TERMINAL],
+    ["TRANSFER", "UZS", COLUMN.TERMINAL],
   ];
   for (const [paymentType, currency, column] of cases) {
     const payload = sheets._internals.orderPayload("NEW_ORDER", {
@@ -332,8 +333,18 @@ test("required NEW_ORDER, INKASSA, EXPENSE, SALARY and DOPLATA A:V mappings are 
     currency: "UZS",
     sheetAmount: 75000,
   });
+  const debtPayment = appsScript.buildDebtPaymentRow({
+    action: "DEBT_PAYMENT",
+    createdAt,
+    clientName: "Ali",
+    orderNumber: "TIA-22",
+    period: "QARZ",
+    paymentType: "CASH",
+    currency: "UZS",
+    paidAmount: 200000,
+  });
 
-  for (const row of [order, inkassa, expense, salary, doplata]) assert.equal(row.length, 22);
+  for (const row of [order, inkassa, expense, salary, doplata, debtPayment]) assert.equal(row.length, 22);
 
   assert.equal(order[COLUMN.PLACE - 1], "1-M 1-XL");
   assert.equal(order[COLUMN.CASH_UZS - 1], 250000);
@@ -354,6 +365,9 @@ test("required NEW_ORDER, INKASSA, EXPENSE, SALARY and DOPLATA A:V mappings are 
   assert.equal(salary[COLUMN.NAME - 1], "Oylik - Vali");
 
   assert.equal(doplata[COLUMN.PAYME - 1], 75000);
+  assert.equal(debtPayment[COLUMN.CASH_UZS - 1], 200000);
+  assert.equal(debtPayment[COLUMN.PERIOD - 1], "QARZ");
+  assert.equal(debtPayment[COLUMN.NAME - 1], "Qarz to'lovi");
   assert.equal(doplata[COLUMN.PERIOD - 1], "DOPLATA 3ч");
 });
 
@@ -370,7 +384,7 @@ test("localized decimal strings stay decimals instead of becoming 100x larger", 
 
 test("all five branch codes build every supported Sheets action", () => {
   const branches = ["TIA", "TSV", "TJV", "SVK", "SIA"];
-  const actions = ["NEW_ORDER", "DOPLATA", "EXPENSE", "INKASSA", "SALARY"];
+  const actions = ["NEW_ORDER", "DOPLATA", "DEBT_PAYMENT", "EXPENSE", "INKASSA", "SALARY"];
   for (const branchCode of branches) {
     for (const action of actions) {
       const payload = sheets._internals.testPayload(action, branchCode, null, { name: "Ali" });
