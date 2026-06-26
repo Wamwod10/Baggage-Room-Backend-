@@ -46,7 +46,10 @@ const setService = async (user, id, data) => {
     newValue: updated,
     description: "Locker moved to service",
   });
-  telegram.sendSafely(telegram.sendLockerService({ branchId: locker.branchId, branch: locker.branch, locker: locker.number, status: "SERVICE", reason: data.serviceReason || data.reason, createdBy: user }), { branchId: locker.branchId, userId: user.id, entityType: "Locker", entityId: id });
+  telegram.sendSafely(
+    () => telegram.sendLockerService({ branchId: locker.branchId, branch: locker.branch, locker: locker.number, status: "SERVICE", reason: data.serviceReason || data.reason, createdBy: user }),
+    { action: "LOCKER_SERVICE", branchId: locker.branchId, userId: user.id, entityType: "Locker", entityId: `${id}:service:${updated.updatedAt.getTime()}` },
+  );
   return updated;
 };
 
@@ -67,7 +70,10 @@ const restore = async (user, id) => {
     newValue: updated,
     description: "Locker restored from service",
   });
-  telegram.sendSafely(telegram.sendLockerService({ branchId: locker.branchId, branch: locker.branch, locker: locker.number, status: "EMPTY", reason: locker.serviceReason, createdBy: user }), { branchId: locker.branchId, userId: user.id, entityType: "Locker", entityId: id });
+  telegram.sendSafely(
+    () => telegram.sendLockerService({ branchId: locker.branchId, branch: locker.branch, locker: locker.number, status: "EMPTY", reason: locker.serviceReason, createdBy: user }),
+    { action: "LOCKER_RESTORE", branchId: locker.branchId, userId: user.id, entityType: "Locker", entityId: `${id}:restore:${updated.updatedAt.getTime()}` },
+  );
   return updated;
 };
 
@@ -105,7 +111,10 @@ const transfer = async (user, data) => {
       newValue: { toLockerId: to.id, toLockerNumber: to.number },
       description: data.note || "Locker transferred",
     });
-    telegram.sendSafely(telegram.sendLockerTransfer({ branchId: order.branchId, branch: order.branch, from: from.number, to: to.number, order: order.orderNumber, note: data.note, createdBy: user }), { branchId: order.branchId, userId: user.id, entityType: "Order", entityId: order.id });
+    telegram.sendSafely(
+      () => telegram.sendLockerTransfer({ branchId: order.branchId, branch: order.branch, from: from.number, to: to.number, order: order.orderNumber, note: data.note, createdBy: user }),
+      { action: "LOCKER_TRANSFER", branchId: order.branchId, userId: user.id, entityType: "Order", entityId: `${order.id}:locker-transfer:${from.id}:${to.id}` },
+    );
     return result;
   });
 };

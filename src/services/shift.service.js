@@ -66,7 +66,7 @@ const openShift = async (user, body) => {
   });
   await audit({ branchId, userId: user.id, entityType: "Shift", entityId: shift.id, action: "SHIFT_OPEN", newValue: shift, description: "Shift opened" });
   const result = { ...shift, openingCashByCurrency, acceptedCashByCurrency };
-  telegram.sendSafely(telegram.sendShiftOpen(result), { branchId, userId: user.id, entityType: "Shift", entityId: shift.id });
+  telegram.sendSafely(() => telegram.sendShiftOpen(result), { action: "SHIFT_OPEN", branchId, userId: user.id, entityType: "Shift", entityId: shift.id });
   return result;
 };
 
@@ -260,7 +260,7 @@ const closeShift = async (user, id, body) => {
     await audit({ tx, branchId: shift.branchId, userId: user.id, entityType: "Shift", entityId: id, action: "SHIFT_CLOSE", oldValue: shift, newValue: result, description: "Shift closed" });
     return result;
   });
-  telegram.sendSafely(telegram.sendShiftClose(result), { branchId: result.branchId, userId: user.id, entityType: "Shift", entityId: id });
+  telegram.sendSafely(() => telegram.sendShiftClose(result), { action: "SHIFT_CLOSE", branchId: result.branchId, userId: user.id, entityType: "Shift", entityId: id });
   if (result.salaryReceiver && Number(result.salaryAmount || 0) > 0) {
     googleSheets.sendSafely(
       () => googleSheets.sendSalary({

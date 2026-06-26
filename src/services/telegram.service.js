@@ -17,6 +17,8 @@ const {
 const { AppError } = require("../utils/response");
 const logger = require("../utils/logger");
 
+const pendingDeliveryKeys = new Set();
+
 const eventFlag = {
   newOrder: "newOrderEnabled",
   shiftOpen: "shiftOpenEnabled",
@@ -67,11 +69,63 @@ const sendLockerTransfer = (payload, transfer) => sendBranchEvent(payload.branch
 const sendLockerService = (payload) => sendBranchEvent(payload.branchId, "lockerService", lockerServiceMessage(payload));
 const testSend = async (branchId) => sendBranchEvent(branchId, "newOrder", "🧾 Test xabari: Telegram sozlamalari tekshirilmoqda");
 
-const sendSafely = async (promise, { branchId = null, userId = null, entityType = "Telegram", entityId = "telegram", action = "TELEGRAM_SEND_ERROR" } = {}) => {
+const deliveryKey = ({ action, entityType, entityId }) => `telegram:${action}:${entityType}:${entityId}`;
+
+const wasDelivered = async ({ action, entityType, entityId }) => {
+  if (!entityId || entityId === "telegram") return false;
+  const existing = await prisma.auditLog.findFirst({
+    where: {
+      entityType,
+      entityId: String(entityId),
+      action: "TELEGRAM_SENT",
+      description: deliveryKey({ action, entityType, entityId }),
+    },
+    select: { id: true },
+  });
+  return Boolean(existing);
+};
+
+const markDelivered = async ({ action, branchId, userId, entityType, entityId }, result) => {
+  if (!entityId || entityId === "telegram") return;
+  await prisma.auditLog
+    .create({
+      data: {
+        branchId,
+        userId,
+        entityType,
+        entityId: String(entityId),
+        action: "TELEGRAM_SENT",
+        description: deliveryKey({ action, entityType, entityId }),
+        newValue: {
+          action,
+          messageId: result?.result?.message_id || null,
+        },
+      },
+    })
+    .catch((auditError) => logger.warn("Telegram sent marker write failed", { message: auditError.message }));
+};
+
+const sendSafely = async (delivery, { branchId = null, userId = null, entityType = "Telegram", entityId = "telegram", action = "UNKNOWN" } = {}) => {
+  const key = deliveryKey({ action, entityType, entityId });
+  let ownsPendingKey = false;
   try {
-    return await promise;
+    if (await wasDelivered({ action, entityType, entityId })) {
+      logger.info("Telegram duplicate delivery skipped", { action, branchId, entityType, entityId });
+      return { skipped: true, duplicate: true };
+    }
+    if (pendingDeliveryKeys.has(key)) {
+      logger.info("Telegram pending duplicate delivery skipped", { action, branchId, entityType, entityId });
+      return { skipped: true, duplicate: true, pending: true };
+    }
+    pendingDeliveryKeys.add(key);
+    ownsPendingKey = true;
+    const result = await (typeof delivery === "function" ? delivery() : delivery);
+    if (!result?.skipped) {
+      await markDelivered({ action, branchId, userId, entityType, entityId }, result);
+    }
+    return result;
   } catch (error) {
-    logger.warn("Telegram delivery failed", { branchId, message: error.message });
+    logger.warn("Telegram delivery failed", { action, branchId, entityType, entityId, message: error.message });
     await prisma.auditLog
       .create({
         data: {
@@ -79,13 +133,15 @@ const sendSafely = async (promise, { branchId = null, userId = null, entityType 
           userId,
           entityType,
           entityId,
-          action,
-          description: error.message,
-          newValue: { message: error.message },
+          action: "TELEGRAM_SEND_ERROR",
+          description: `${action}: ${error.message}`,
+          newValue: { action, message: error.message },
         },
       })
       .catch((auditError) => logger.warn("Telegram audit write failed", { message: auditError.message }));
     return { skipped: true, error: error.message };
+  } finally {
+    if (ownsPendingKey) pendingDeliveryKeys.delete(key);
   }
 };
 
@@ -104,4 +160,9 @@ module.exports = {
   sendLockerService,
   testSend,
   sendSafely,
+  _internals: {
+    deliveryKey,
+    wasDelivered,
+    markDelivered,
+  },
 };

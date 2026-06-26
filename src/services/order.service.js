@@ -276,7 +276,7 @@ const createOrder = async (user, body) => {
     return tx.order.findUnique({ where: { id: order.id }, include: includeOrder });
   });
 
-  telegram.sendSafely(telegram.sendNewOrder(created), { branchId, userId: user.id, entityType: "Order", entityId: created.id });
+  telegram.sendSafely(() => telegram.sendNewOrder(created), { action: "NEW_ORDER", branchId, userId: user.id, entityType: "Order", entityId: created.id });
   googleSheets.sendSafely(() => googleSheets.sendNewOrder(created), { action: "NEW_ORDER", branchId, userId: user.id, entityType: "Order", entityId: created.id });
   return { order: created, warnings };
 };
@@ -288,7 +288,10 @@ const updateOrder = async (user, id, body) => {
   const data = Object.fromEntries(Object.entries(body).filter(([key]) => allowed.includes(key)));
   const updated = await prisma.order.update({ where: { id }, data, include: includeOrder });
   await audit({ branchId: current.branchId, userId: user.id, entityType: "Order", entityId: id, action: "ORDER_EDIT", oldValue: current, newValue: updated, description: "Order edited" });
-  telegram.sendSafely(telegram.sendOrderEdit({ ...updated, updatedBy: user }, data), { branchId: current.branchId, userId: user.id, entityType: "Order", entityId: id });
+  telegram.sendSafely(
+    () => telegram.sendOrderEdit({ ...updated, updatedBy: user }, data),
+    { action: "ORDER_EDIT", branchId: current.branchId, userId: user.id, entityType: "Order", entityId: `${id}:edit:${updated.updatedAt.getTime()}` },
+  );
   return updated;
 };
 
@@ -400,12 +403,18 @@ const pickupOrder = async (user, id, body) => {
     }
     await audit({ tx, branchId: order.branchId, userId: user.id, entityType: "Order", entityId: id, action: "ORDER_PICKUP", oldValue: order, newValue: updated, description: "Order picked up" });
     if (overtimeAmount > 0) {
-      telegram.sendSafely(telegram.sendOvertimePayment({ ...updated, currency: overtimeCurrency, overtimeCurrency, overtimePaymentType }), { branchId: order.branchId, userId: user.id, entityType: "Order", entityId: id });
+      telegram.sendSafely(
+        () => telegram.sendOvertimePayment({ ...updated, currency: overtimeCurrency, overtimeCurrency, overtimePaymentType }),
+        { action: "OVERTIME_PAYMENT", branchId: order.branchId, userId: user.id, entityType: "Order", entityId: `${id}:overtime` },
+      );
     }
     return { updated: { ...updated, overtimeCurrency, overtimePaymentType }, closedDebt, debtPayment, debtPaidAmount };
   });
   if (result.debtPayment) {
-    telegram.sendSafely(telegram.sendDebtClosed(result.debtPayment), { branchId: result.updated.branchId, userId: user.id, entityType: "Debt", entityId: result.debtPayment.id });
+    telegram.sendSafely(
+      () => telegram.sendDebtClosed(result.debtPayment),
+      { action: "DEBT_CLOSED", branchId: result.updated.branchId, userId: user.id, entityType: "Debt", entityId: result.debtPayment.id },
+    );
   }
   if (Number(result.updated.overtimeAmount || 0) > 0) {
     googleSheets.sendSafely(
@@ -437,7 +446,7 @@ const cancelOrder = async (user, id, body) => {
       relatedOrderId: order.id,
     });
     await audit({ tx, branchId: order.branchId, userId: user.id, entityType: "Order", entityId: id, action: "ORDER_CANCEL", oldValue: order, newValue: updated, description: body.cancelReason || "Order cancelled" });
-    telegram.sendSafely(telegram.sendOrderCancel(updated), { branchId: order.branchId, userId: user.id, entityType: "Order", entityId: id });
+    telegram.sendSafely(() => telegram.sendOrderCancel(updated), { action: "ORDER_CANCEL", branchId: order.branchId, userId: user.id, entityType: "Order", entityId: id });
     return updated;
   });
 };
@@ -451,9 +460,11 @@ const markDelayedOrders = async (branchId = undefined) => {
       items: { select: { lockerNumber: true, locker: { select: { number: true } } } },
     },
   });
+  let markedCount = 0;
   for (const order of overdue) {
-    await prisma.$transaction(async (tx) => {
-      await tx.order.update({ where: { id: order.id }, data: { status: "DELAYED" } });
+    const marked = await prisma.$transaction(async (tx) => {
+      const updated = await tx.order.updateMany({ where: { id: order.id, status: "ACTIVE" }, data: { status: "DELAYED" } });
+      if (updated.count === 0) return false;
       await tx.locker.updateMany({ where: { currentOrderId: order.id }, data: { status: "DELAYED" } });
       await createNotification({
         tx,
@@ -464,10 +475,14 @@ const markDelayedOrders = async (branchId = undefined) => {
         priority: 3,
         relatedOrderId: order.id,
       });
+      return true;
     });
-    telegram.sendSafely(telegram.sendDelayedBaggage(order), { branchId: order.branchId, entityType: "Order", entityId: order.id });
+    if (marked) {
+      markedCount += 1;
+      telegram.sendSafely(() => telegram.sendDelayedBaggage(order), { action: "DELAYED_BAGGAGE", branchId: order.branchId, entityType: "Order", entityId: order.id });
+    }
   }
-  return overdue.length;
+  return markedCount;
 };
 
 module.exports = { listOrders, getOrder, createOrder, updateOrder, pickupOrder, cancelOrder, markDelayedOrders };

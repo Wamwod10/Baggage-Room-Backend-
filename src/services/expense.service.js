@@ -39,7 +39,7 @@ const createExpense = async (user, body) => {
     await audit({ tx, branchId, userId: user.id, entityType: "Expense", entityId: expense.id, action: "EXPENSE_CREATE", newValue: expense, description: body.reason });
     return expense;
   });
-  telegram.sendSafely(telegram.sendExpense(expense), { branchId, userId: user.id, entityType: "Expense", entityId: expense.id });
+  telegram.sendSafely(() => telegram.sendExpense(expense), { action: "EXPENSE", branchId, userId: user.id, entityType: "Expense", entityId: expense.id });
   googleSheets.sendSafely(() => googleSheets.sendExpense(expense), { action: "EXPENSE", branchId, userId: user.id, entityType: "Expense", entityId: expense.id });
   return expense;
 };

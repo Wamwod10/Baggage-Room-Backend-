@@ -45,7 +45,7 @@ const createInkassa = async (user, body) => {
     await audit({ tx, branchId, userId: user.id, entityType: "Inkassa", entityId: inkassa.id, action: "INKASSA_CREATE", newValue: inkassa, description: body.note || "Inkassa" });
     return inkassa;
   });
-  telegram.sendSafely(telegram.sendInkassa(inkassa), { branchId, userId: user.id, entityType: "Inkassa", entityId: inkassa.id });
+  telegram.sendSafely(() => telegram.sendInkassa(inkassa), { action: "INKASSA", branchId, userId: user.id, entityType: "Inkassa", entityId: inkassa.id });
   googleSheets.sendSafely(() => googleSheets.sendInkassa(inkassa), { action: "INKASSA", branchId, userId: user.id, entityType: "Inkassa", entityId: inkassa.id });
   return inkassa;
 };
