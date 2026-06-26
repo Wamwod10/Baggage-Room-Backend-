@@ -196,7 +196,7 @@ const overtimePaymentMessage = (order = {}) => [
   line("💰 Qo'shimcha summa", formatMoney(order.overtimeAmount || order.extraPayment || 0, order.currency || "UZS")),
   line("💳 To'lov", formatPayment(order.overtimePaymentType || order.paymentType)),
   "",
-  line("👨‍💼 Admin", formatAdmin(order.pickedUpBy || order.admin || order.createdBy, order.branch || order.branchName)),
+  line("👨‍💼 Admin", formatAdmin(order.shiftOpenedBy || order.cashierAdmin || order.pickedUpBy || order.admin || order.createdBy, order.branch || order.branchName)),
   line("📅 Sana", formatDateMinute(order.realPickupTime || order.updatedAt || new Date())),
 ].join("\n");
 
@@ -340,7 +340,7 @@ const overtimePaymentMessageV2 = (order = {}) => [
   line("👤 Mijoz", order.clientName || order.client),
   line("⏰ Kechikkan vaqt", `${cleanText(order.overtimeHours || 0)} soat`),
   line("💰 Summa", formatMoney(order.overtimeAmount || order.extraPayment || 0, order.currency || "UZS")),
-  line("👤 Admin", formatAdmin(order.pickedUpBy || order.admin || order.createdBy, order.branch || order.branchName)),
+  line("👤 Admin", formatAdmin(order.shiftOpenedBy || order.cashierAdmin || order.pickedUpBy || order.admin || order.createdBy, order.branch || order.branchName)),
 ].join("\n");
 
 module.exports = {

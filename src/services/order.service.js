@@ -403,8 +403,9 @@ const pickupOrder = async (user, id, body) => {
     }
     await audit({ tx, branchId: order.branchId, userId: user.id, entityType: "Order", entityId: id, action: "ORDER_PICKUP", oldValue: order, newValue: updated, description: "Order picked up" });
     if (overtimeAmount > 0) {
+      const shiftOpenedBy = shift?.acceptedByName || shift?.openedBy || null;
       telegram.sendSafely(
-        () => telegram.sendOvertimePayment({ ...updated, currency: overtimeCurrency, overtimeCurrency, overtimePaymentType }),
+        () => telegram.sendOvertimePayment({ ...updated, currency: overtimeCurrency, overtimeCurrency, overtimePaymentType, shiftOpenedBy }),
         { action: "OVERTIME_PAYMENT", branchId: order.branchId, userId: user.id, entityType: "Order", entityId: `${id}:overtime` },
       );
     }

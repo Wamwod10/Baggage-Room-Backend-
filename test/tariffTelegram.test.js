@@ -75,6 +75,22 @@ test("Telegram admin labels do not use branch names as admin names", () => {
   assert.doesNotMatch(message, /Bekor qildi: Toshkent Shimoliy vokzal/);
 });
 
+test("Doplata Telegram message uses shift opener name before pickup login", () => {
+  const message = overtimePaymentMessage({
+    branch: { name: "Toshkent Janubiy vokzal" },
+    orderNumber: "TJV-000014",
+    clientName: "Меретова Гулшан",
+    overtimeHours: 1,
+    overtimeAmount: 10000,
+    currency: "UZS",
+    shiftOpenedBy: "Ali",
+    pickedUpBy: { name: "Toshkent Janubiy vokzal", login: "tosh_janubiy" },
+  });
+
+  assert.match(message, /Admin: Ali/);
+  assert.doesNotMatch(message, /Admin: tosh_janubiy/);
+});
+
 test("Telegram shift report separates payment and currency balances", () => {
   const message = shiftClosedMessage({
     branch: { name: "Samarqand aeroport" },

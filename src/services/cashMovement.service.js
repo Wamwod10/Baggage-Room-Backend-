@@ -3,7 +3,10 @@ const { branchWhere } = require("../utils/scope");
 const { dateRangeWhere } = require("../utils/date");
 const { paginated } = require("../utils/pagination");
 
-const findOpenShift = (tx, branchId) => tx.shift.findFirst({ where: { branchId, status: "OPEN" } });
+const findOpenShift = (tx, branchId) => tx.shift.findFirst({
+  where: { branchId, status: "OPEN" },
+  include: { openedBy: { select: { id: true, name: true, login: true } } },
+});
 
 const createCashMovement = async ({ tx = prisma, branchId, shiftId, orderId = null, type, direction, amount, currency, paymentType = null, note = null, createdById }) => {
   return tx.cashMovement.create({
