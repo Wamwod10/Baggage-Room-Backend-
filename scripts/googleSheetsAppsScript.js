@@ -35,7 +35,7 @@ const SHEET_NAME_PATTERN_BY_BRANCH_CODE = {
   SIA: /(sia|самарканд.*аэропорт|samarqand.*aeroport)/i,
 };
 
-const WRITABLE_ACTIONS = new Set(["NEW_ORDER", "DOPLATA", "DEBT_PAYMENT", "EXPENSE", "INKASSA", "SALARY"]);
+const WRITABLE_ACTIONS = new Set(["NEW_ORDER", "DOPLATA", "DEBT_PAYMENT", "CANCEL_ORDER", "EXPENSE", "INKASSA", "SALARY"]);
 const SCRIPT_VERSION = "v6-debt-payment-cash-accounting-2026-06-26";
 const LEGACY_WIDTH = 22; // A:V
 const LEGACY_TECHNICAL_COLUMN = 23; // W; cleaned once and never written again
@@ -97,6 +97,7 @@ const FRACTION_DIGITS_BY_CURRENCY = {
 const ACTION_STYLE = {
   DOPLATA: { background: "#d9ead3", fontColor: "#14532d" },
   DEBT_PAYMENT: { background: "#d9ead3", fontColor: "#14532d" },
+  CANCEL_ORDER: { background: "#f4cccc", fontColor: "#7f1d1d" },
   EXPENSE: { background: "#f4cccc", fontColor: "#7f1d1d" },
   SALARY: { background: "#f4cccc", fontColor: "#7f1d1d" },
   INKASSA: { background: "#fce4d6", fontColor: "#000000" },
@@ -514,6 +515,7 @@ function buildLegacyRow_(payload) {
   if (action === "NEW_ORDER") return buildNewOrderRow(payload);
   if (action === "DOPLATA") return buildDoplataRow(payload);
   if (action === "DEBT_PAYMENT") return buildDebtPaymentRow(payload);
+  if (action === "CANCEL_ORDER") return buildCancelOrderRow(payload);
   if (action === "EXPENSE") return buildExpenseRow(payload);
   if (action === "SALARY") return buildSalaryRow(payload);
   if (action === "INKASSA") return buildInkassaRow(payload);
@@ -540,7 +542,8 @@ function buildNewOrderRow(payload) {
 }
 
 function writeRevenue_(row, payload, amount) {
-  const paymentType = String(payload.paymentType || "CASH").toUpperCase();
+  if (!payload.paymentType) throw new Error("paymentType is required for revenue write");
+  const paymentType = String(payload.paymentType).toUpperCase();
   const currency = String(payload.currency || "UZS").toUpperCase();
   if (paymentType === "CLICK") {
     row[COLUMN.CLICK - 1] = amount;
@@ -548,10 +551,12 @@ function writeRevenue_(row, payload, amount) {
     row[COLUMN.PAYME - 1] = amount;
   } else if (paymentType === "CARD" || paymentType === "TERMINAL" || paymentType === "TRANSFER") {
     row[COLUMN.TERMINAL - 1] = amount;
-  } else if (paymentType === "CASH" || !payload.paymentType) {
+  } else if (paymentType === "CASH") {
     const cashColumn = CASH_COLUMN_BY_CURRENCY[currency];
     if (!cashColumn) throw new Error("Unsupported cash currency: " + currency);
     row[cashColumn - 1] = amount;
+  } else {
+    throw new Error("Unsupported paymentType for revenue write: " + paymentType);
   }
 }
 
@@ -577,6 +582,19 @@ function buildDebtPaymentRow(payload) {
   row[COLUMN.NAME - 1] = payload.operationName || "Qarz to'lovi";
 
   const amount = sheetAmount_(payload, payload.paidAmount, payload.amount, payload.finalAmount, payload.realPaidAmount);
+  if (amount !== "") writeRevenue_(row, payload, amount);
+  return row;
+}
+
+function buildCancelOrderRow(payload) {
+  const row = createRow_(payload);
+  row[COLUMN.FIO - 1] = payload.clientName || payload.fio || "";
+  row[COLUMN.PLACE - 1] = formatSizeCounts_(payload);
+  row[COLUMN.CHECK - 1] = payload.orderNumber || payload.checkNumber || "";
+  row[COLUMN.PERIOD - 1] = payload.period || payload.storagePeriod || "CANCEL";
+  row[COLUMN.NAME - 1] = payload.operationName || "Buyurtma bekor qilindi";
+
+  const amount = sheetAmountSigned_(payload, payload.amount, payload.finalAmount, payload.realPaidAmount, payload.paidAmount);
   if (amount !== "") writeRevenue_(row, payload, amount);
   return row;
 }
@@ -652,6 +670,16 @@ function sheetAmount_(payload) {
   return amountAbs_(firstValue_.apply(null, values), payload.currency, payload.amountUnit);
 }
 
+function sheetAmountSigned_(payload) {
+  const value = payload.sheetAmount !== null && payload.sheetAmount !== undefined && payload.sheetAmount !== ""
+    ? payload.sheetAmount
+    : firstValue_.apply(null, Array.prototype.slice.call(arguments, 1));
+  const parsed = amountAbs_(value, payload.currency, payload.amountUnit);
+  if (parsed === "") return "";
+  const numeric = parseNumber_(value);
+  return numeric < 0 ? -parsed : parsed;
+}
+
 function applyMoneyFormat_(sheet, row, payload) {
   const code = String(payload.currency || "UZS").toUpperCase();
   const format = (FRACTION_DIGITS_BY_CURRENCY[code] || 0) > 0 ? "#,##0.00" : "#,##0";
@@ -659,8 +687,9 @@ function applyMoneyFormat_(sheet, row, payload) {
   let column = null;
   if (action === "EXPENSE" || action === "SALARY") column = COLUMN.EXPENSE;
   if (action === "INKASSA") column = BALANCE_COLUMN_BY_CURRENCY[code] || COLUMN.BALANCE_UZS;
-  if (action === "NEW_ORDER" || action === "DOPLATA" || action === "DEBT_PAYMENT") {
-    const paymentType = String(payload.paymentType || "CASH").toUpperCase();
+  if (action === "NEW_ORDER" || action === "DOPLATA" || action === "DEBT_PAYMENT" || action === "CANCEL_ORDER") {
+    if (!payload.paymentType) throw new Error("paymentType is required for revenue format");
+    const paymentType = String(payload.paymentType).toUpperCase();
     if (paymentType === "CLICK") column = COLUMN.CLICK;
     else if (paymentType === "PAYME") column = COLUMN.PAYME;
     else if (paymentType === "CARD" || paymentType === "TERMINAL" || paymentType === "TRANSFER") column = COLUMN.TERMINAL;
@@ -758,6 +787,7 @@ if (typeof module !== "undefined" && module.exports) {
     buildNewOrderRow,
     buildDoplataRow,
     buildDebtPaymentRow,
+    buildCancelOrderRow,
     buildExpenseRow,
     buildSalaryRow,
     buildInkassaRow,
@@ -766,5 +796,6 @@ if (typeof module !== "undefined" && module.exports) {
     amountAbs_,
     parseNumber_,
     sheetAmount_,
+    sheetAmountSigned_,
   };
 }

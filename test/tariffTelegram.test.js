@@ -2,10 +2,12 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const { calculatePrice } = require("../src/services/tariff.service");
+const { summarizeMovements } = require("../src/services/cashAccounting.service");
 const { computeShiftReport, normalizeCurrencyMap } = require("../src/services/shift.service");
 const {
   formatMoney,
   inkassaMessage,
+  orderMessage,
   orderCancelledMessage,
   overtimePaymentMessage,
   shiftClosedMessage,
@@ -31,6 +33,25 @@ test("Telegram formats decimal currencies without multiplying by 100", () => {
   assert.equal(formatMoney(12345, "USD"), "123,45 USD");
   assert.equal(formatMoney(9950, "EUR"), "99,50 EUR");
   assert.equal(formatMoney(250000, "UZS"), "250 000 so'm");
+});
+
+test("Telegram uses exact selected payment labels and never falls back to cash", () => {
+  assert.match(orderMessage({ paymentType: "TERMINAL", realPaidAmount: 100000, currency: "UZS" }), /To'lov: Terminal/);
+  assert.match(orderMessage({ paymentType: "CLICK", realPaidAmount: 100000, currency: "UZS" }), /To'lov: Click/);
+  assert.match(orderMessage({ paymentType: "PAYME", realPaidAmount: 100000, currency: "UZS" }), /To'lov: Payme/);
+  assert.match(orderMessage({ paymentType: "DEBT", finalAmount: 100000, currency: "UZS" }), /To'lov: Qarz/);
+  assert.doesNotMatch(orderMessage({ paymentType: null, finalAmount: 100000, currency: "UZS" }), /To'lov: Naqd/);
+});
+
+test("cash accounting subtracts cancel reversal movements from revenue", () => {
+  const summary = summarizeMovements([
+    { direction: "IN", type: "ORDER_PAYMENT", paymentType: "TERMINAL", amount: 120000, currency: "UZS" },
+    { direction: "OUT", type: "ORDER_PAYMENT", paymentType: "TERMINAL", amount: 120000, currency: "UZS" },
+    { direction: "IN", type: "DEBT_CLOSE", paymentType: "CASH", amount: 50000, currency: "UZS" },
+  ]);
+  assert.equal(summary.revenueByCurrency.UZS, 50000);
+  assert.equal(summary.terminalByCurrency.UZS, 0);
+  assert.equal(summary.cashByCurrency.UZS, 50000);
 });
 
 test("Inkassa and doplata Telegram messages use real admin and safe business identifiers", () => {
@@ -71,8 +92,8 @@ test("Telegram admin labels do not use branch names as admin names", () => {
   });
 
   assert.match(message, /Filial: Toshkent Shimoliy vokzal/);
-  assert.match(message, /Bekor qildi: tosh_shimoliy/);
-  assert.doesNotMatch(message, /Bekor qildi: Toshkent Shimoliy vokzal/);
+  assert.match(message, /Admin: tosh_shimoliy/);
+  assert.doesNotMatch(message, /Admin: Toshkent Shimoliy vokzal/);
 });
 
 test("Doplata Telegram message uses shift opener name before pickup login", () => {

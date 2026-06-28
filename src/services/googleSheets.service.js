@@ -68,7 +68,7 @@ const webhookError = (message, { status = null, body = null, json = null } = {})
   return error;
 };
 const isEnabled = () => ["true", "1", "yes", "on"].includes(String(enabledValue()).toLowerCase()) && Boolean(getWebhookUrl());
-const DELIVERABLE_ACTIONS = new Set(["NEW_ORDER", "DOPLATA", "DEBT_PAYMENT", "EXPENSE", "INKASSA", "SALARY"]);
+const DELIVERABLE_ACTIONS = new Set(["NEW_ORDER", "DOPLATA", "DEBT_PAYMENT", "CANCEL_ORDER", "EXPENSE", "INKASSA", "SALARY"]);
 const shouldDeliver = (payload) => DELIVERABLE_ACTIONS.has(String(payload?.action || "").toUpperCase());
 
 const toIso = (value) => {
@@ -294,11 +294,15 @@ const orderPayload = (action, order, overrides = {}) => {
     createdAt: toIso(order?.createdAt || new Date()),
     ...overrides,
   };
+  const isCancel = String(action || "").toUpperCase() === "CANCEL_ORDER";
+  const normalizedAmount = isCancel && payload.amount !== null && payload.amount !== undefined && payload.amount !== ""
+    ? -Math.abs(sheetAmount(payload.amount, payload.currency))
+    : sheetAmount(payload.amount, payload.currency);
   return withDeliveryMetadata({
     ...payload,
     amountMinor: payload.amount,
-    amount: sheetAmount(payload.amount, payload.currency),
-    sheetAmount: sheetAmount(payload.amount, payload.currency),
+    amount: normalizedAmount,
+    sheetAmount: normalizedAmount,
     amountUnit: "MAJOR",
   });
 };
@@ -334,7 +338,7 @@ const postWebhook = async (payload) => {
     if (!shouldDeliver(payload)) {
       return {
         skipped: true,
-        reason: `Google Sheets only accepts NEW_ORDER, DOPLATA, DEBT_PAYMENT, EXPENSE, INKASSA, SALARY events (received ${payload.action || "UNKNOWN"})`,
+        reason: `Google Sheets only accepts NEW_ORDER, DOPLATA, DEBT_PAYMENT, CANCEL_ORDER, EXPENSE, INKASSA, SALARY events (received ${payload.action || "UNKNOWN"})`,
       };
     }
     if (!isEnabled()) {
@@ -528,13 +532,30 @@ const sendDoplata = (order) =>
   postWebhook(orderPayload("DOPLATA", order, {
     amount: order?.overtimeAmount ?? order?.extraPayment ?? 0,
     currency: order?.overtimeCurrency || order?.currency || "UZS",
-    paymentType: order?.overtimePaymentType || order?.paymentType || "CASH",
+    paymentType: order?.overtimePaymentType || null,
     checkOut: toIso(order?.realPickupTime || order?.updatedAt),
     period: `DOPLATA ${Number(order?.overtimeHours || 0)}ч`,
     doplataPeriod: `DOPLATA ${Number(order?.overtimeHours || 0)}ч`,
     operationName: "Доплата",
     note: "DOPLATA",
   }));
+
+const sendOrderCancel = (order, reversal = {}) => {
+  const currency = reversal?.currency || order?.currency || "UZS";
+  const amountMinor = Math.abs(Number(reversal?.amount ?? order?.realPaidAmount ?? 0));
+  const amountMajor = sheetAmount(amountMinor, currency);
+  return postWebhook(orderPayload("CANCEL_ORDER", order, {
+    amount: -amountMajor,
+    sheetAmount: -amountMajor,
+    amountMinor: -amountMinor,
+    amountUnit: "MAJOR",
+    currency,
+    paymentType: reversal?.paymentType || order?.paymentType || null,
+    checkOut: toIso(order?.updatedAt || new Date()),
+    operationName: "Buyurtma bekor qilindi",
+    note: order?.cancelReason || "CANCEL",
+  }));
+};
 
 const expensePayload = (expense) =>
   (() => {
@@ -871,6 +892,28 @@ const testPayload = (action, branchCodeValue, branch, user) => {
     });
   }
 
+  if (action === "CANCEL_ORDER") {
+    return orderPayload(
+      "CANCEL_ORDER",
+      {
+        id: entityId,
+        branch: { code: branchCodeValue, name: common.branchName },
+        orderNumber: `TEST-CANCEL-${branchCodeValue}-${Date.now()}`,
+        clientName: "GOOGLE SHEETS TEST",
+        phone: "",
+        passport: "",
+        items: [{ size: "S", count: 1 }],
+        checkIn: new Date(),
+        plannedCheckOut: new Date(),
+        finalAmount: 1000,
+        currency: "UZS",
+        paymentType: "CASH",
+        createdAt: new Date(),
+      },
+      { entityId, amount: -1000, operationName: "Buyurtma bekor qilindi" },
+    );
+  }
+
   if (action === "INKASSA") {
     return inkassaPayload({
       id: entityId,
@@ -927,6 +970,7 @@ const sendTestEvent = async (user, body) => {
 module.exports = {
   sendNewOrder,
   sendDoplata,
+  sendOrderCancel,
   sendPickup,
   sendDebtClosed,
   sendDebtPayment,

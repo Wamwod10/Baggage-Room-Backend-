@@ -15,6 +15,7 @@ const { findOpenShift, createCashMovement } = require("./cashMovement.service");
 const telegram = require("./telegram.service");
 const googleSheets = require("./googleSheets.service");
 const { paginated } = require("../utils/pagination");
+const { normalizePaymentType, paymentLabel } = require("../utils/payment");
 
 const includeOrder = {
   branch: { select: { id: true, name: true, code: true } },
@@ -30,6 +31,106 @@ const telegramReasonText = {
   missing_credentials: "Bot token yoki chat ID kiritilmagan",
   disabled: "Telegram o'chirilgan",
   newOrderEnabled_disabled: "Yangi buyurtma xabari o'chirilgan",
+};
+
+const changeLabels = {
+  clientName: "Mijoz",
+  phone: "Telefon",
+  passport: "Passport",
+  plannedCheckOut: "Check-out",
+  paymentType: "To'lov",
+  currency: "Valyuta",
+  finalAmount: "Summa",
+  realPaidAmount: "Real to'lov",
+  note: "Izoh",
+  items: "Bagaj",
+};
+
+const formatChangeValue = (key, value, currency = "UZS") => {
+  if (value === undefined || value === null || value === "") return "-";
+  if (key === "paymentType") return paymentLabel(value, { context: "order_edit" });
+  if (["finalAmount", "realPaidAmount"].includes(key)) return `${Number(value || 0)} ${currency}`;
+  if (key === "plannedCheckOut") return new Date(value).toISOString();
+  return String(value);
+};
+
+const buildEditChanges = (before, after, keys) => keys.reduce((changes, key) => {
+  const oldValue = before[key] instanceof Date ? before[key].toISOString() : before[key];
+  const nextValue = after[key] instanceof Date ? after[key].toISOString() : after[key];
+  if (oldValue !== nextValue) {
+    changes[changeLabels[key] || key] = {
+      old: formatChangeValue(key, oldValue, before.currency),
+      next: formatChangeValue(key, nextValue, after.currency),
+    };
+  }
+  return changes;
+}, {});
+
+const netMovementsByBucket = (movements = []) => {
+  const buckets = new Map();
+  for (const movement of movements) {
+    if (!["ORDER_PAYMENT", "DEBT_CLOSE"].includes(movement.type)) continue;
+    const key = [movement.type, movement.paymentType || "", movement.currency || "UZS"].join("|");
+    const current = buckets.get(key) || {
+      type: movement.type,
+      paymentType: movement.paymentType,
+      currency: movement.currency || "UZS",
+      amount: 0,
+    };
+    current.amount += Number(movement.amount || 0) * (movement.direction === "OUT" ? -1 : 1);
+    buckets.set(key, current);
+  }
+  return [...buckets.values()].filter((bucket) => bucket.amount !== 0);
+};
+
+const reverseRevenueMovements = async ({ tx, order, movements, userId, notePrefix = "Reversal" }) => {
+  const shift = await findOpenShift(tx, order.branchId);
+  const reversals = [];
+  for (const bucket of netMovementsByBucket(movements)) {
+    const amount = Math.abs(bucket.amount);
+    if (!amount) continue;
+    reversals.push(await createCashMovement({
+      tx,
+      branchId: order.branchId,
+      shiftId: shift?.id || null,
+      orderId: order.id,
+      type: bucket.type,
+      direction: bucket.amount > 0 ? "OUT" : "IN",
+      amount,
+      currency: bucket.currency,
+      paymentType: bucket.paymentType || null,
+      note: `${notePrefix} ${order.orderNumber}`,
+      createdById: userId,
+    }));
+  }
+  return reversals;
+};
+
+const resetInitialPaymentMovement = async ({ tx, order, amount, currency, paymentType, userId }) => {
+  const existing = await tx.cashMovement.findMany({
+    where: {
+      orderId: order.id,
+      type: "ORDER_PAYMENT",
+      note: { not: { startsWith: "Overtime" } },
+    },
+  });
+  await reverseRevenueMovements({ tx, order, movements: existing, userId, notePrefix: "Edit reversal" });
+  if (amount > 0) {
+    const shift = await findOpenShift(tx, order.branchId);
+    await createCashMovement({
+      tx,
+      branchId: order.branchId,
+      shiftId: shift?.id || null,
+      orderId: order.id,
+      type: "ORDER_PAYMENT",
+      direction: "IN",
+      amount,
+      currency,
+      paymentType,
+      note: `Order ${order.orderNumber}`,
+      createdById: userId,
+    });
+  }
 };
 
 const normalizeTelegramResult = (result = {}) => {
@@ -173,6 +274,10 @@ const createOrder = async (user, body) => {
         { field: "tariffHours", message: "tariffHours must be a positive number" },
       ]);
     }
+    const paymentType = normalizePaymentType(body.paymentType);
+    if (!paymentType) throw new AppError("paymentType is required", 400, [
+      { field: "paymentType", message: "paymentType is required" },
+    ]);
     const currency = body.currency || "UZS";
     const exchangeRate = currency === "UZS" ? 1 : Number(body.exchangeRate || 0);
     if (currency !== "UZS" && (!Number.isFinite(exchangeRate) || exchangeRate <= 0)) {
@@ -236,7 +341,7 @@ const createOrder = async (user, body) => {
     const itemDiscount = itemRows.reduce((total, item) => total + item.data.discountAmount, 0);
     const discountAmount = Number(body.discountAmount || 0) + itemDiscount;
     const finalAmount = Math.max(0, calculatedAmount - discountAmount);
-    const realPaidAmount = body.paymentType === "DEBT" ? Number(body.realPaidAmount || 0) : Number(body.realPaidAmount ?? finalAmount);
+    const realPaidAmount = paymentType === "DEBT" ? Number(body.realPaidAmount || 0) : Number(body.realPaidAmount ?? finalAmount);
     const checkIn = body.checkIn ? new Date(body.checkIn) : new Date();
     const plannedCheckOut = body.plannedCheckOut ? new Date(body.plannedCheckOut) : addHours(checkIn, tariffHours);
     const orderNumber = await generateOrderNumber(tx, branch.code);
@@ -251,7 +356,7 @@ const createOrder = async (user, body) => {
         tariffHours,
         customHours: body.customHours || null,
         currency,
-        paymentType: body.paymentType,
+        paymentType,
         calculatedAmount,
         discountAmount,
         discountReason: body.discountReason || null,
@@ -275,10 +380,14 @@ const createOrder = async (user, body) => {
     }
 
     const shift = await findOpenShift(tx, branchId);
-    if (body.paymentType === "DEBT" && finalAmount - realPaidAmount > 0) {
+    if (paymentType === "DEBT" && finalAmount - realPaidAmount > 0) {
       await tx.debt.create({
         data: { orderId: order.id, branchId, clientName: body.clientName, phone: body.phone, amount: finalAmount - realPaidAmount, currency },
       });
+    }
+    const paidPaymentType = paymentType === "DEBT" ? normalizePaymentType(body.realPaidPaymentType || body.paidPaymentType) : paymentType;
+    if (realPaidAmount > 0 && !paidPaymentType) {
+      throw new AppError("paidPaymentType is required for partial debt payment", 400);
     }
     if (realPaidAmount > 0) {
       await createCashMovement({
@@ -290,7 +399,7 @@ const createOrder = async (user, body) => {
         direction: "IN",
         amount: realPaidAmount,
         currency,
-        paymentType: body.paymentType === "DEBT" ? body.realPaidPaymentType || body.paidPaymentType || "CASH" : body.paymentType,
+        paymentType: paidPaymentType,
         note: `Order ${order.orderNumber}`,
         createdById: user.id,
       });
@@ -330,17 +439,122 @@ const sendOrderTelegram = async (user, id) => {
 };
 
 const updateOrder = async (user, id, body) => {
-  const current = await getOrder(user, id);
-  if (!["ACTIVE", "DELAYED"].includes(current.status)) throw new AppError("Only active orders can be edited", 400);
-  const allowed = ["clientName", "phone", "passport", "note", "discountReason", "realPaidReason"];
-  const data = Object.fromEntries(Object.entries(body).filter(([key]) => allowed.includes(key)));
-  const updated = await prisma.order.update({ where: { id }, data, include: includeOrder });
-  await audit({ branchId: current.branchId, userId: user.id, entityType: "Order", entityId: id, action: "ORDER_EDIT", oldValue: current, newValue: updated, description: "Order edited" });
+  const result = await prisma.$transaction(async (tx) => {
+    const current = await tx.order.findUnique({ where: { id }, include: includeOrder });
+    if (!current) throw new AppError("Order not found", 404);
+    getScopedBranchId(user, current.branchId);
+    if (!["ACTIVE", "DELAYED"].includes(current.status)) throw new AppError("Only active orders can be edited", 400);
+
+    const data = {};
+    for (const key of ["clientName", "phone", "passport", "note", "discountReason", "realPaidReason"]) {
+      if (body[key] !== undefined) data[key] = body[key] || null;
+    }
+    if (body.checkOut !== undefined || body.plannedCheckOut !== undefined) {
+      const plannedCheckOut = new Date(body.plannedCheckOut || body.checkOut);
+      if (Number.isNaN(plannedCheckOut.getTime())) throw new AppError("Invalid checkOut", 400);
+      data.plannedCheckOut = plannedCheckOut;
+      data.status = plannedCheckOut < new Date() ? "DELAYED" : "ACTIVE";
+    }
+    if (body.paymentType !== undefined) {
+      const paymentType = normalizePaymentType(body.paymentType);
+      if (!paymentType) throw new AppError("paymentType is required", 400);
+      data.paymentType = paymentType;
+    }
+    if (body.currency !== undefined) data.currency = body.currency;
+    if (body.finalAmount !== undefined) data.finalAmount = Number(body.finalAmount);
+    if (body.realPaidAmount !== undefined) data.realPaidAmount = Number(body.realPaidAmount);
+
+    const nextPaymentType = data.paymentType || current.paymentType;
+    if (nextPaymentType === "DEBT" && body.realPaidAmount === undefined) data.realPaidAmount = 0;
+    const nextFinalAmount = data.finalAmount ?? current.finalAmount;
+    const nextRealPaidAmount = data.realPaidAmount ?? current.realPaidAmount;
+    data.paymentDifference = Number(nextRealPaidAmount || 0) - Number(nextFinalAmount || 0);
+
+    let itemChanged = false;
+    if (Array.isArray(body.items)) {
+      const currentItemsById = new Map(current.items.map((item) => [item.id, item]));
+      for (const item of body.items) {
+        const currentItem = currentItemsById.get(item.id);
+        if (!currentItem) continue;
+        const itemData = {};
+        if (item.size !== undefined) itemData.size = item.size;
+        if (item.count !== undefined) itemData.count = Number(item.count);
+        if (data.currency) itemData.currency = data.currency;
+        if (item.lockerId && item.lockerId !== currentItem.lockerId) {
+          const locker = await tx.locker.findUnique({ where: { id: item.lockerId } });
+          if (!locker || locker.branchId !== current.branchId) throw new AppError("Locker not found in this branch", 400);
+          if (locker.status !== "EMPTY" || locker.currentOrderId) throw new AppError("New locker must be empty", 400);
+          await tx.locker.update({ where: { id: currentItem.lockerId }, data: { status: "EMPTY", currentOrderId: null } });
+          await tx.locker.update({ where: { id: locker.id }, data: { status: data.status === "DELAYED" ? "DELAYED" : "BUSY", currentOrderId: id } });
+          itemData.lockerId = locker.id;
+          itemData.lockerNumber = locker.number;
+          itemData.size = itemData.size || locker.size;
+        }
+        if (Object.keys(itemData).length) {
+          await tx.orderItem.update({ where: { id: currentItem.id }, data: itemData });
+          itemChanged = true;
+        }
+      }
+    }
+
+    const updatedBase = await tx.order.update({ where: { id }, data, include: includeOrder });
+    const nextDebtAmount = Math.max(0, Number(updatedBase.finalAmount || 0) - Number(updatedBase.realPaidAmount || 0));
+    if (updatedBase.paymentType === "DEBT" && nextDebtAmount > 0) {
+      await tx.debt.upsert({
+        where: { orderId: id },
+        create: {
+          orderId: id,
+          branchId: updatedBase.branchId,
+          clientName: updatedBase.clientName,
+          phone: updatedBase.phone,
+          amount: nextDebtAmount,
+          currency: updatedBase.currency,
+        },
+        update: {
+          status: "OPEN",
+          closedAt: null,
+          closedById: null,
+          clientName: updatedBase.clientName,
+          phone: updatedBase.phone,
+          amount: nextDebtAmount,
+          currency: updatedBase.currency,
+        },
+      });
+    } else if (current.debt) {
+      await tx.debt.update({
+        where: { id: current.debt.id },
+        data: { status: "CLOSED", amount: 0, closedAt: new Date(), closedById: user.id },
+      });
+    }
+
+    const paymentFieldsChanged = ["paymentType", "currency", "finalAmount", "realPaidAmount"].some((key) => body[key] !== undefined);
+    if (paymentFieldsChanged) {
+      await resetInitialPaymentMovement({
+        tx,
+        order: current,
+        amount: Number(updatedBase.realPaidAmount || 0),
+        currency: updatedBase.currency,
+        paymentType: updatedBase.paymentType === "DEBT" ? null : updatedBase.paymentType,
+        userId: user.id,
+      });
+    }
+
+    if (data.status) {
+      await tx.locker.updateMany({ where: { currentOrderId: id }, data: { status: data.status === "DELAYED" ? "DELAYED" : "BUSY" } });
+    }
+
+    const updated = await tx.order.findUnique({ where: { id }, include: includeOrder });
+    const changes = buildEditChanges(current, updated, ["clientName", "phone", "passport", "plannedCheckOut", "paymentType", "currency", "finalAmount", "realPaidAmount", "note"]);
+    if (itemChanged) changes[changeLabels.items] = { old: "oldingi", next: "yangilandi" };
+    await audit({ tx, branchId: current.branchId, userId: user.id, entityType: "Order", entityId: id, action: "ORDER_EDIT", oldValue: current, newValue: updated, description: "Order edited" });
+    return { updated, changes };
+  });
+
   telegram.sendSafely(
-    () => telegram.sendOrderEdit({ ...updated, updatedBy: user }, data),
-    { action: "ORDER_EDIT", branchId: current.branchId, userId: user.id, entityType: "Order", entityId: `${id}:edit:${updated.updatedAt.getTime()}` },
+    () => telegram.sendOrderEdit({ ...result.updated, updatedBy: user }, result.changes),
+    { action: "ORDER_EDIT", branchId: result.updated.branchId, userId: user.id, entityType: "Order", entityId: `${id}:edit:${result.updated.updatedAt.getTime()}` },
   );
-  return updated;
+  return result.updated;
 };
 
 const pickupOrder = async (user, id, body) => {
@@ -356,7 +570,10 @@ const pickupOrder = async (user, id, body) => {
     const overtimeHours = Math.max(0, Math.ceil((pickupTime.getTime() - order.plannedCheckOut.getTime()) / 3600000));
     const overtimeAmount = Number(body.overtimeAmount || body.extraPayment || 0);
     const overtimeCurrency = body.currency || order.currency;
-    const overtimePaymentType = body.paymentType || "CASH";
+    const overtimePaymentType = normalizePaymentType(body.paymentType);
+    if ((Number(body.overtimeAmount || body.extraPayment || 0) > 0 || Number(body.debtPaidAmount || 0) > 0) && !overtimePaymentType) {
+      throw new AppError("paymentType is required", 400);
+    }
     let updated = await tx.order.update({
       where: { id },
       data: {
@@ -400,7 +617,7 @@ const pickupOrder = async (user, id, body) => {
           direction: "IN",
           amount: debtPaidAmount,
           currency: body.currency || order.currency,
-          paymentType: body.paymentType || "CASH",
+          paymentType: overtimePaymentType,
           note: `Debt payment ${order.orderNumber}`,
           createdById: user.id,
         });
@@ -421,7 +638,7 @@ const pickupOrder = async (user, id, body) => {
           ...order.debt,
           amount: remainingDebtAmount,
           paidAmount: debtPaidAmount,
-          paymentType: body.paymentType || "CASH",
+          paymentType: overtimePaymentType,
           currency: body.currency || order.currency,
           status: remainingDebtAmount === 0 ? "CLOSED" : "OPEN",
           paidAt: pickupTime,
@@ -451,7 +668,7 @@ const pickupOrder = async (user, id, body) => {
         debtPayment = {
           ...closedDebt,
           paidAmount: debtPaidAmount,
-          paymentType: body.paymentType || "CASH",
+          paymentType: overtimePaymentType,
           currency: body.currency || order.currency,
           closedBy: closedDebt.closedBy || user,
           paidAt: closedDebt.closedAt || pickupTime,
@@ -490,7 +707,7 @@ const pickupOrder = async (user, id, body) => {
   }
   if (Number(result.updated.overtimeAmount || 0) > 0) {
     googleSheets.sendSafely(
-      () => googleSheets.sendDoplata({ ...result.updated, overtimePaymentType: body.paymentType || "CASH" }),
+      () => googleSheets.sendDoplata({ ...result.updated, overtimePaymentType: normalizePaymentType(body.paymentType) }),
       { action: "DOPLATA", branchId: result.updated.branchId, userId: user.id, entityType: "OrderDoplata", entityId: `${id}:doplata:${result.updated.realPickupTime?.getTime?.() || Date.now()}` },
     );
   }
@@ -498,7 +715,7 @@ const pickupOrder = async (user, id, body) => {
 };
 
 const cancelOrder = async (user, id, body) => {
-  return prisma.$transaction(async (tx) => {
+  const result = await prisma.$transaction(async (tx) => {
     const order = await tx.order.findUnique({ where: { id }, include: includeOrder });
     if (!order || !["ACTIVE", "DELAYED"].includes(order.status)) throw new AppError("Active order not found", 404);
     getScopedBranchId(user, order.branchId);
@@ -508,6 +725,22 @@ const cancelOrder = async (user, id, body) => {
       include: includeOrder,
     });
     await tx.locker.updateMany({ where: { currentOrderId: id }, data: { status: "EMPTY", currentOrderId: null } });
+    if (order.debt?.status === "OPEN") {
+      await tx.debt.update({
+        where: { id: order.debt.id },
+        data: { status: "CLOSED", amount: 0, closedAt: new Date(), closedById: user.id },
+      });
+    }
+    const paidMovements = await tx.cashMovement.findMany({
+      where: { orderId: id, type: { in: ["ORDER_PAYMENT", "DEBT_CLOSE"] } },
+    });
+    const reversals = await reverseRevenueMovements({
+      tx,
+      order,
+      movements: paidMovements,
+      userId: user.id,
+      notePrefix: "Cancel reversal",
+    });
     await createNotification({
       tx,
       branchId: order.branchId,
@@ -518,9 +751,22 @@ const cancelOrder = async (user, id, body) => {
       relatedOrderId: order.id,
     });
     await audit({ tx, branchId: order.branchId, userId: user.id, entityType: "Order", entityId: id, action: "ORDER_CANCEL", oldValue: order, newValue: updated, description: body.cancelReason || "Order cancelled" });
-    telegram.sendSafely(() => telegram.sendOrderCancel(updated), { action: "ORDER_CANCEL", branchId: order.branchId, userId: user.id, entityType: "Order", entityId: id });
-    return updated;
+    return {
+      updated: {
+        ...updated,
+        cancelledAmount: reversals.reduce((total, item) => total + Number(item.amount || 0), 0),
+      },
+      reversals,
+    };
   });
+  telegram.sendSafely(() => telegram.sendOrderCancel(result.updated), { action: "ORDER_CANCEL", branchId: result.updated.branchId, userId: user.id, entityType: "Order", entityId: id });
+  for (const reversal of result.reversals) {
+    googleSheets.sendSafely(
+      () => googleSheets.sendOrderCancel(result.updated, reversal),
+      { action: "CANCEL_ORDER", branchId: result.updated.branchId, userId: user.id, entityType: "OrderCancel", entityId: `${id}:${reversal.id}` },
+    );
+  }
+  return result.updated;
 };
 
 const markDelayedOrders = async (branchId = undefined) => {

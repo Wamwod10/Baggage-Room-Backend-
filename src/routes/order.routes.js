@@ -61,7 +61,32 @@ router.post(
   ),
   orderController.create
 );
-router.patch("/:id", validate(idParam.extend({ body: z.object({ clientName: z.string().min(2).optional(), phone: phone.optional(), passport: z.string().optional(), note: z.string().optional(), discountReason: z.string().optional(), realPaidReason: z.string().optional() }) })), orderController.update);
+router.patch(
+  "/:id",
+  validate(idParam.extend({
+    body: z.object({
+      clientName: z.string().min(2).optional(),
+      phone: phone.optional(),
+      passport: z.string().optional(),
+      note: z.string().optional(),
+      discountReason: z.string().optional(),
+      realPaidReason: z.string().optional(),
+      checkOut: z.string().datetime().optional(),
+      plannedCheckOut: z.string().datetime().optional(),
+      paymentType: paymentType.optional(),
+      currency: currency.optional(),
+      finalAmount: amount.optional(),
+      realPaidAmount: amount.optional(),
+      items: z.array(z.object({
+        id: z.string().min(1),
+        lockerId: z.string().min(1).optional(),
+        size: lockerSize.optional(),
+        count: z.coerce.number().int().positive().optional(),
+      })).optional(),
+    }),
+  })),
+  orderController.update
+);
 router.post(
   "/:id/pickup",
   validate(

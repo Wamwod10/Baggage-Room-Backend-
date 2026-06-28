@@ -1,6 +1,7 @@
 const { CURRENCIES, byCurrency, subtractCurrencyMaps, sum } = require("../utils/money");
 
 const REVENUE_IN_TYPES = Object.freeze(["ORDER_PAYMENT", "DEBT_CLOSE"]);
+const REVENUE_TYPES = REVENUE_IN_TYPES;
 const CASH_BALANCE_IN_TYPES = Object.freeze([...REVENUE_IN_TYPES, "MANUAL_CORRECTION"]);
 const CASH_BALANCE_OUT_TYPES = Object.freeze(["EXPENSE", "INKASSA", "MANUAL_CORRECTION"]);
 const CASH_PAYMENT_TYPES = Object.freeze(["CASH"]);
@@ -10,11 +11,21 @@ const isDirection = (direction) => (movement) => movement.direction === directio
 const isTypeIn = (types) => (movement) => types.includes(movement.type);
 const isPaymentTypeIn = (types) => (movement) => types.includes(movement.paymentType);
 
+const signedMovement = (movement) => ({
+  ...movement,
+  amount: Number(movement.amount || 0) * (movement.direction === "OUT" ? -1 : 1),
+});
+
 const revenueInMovements = (movements = []) =>
-  movements.filter((movement) => movement.direction === "IN" && REVENUE_IN_TYPES.includes(movement.type));
+  movements
+    .filter((movement) => REVENUE_TYPES.includes(movement.type) && ["IN", "OUT"].includes(movement.direction))
+    .map(signedMovement);
 
 const cashBalanceInMovements = (movements = []) =>
-  movements.filter((movement) => movement.direction === "IN" && CASH_BALANCE_IN_TYPES.includes(movement.type));
+  movements
+    .filter((movement) => CASH_BALANCE_IN_TYPES.includes(movement.type))
+    .filter((movement) => movement.direction === "IN" || REVENUE_TYPES.includes(movement.type))
+    .map(signedMovement);
 
 const cashBalanceOutMovements = (movements = []) =>
   movements.filter((movement) => movement.direction === "OUT" && CASH_BALANCE_OUT_TYPES.includes(movement.type));
@@ -94,6 +105,7 @@ const summarizeMovements = (movements = []) => {
 
 module.exports = {
   REVENUE_IN_TYPES,
+  REVENUE_TYPES,
   CASH_BALANCE_IN_TYPES,
   CASH_BALANCE_OUT_TYPES,
   revenueInMovements,

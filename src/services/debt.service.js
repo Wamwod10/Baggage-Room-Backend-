@@ -6,6 +6,7 @@ const { audit } = require("./activity.service");
 const { findOpenShift, createCashMovement } = require("./cashMovement.service");
 const telegram = require("./telegram.service");
 const googleSheets = require("./googleSheets.service");
+const { normalizePaymentType } = require("../utils/payment");
 
 const includeDebt = {
   order: { select: { id: true, orderNumber: true, status: true, passport: true, checkIn: true, plannedCheckOut: true, realPickupTime: true } },
@@ -41,8 +42,10 @@ const closeDebt = async (user, id, body) => {
     if (debt.status === "CLOSED") throw new AppError("Debt is already closed", 400);
     getScopedBranchId(user, debt.branchId);
     const paidAmount = body.amount ?? debt.amount;
+    const paymentType = normalizePaymentType(body.paymentType);
     if (paidAmount <= 0) throw new AppError("Debt payment amount must be positive", 400);
     if (paidAmount !== debt.amount) throw new AppError("Debt close amount must equal open debt amount", 400);
+    if (!paymentType) throw new AppError("paymentType is required", 400);
     const shift = await findOpenShift(tx, debt.branchId);
 
     const updated = await tx.debt.update({
@@ -59,7 +62,7 @@ const closeDebt = async (user, id, body) => {
       direction: "IN",
       amount: paidAmount,
       currency: body.currency || debt.currency,
-      paymentType: body.paymentType || "CASH",
+      paymentType,
       note: body.note || `Debt closed for ${debt.order.orderNumber}`,
       createdById: user.id,
     });
@@ -76,7 +79,7 @@ const closeDebt = async (user, id, body) => {
       () => telegram.sendDebtClosed({
         ...updated,
         paidAmount,
-        paymentType: body.paymentType || "CASH",
+        paymentType,
         currency: body.currency || debt.currency,
         closedBy: updated.closedBy || user,
         paidAt: updated.closedAt,
@@ -86,7 +89,7 @@ const closeDebt = async (user, id, body) => {
     return {
       ...updated,
       paidAmount,
-      paymentType: body.paymentType || "CASH",
+      paymentType,
       currency: body.currency || debt.currency,
     };
   });

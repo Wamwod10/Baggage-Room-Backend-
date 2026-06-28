@@ -285,6 +285,32 @@ test("orders and doplata alone can write F-K, Click, Payme and Terminal revenue 
   }
 });
 
+test("CANCEL_ORDER writes negative reversal to the selected payment column", () => {
+  const terminalPayload = sheets._internals.orderPayload("CANCEL_ORDER", {
+    id: "cancel-terminal",
+    branch: { code: "TIA", name: "Toshkent aeroport" },
+    orderNumber: "TIA-CANCEL-1",
+    clientName: "Test",
+    items: [{ size: "S", count: 1 }],
+    finalAmount: 120000,
+    currency: "UZS",
+    paymentType: "TERMINAL",
+  }, { amount: -120000 });
+  const clickPayload = sheets._internals.orderPayload("CANCEL_ORDER", {
+    id: "cancel-click",
+    branch: { code: "TIA", name: "Toshkent aeroport" },
+    orderNumber: "TIA-CANCEL-2",
+    clientName: "Test",
+    items: [{ size: "S", count: 1 }],
+    finalAmount: 50000,
+    currency: "UZS",
+    paymentType: "CLICK",
+  }, { amount: -50000 });
+
+  assert.equal(appsScript.buildLegacyRow_(terminalPayload)[COLUMN.TERMINAL - 1], -120000);
+  assert.equal(appsScript.buildLegacyRow_(clickPayload)[COLUMN.CLICK - 1], -50000);
+});
+
 test("required NEW_ORDER, INKASSA, EXPENSE, SALARY and DOPLATA A:V mappings are exact", () => {
   const createdAt = "2026-06-24T10:00:00+05:00";
   const order = appsScript.buildNewOrderRow({
@@ -384,7 +410,7 @@ test("localized decimal strings stay decimals instead of becoming 100x larger", 
 
 test("all five branch codes build every supported Sheets action", () => {
   const branches = ["TIA", "TSV", "TJV", "SVK", "SIA"];
-  const actions = ["NEW_ORDER", "DOPLATA", "DEBT_PAYMENT", "EXPENSE", "INKASSA", "SALARY"];
+  const actions = ["NEW_ORDER", "DOPLATA", "DEBT_PAYMENT", "CANCEL_ORDER", "EXPENSE", "INKASSA", "SALARY"];
   for (const branchCode of branches) {
     for (const action of actions) {
       const payload = sheets._internals.testPayload(action, branchCode, null, { name: "Ali" });

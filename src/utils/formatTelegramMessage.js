@@ -1,6 +1,7 @@
 const { CURRENCIES, currencyFractionDigits } = require("./money");
 const { formatTashkentDateTime } = require("./date");
 const { cleanDisplayText, formatAdminName } = require("./displayName");
+const { paymentLabel } = require("./payment");
 
 const safe = (value, fallback = "-") => {
   if (value === undefined || value === null) return fallback;
@@ -43,24 +44,7 @@ const formatDateMinute = (date) => {
   return `${day}.${month}.${year} ${hour}:${minute}`;
 };
 
-const formatPayment = (payment) => {
-  switch (String(payment || "").toUpperCase()) {
-    case "CASH":
-      return "Naqd";
-    case "CARD":
-    case "TERMINAL":
-    case "TRANSFER":
-      return "Terminal";
-    case "CLICK":
-      return "Click";
-    case "PAYME":
-      return "Payme";
-    case "DEBT":
-      return "Qarz";
-    default:
-      return "-";
-  }
-};
+const formatPayment = (payment) => paymentLabel(payment, { context: "telegram" });
 
 const formatBranch = (branch) => {
   if (!branch) return "-";
@@ -152,21 +136,17 @@ const shiftClosedMessage = (shift = {}) => [
   line("📅 Sana", formatDate(shift.closedAt || new Date())),
 ].join("\n");
 
-const orderCancelledMessage = (order = {}) => {
-  const firstItem = Array.isArray(order.items) ? order.items[0] : null;
-
-  return [
-    "❌ Buyurtma bekor qilindi",
-    "",
-    line("🆔 Buyurtma", orderNumber(order)),
-    line("🏢 Filial", formatBranch(order.branch || order.branchName)),
-    line("👤 Mijoz", order.clientName || order.client),
-    line("🔐 Yacheyka", formatLockerNumber(firstItem?.lockerNumber || firstItem?.locker?.number || order.lockerNumber)),
-    line("📝 Sabab", order.cancelReason || order.cancellationReason || order.reason),
-    line("👤 Bekor qildi", formatAdmin(order.cancelledBy || order.cancelledByName || order.admin || order.createdBy, order.branch || order.branchName)),
-    line("🕘 Vaqt", formatDate(order.cancelledAt || order.updatedAt || order.createdAt)),
-  ].join("\n");
-};
+const orderCancelledMessage = (order = {}) => [
+  "❌ Buyurtma bekor qilindi",
+  "",
+  line("🏢 Filial", formatBranch(order.branch || order.branchName)),
+  line("🧾 Buyurtma", orderNumber(order)),
+  line("👤 Mijoz", order.clientName || order.client),
+  line("💳 To'lov", formatPayment(order.paymentType)),
+  line("💰 Summa", formatMoney(order.cancelledAmount ?? order.realPaidAmount ?? order.finalAmount ?? 0, order.currency)),
+  line("👤 Admin", formatAdmin(order.cancelledBy || order.cancelledByName || order.admin || order.createdBy, order.branch || order.branchName)),
+  line("📅 Sana", formatDate(order.cancelledAt || order.updatedAt || order.createdAt)),
+].join("\n");
 
 const delayedBaggageMessage = (order = {}) => {
   const firstItem = Array.isArray(order.items) ? order.items[0] : null;
@@ -251,17 +231,20 @@ const expenseMessage = (expense = {}) => [
 
 const orderEditMessage = (order = {}, changes = {}) => {
   const lines = Object.entries(changes || {})
-    .filter(([, value]) => value !== undefined)
-    .map(([key, value]) => `• ${key}: ${cleanText(value)}`);
+    .filter(([, value]) => value && value.old !== value.next && value.next !== undefined)
+    .map(([key, value]) => `${cleanText(key)}: ${cleanText(value.old)} → ${cleanText(value.next)}`);
 
   return [
-    "✏️ Buyurtma o'zgartirildi",
+    "✏️ Buyurtma tahrirlandi",
     "",
-    line("🆔 Buyurtma", orderNumber(order)),
     line("🏢 Filial", formatBranch(order.branch || order.branchName)),
+    line("🧾 Buyurtma", orderNumber(order)),
+    line("👤 Mijoz", order.clientName || order.client),
+    "",
+    line("🔄 O'zgargan ma'lumot", lines.length ? lines.join("\n") : "-"),
+    "",
     line("👤 Admin", formatAdmin(order.updatedBy || order.admin || order.createdBy, order.branch || order.branchName)),
-    line("📝 O'zgargan", lines.length ? lines.join("; ") : "-"),
-    line("🕘 Sana", formatDate(order.updatedAt || new Date())),
+    line("📅 Sana", formatDate(order.updatedAt || new Date())),
   ].join("\n");
 };
 
