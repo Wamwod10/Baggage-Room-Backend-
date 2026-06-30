@@ -42,9 +42,18 @@ The Apps Script webhook template is in `scripts/googleSheetsAppsScript.js`.
 It writes `NEW_ORDER`, `DOPLATA`, `EXPENSE`, `SALARY`, and `INKASSA` events
 as exact 22-cell A:V rows. It does not use `appendRow()`, writes after the last
 real data row, and skips duplicate events by `idempotencyKey`.
+Month tabs are selected automatically from the event date in Asia/Tashkent time,
+for example `Июль 2026`. The script only writes to an existing exact month tab;
+it never falls back to the first/active sheet and never creates a month tab.
 
 After changing the template, publish a new Apps Script Web App deployment
-version. Run the labeled 11-case live smoke test with:
+version. Check month tabs without writing rows with:
+
+```bash
+npm run test:sheets:months
+```
+
+Run the labeled live smoke test, which writes mapping test rows, with:
 
 ```bash
 npm run test:sheets:real

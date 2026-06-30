@@ -175,26 +175,30 @@ test("INKASSA currencies use O-T only and never F-N revenue columns", () => {
 });
 
 test("backend accepts only versioned 22-column INKASSA webhook results", () => {
+  const scriptVersion = "v7-dynamic-month-sheet-2026-07-01";
+  const monthSheetName = "\u0418\u044e\u043b\u044c 2026";
   const payload = sheets._internals.inkassaPayload({
     id: "inkassa-result-test",
     branch: { code: "TJV", name: "Toshkent Janubiy vokzal" },
     receiverName: "Admin",
     amount: 500000,
     currency: "UZS",
+    createdAt: "2026-07-01T00:00:00+05:00",
   });
   const row = appsScript.buildInkassaRow(payload);
   const result = sheets._internals.validateWebhookResult(payload, {
     success: true,
-    scriptVersion: "v6-debt-payment-cash-accounting-2026-06-26",
+    scriptVersion,
     branchCode: "TJV",
     spreadsheetId: "10-h62nZAEp-puvFF_MurFu1UE0Xdjdx5Qtlv3Qpd0L8",
     spreadsheetName: "Toshkent Janubiy vokzal",
-    sheetName: "Камера хранения Южный вокзал 🛅",
+    sheetName: monthSheetName,
+    monthSheetName,
     row: 1885,
   });
 
-  assert.equal(appsScript.SCRIPT_VERSION, "v6-debt-payment-cash-accounting-2026-06-26");
-  assert.equal(result.scriptVersion, "v6-debt-payment-cash-accounting-2026-06-26");
+  assert.equal(appsScript.SCRIPT_VERSION, scriptVersion);
+  assert.equal(result.scriptVersion, scriptVersion);
   assert.equal(result.row[14], 500000);
   assert.deepEqual(result.row.slice(5, 14), new Array(9).fill(""));
   assert.throws(
@@ -204,7 +208,7 @@ test("backend accepts only versioned 22-column INKASSA webhook results", () => {
   assert.throws(
     () => sheets._internals.validateWebhookResult(payload, {
       success: true,
-      scriptVersion: "v6-debt-payment-cash-accounting-2026-06-26",
+      scriptVersion,
       branchCode: "TJV",
       row: 1885,
     }),
@@ -216,11 +220,12 @@ test("backend accepts only versioned 22-column INKASSA webhook results", () => {
   assert.throws(
     () => sheets._internals.validateWebhookResult(payload, {
       success: true,
-      scriptVersion: "v6-debt-payment-cash-accounting-2026-06-26",
+      scriptVersion,
       branchCode: "TJV",
       spreadsheetId: "10-h62nZAEp-puvFF_MurFu1UE0Xdjdx5Qtlv3Qpd0L8",
       spreadsheetName: "Toshkent Janubiy vokzal",
-      sheetName: "Камера хранения Южный вокзал 🛅",
+      sheetName: monthSheetName,
+      monthSheetName,
       row: 1886,
       finalRow: wrongRow,
     }),
@@ -254,6 +259,44 @@ test("all branch mappings use their dedicated spreadsheets and Janubiy aliases n
   const maskedWebhook = sheets._internals.maskWebhookUrl("https://script.google.com/macros/s/1234567890abcdefghijkl/exec");
   assert.equal(maskedWebhook.slice(-20), "67890abcdefghijkl/exec".slice(-20));
   assert.doesNotMatch(maskedWebhook.slice(0, -20), /script\.google/);
+});
+
+test("month sheet routing is derived from Asia/Tashkent date and requires the exact existing tab", () => {
+  const makeSheet = (name, id) => ({
+    getName: () => name,
+    getSheetId: () => id,
+  });
+  const sheetsByName = [
+    makeSheet("\u0418\u044e\u043d\u044c 2026", 1),
+    makeSheet("\u0418\u044e\u043b\u044c 2026", 2),
+    makeSheet("\u0410\u0432\u0433\u0443\u0441\u0442 2026", 3),
+  ];
+  const spreadsheet = {
+    getId: () => "spreadsheet-test",
+    getName: () => "Branch test sheet",
+    getSheets: () => sheetsByName,
+    getSheetByName: (name) => sheetsByName.find((sheet) => sheet.getName() === name) || null,
+  };
+
+  assert.equal(appsScript.monthSheetNameForDate_("2026-06-30T23:59:59+05:00"), "\u0418\u044e\u043d\u044c 2026");
+  assert.equal(appsScript.monthSheetNameForDate_("2026-07-01T00:00:00+05:00"), "\u0418\u044e\u043b\u044c 2026");
+  assert.equal(appsScript.monthSheetNameForDate_("2026-08-01T00:00:00+05:00"), "\u0410\u0432\u0433\u0443\u0441\u0442 2026");
+  assert.equal(appsScript.getTargetSheet_(spreadsheet, "TIA", { createdAt: "2026-06-30T23:59:59+05:00" }).getName(), "\u0418\u044e\u043d\u044c 2026");
+  assert.equal(appsScript.getTargetSheet_(spreadsheet, "TIA", { createdAt: "2026-07-01T00:00:00+05:00" }).getName(), "\u0418\u044e\u043b\u044c 2026");
+  assert.equal(
+    sheets._internals.orderPayload("NEW_ORDER", {
+      branch: { code: "TIA", name: "Toshkent aeroport" },
+      createdAt: "2026-07-01T00:00:00+05:00",
+      finalAmount: 1000,
+      currency: "UZS",
+      paymentType: "CASH",
+    }).monthSheetName,
+    "\u0418\u044e\u043b\u044c 2026",
+  );
+  assert.throws(
+    () => appsScript.getTargetSheet_(spreadsheet, "TIA", { createdAt: "2026-09-01T00:00:00+05:00" }),
+    /Month sheet not found: \u0421\u0435\u043d\u0442\u044f\u0431\u0440\u044c 2026/,
+  );
 });
 
 test("orders and doplata alone can write F-K, Click, Payme and Terminal revenue columns", () => {
@@ -406,6 +449,10 @@ test("localized decimal strings stay decimals instead of becoming 100x larger", 
   assert.equal(sheets._internals.sheetAmount(21429, "RUB"), 214.29);
   assert.equal(sheets._internals.sheetAmount("214,29", "RUB"), 214.29);
   assert.equal(sheets._internals.sheetAmount("17,39", "TJS"), 17.39);
+});
+
+test("Google Sheets money columns always display two decimal places", () => {
+  assert.equal(appsScript.moneyNumberFormat_(), "#,##0.00");
 });
 
 test("all five branch codes build every supported Sheets action", () => {

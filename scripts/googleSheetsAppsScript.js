@@ -36,7 +36,9 @@ const SHEET_NAME_PATTERN_BY_BRANCH_CODE = {
 };
 
 const WRITABLE_ACTIONS = new Set(["NEW_ORDER", "DOPLATA", "DEBT_PAYMENT", "CANCEL_ORDER", "EXPENSE", "INKASSA", "SALARY"]);
-const SCRIPT_VERSION = "v6-debt-payment-cash-accounting-2026-06-26";
+const MONTH_CHECK_ACTIONS = new Set(["CHECK_MONTH_SHEET"]);
+const SCRIPT_VERSION = "v7-dynamic-month-sheet-2026-07-01";
+const TASHKENT_OFFSET_MINUTES = 5 * 60;
 const LEGACY_WIDTH = 22; // A:V
 const LEGACY_TECHNICAL_COLUMN = 23; // W; cleaned once and never written again
 
@@ -93,6 +95,7 @@ const FRACTION_DIGITS_BY_CURRENCY = {
   KZT: 2,
   TJS: 2,
 };
+const MONEY_NUMBER_FORMAT = "#,##0.00";
 
 const ACTION_STYLE = {
   DOPLATA: { background: "#d9ead3", fontColor: "#14532d" },
@@ -107,16 +110,18 @@ function doPost(e) {
   let branchCode = "";
   let spreadsheet = null;
   let sheet = null;
+  let monthSheetName = null;
   try {
     const payload = JSON.parse((e && e.postData && e.postData.contents) || "{}");
     const action = String(payload.action || "").toUpperCase();
 
-    if (!WRITABLE_ACTIONS.has(action)) {
+    if (!WRITABLE_ACTIONS.has(action) && !MONTH_CHECK_ACTIONS.has(action)) {
       return json_({ success: true, ok: true, scriptVersion: SCRIPT_VERSION, skipped: true, reason: "Unsupported action: " + action });
     }
 
     branchCode = normalizeBranchCode_(payload.branchCode || payload.branchName || payload.branch);
     if (!SHEET_BY_BRANCH_CODE[branchCode]) throw new Error("Unknown branchCode: " + branchCode);
+    monthSheetName = monthSheetNameForPayload_(payload);
 
     const lock = LockService.getScriptLock();
     lock.waitLock(30000);
@@ -129,7 +134,23 @@ function doPost(e) {
         spreadsheetName: spreadsheet.getName(),
         sheetName: sheet.getName(),
         sheetId: sheet.getSheetId(),
+        monthSheetName,
       }));
+      if (MONTH_CHECK_ACTIONS.has(action)) {
+        return json_({
+          success: true,
+          ok: true,
+          checked: true,
+          scriptVersion: SCRIPT_VERSION,
+          branchCode,
+          spreadsheetId: spreadsheet.getId(),
+          spreadsheetName: spreadsheet.getName(),
+          sheetName: sheet.getName(),
+          sheetId: sheet.getSheetId(),
+          monthSheetName,
+          status: "Month sheet found",
+        });
+      }
       cleanupLegacyTechnicalColumn_(spreadsheet, sheet);
       ensureColumns_(sheet, LEGACY_WIDTH);
 
@@ -145,6 +166,7 @@ function doPost(e) {
           spreadsheetName: spreadsheet.getName(),
           sheetName: sheet.getName(),
           sheetId: sheet.getSheetId(),
+          monthSheetName,
           row: duplicateRow,
           duplicate: true,
         });
@@ -175,6 +197,7 @@ function doPost(e) {
         spreadsheetName: spreadsheet.getName(),
         sheetName: sheet.getName(),
         sheetId: sheet.getSheetId(),
+        monthSheetName,
         row: targetRow,
         finalRow: row,
       });
@@ -192,6 +215,9 @@ function doPost(e) {
       spreadsheetName: spreadsheet ? spreadsheet.getName() : null,
       sheetName: sheet ? sheet.getName() : null,
       sheetId: sheet ? sheet.getSheetId() : null,
+      monthSheetName: monthSheetName || error.monthSheetName || null,
+      status: error.status || null,
+      availableSheets: error.availableSheets || null,
       error: error.message,
     });
   }
@@ -254,34 +280,19 @@ function discoverSpreadsheetId_(branchCode) {
   return ids[0];
 }
 
-const MONTH_NAME_PARTS = [
-  ["\u044f\u043d\u0432\u0430\u0440", "yanvar", "january"],
-  ["\u0444\u0435\u0432\u0440\u0430\u043b", "fevral", "february"],
-  ["\u043c\u0430\u0440\u0442", "mart", "march"],
-  ["\u0430\u043f\u0440\u0435\u043b", "aprel", "april"],
-  ["\u043c\u0430\u0439", "may"],
-  ["\u0438\u044e\u043d", "iyun", "june"],
-  ["\u0438\u044e\u043b", "iyul", "july"],
-  ["\u0430\u0432\u0433\u0443\u0441\u0442", "avgust", "august"],
-  ["\u0441\u0435\u043d\u0442\u044f\u0431\u0440", "sentabr", "september"],
-  ["\u043e\u043a\u0442\u044f\u0431\u0440", "oktabr", "october"],
-  ["\u043d\u043e\u044f\u0431\u0440", "noyabr", "november"],
-  ["\u0434\u0435\u043a\u0430\u0431\u0440", "dekabr", "december"],
-];
-
-const MONTH_EXACT_NAMES = [
-  ["\u044f\u043d\u0432\u0430\u0440\u044c", "yanvar", "january"],
-  ["\u0444\u0435\u0432\u0440\u0430\u043b\u044c", "fevral", "february"],
-  ["\u043c\u0430\u0440\u0442", "mart", "march"],
-  ["\u0430\u043f\u0440\u0435\u043b\u044c", "aprel", "april"],
-  ["\u043c\u0430\u0439", "may"],
-  ["\u0438\u044e\u043d\u044c", "iyun", "june"],
-  ["\u0438\u044e\u043b\u044c", "iyul", "july"],
-  ["\u0430\u0432\u0433\u0443\u0441\u0442", "avgust", "august"],
-  ["\u0441\u0435\u043d\u0442\u044f\u0431\u0440\u044c", "sentabr", "september"],
-  ["\u043e\u043a\u0442\u044f\u0431\u0440\u044c", "oktabr", "october"],
-  ["\u043d\u043e\u044f\u0431\u0440\u044c", "noyabr", "november"],
-  ["\u0434\u0435\u043a\u0430\u0431\u0440\u044c", "dekabr", "december"],
+const MONTH_SHEET_NAMES_RU = [
+  "\u042f\u043d\u0432\u0430\u0440\u044c",
+  "\u0424\u0435\u0432\u0440\u0430\u043b\u044c",
+  "\u041c\u0430\u0440\u0442",
+  "\u0410\u043f\u0440\u0435\u043b\u044c",
+  "\u041c\u0430\u0439",
+  "\u0418\u044e\u043d\u044c",
+  "\u0418\u044e\u043b\u044c",
+  "\u0410\u0432\u0433\u0443\u0441\u0442",
+  "\u0421\u0435\u043d\u0442\u044f\u0431\u0440\u044c",
+  "\u041e\u043a\u0442\u044f\u0431\u0440\u044c",
+  "\u041d\u043e\u044f\u0431\u0440\u044c",
+  "\u0414\u0435\u043a\u0430\u0431\u0440\u044c",
 ];
 
 function normalizeSheetTitle_(value) {
@@ -290,6 +301,25 @@ function normalizeSheetTitle_(value) {
 
 function normalizeHeader_(value) {
   return normalizeSheetTitle_(value).replace(/[.№:#()_\-]/g, "").replace(/\s+/g, " ").trim();
+}
+
+function tashkentYearMonth_(dateValue) {
+  const parsed = dateValue instanceof Date ? dateValue : new Date(dateValue || Date.now());
+  const date = Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+  const shifted = new Date(date.getTime() + TASHKENT_OFFSET_MINUTES * 60 * 1000);
+  return {
+    year: shifted.getUTCFullYear(),
+    monthIndex: shifted.getUTCMonth(),
+  };
+}
+
+function monthSheetNameForDate_(dateValue) {
+  const parts = tashkentYearMonth_(dateValue);
+  return MONTH_SHEET_NAMES_RU[parts.monthIndex] + " " + parts.year;
+}
+
+function monthSheetNameForPayload_(payload) {
+  return monthSheetNameForDate_((payload && (payload.createdAt || payload.date)) || new Date());
 }
 
 function headerStructureScore_(sheet) {
@@ -328,56 +358,45 @@ function rankMonthSheets_(sheets) {
 }
 
 function findMonthSheet_(spreadsheet, payload) {
-  const candidateDate = new Date(payload.createdAt || payload.date || Date.now());
-  const validDate = Number.isNaN(candidateDate.getTime()) ? new Date() : candidateDate;
-  const tokens = MONTH_NAME_PARTS[validDate.getMonth()];
-  const sheets = spreadsheet.getSheets();
-  const matches = sheets.filter(function (candidate) {
-    const name = normalizeSheetTitle_(candidate.getName());
-    return tokens.some(function (token) { return name.indexOf(token) !== -1; });
-  });
-  if (matches.length === 0) return null;
-  if (matches.length === 1) return matches[0];
-
-  const year = String(validDate.getFullYear());
-  const exactNames = MONTH_EXACT_NAMES[validDate.getMonth()];
-  for (let index = 0; index < exactNames.length; index += 1) {
-    const exactTitle = normalizeSheetTitle_(exactNames[index] + " " + year);
-    const exact = matches.find(function (candidate) {
-      return normalizeSheetTitle_(candidate.getName()) === exactTitle;
-    });
-    if (exact) return exact;
+  const expectedName = monthSheetNameForPayload_(payload || {});
+  if (typeof spreadsheet.getSheetByName === "function") {
+    const sheet = spreadsheet.getSheetByName(expectedName);
+    if (sheet) return sheet;
   }
 
-  const ranked = rankMonthSheets_(matches);
-  const selected = ranked[0].sheet;
-  console.log("[GoogleSheets] monthSheetSelected " + JSON.stringify({
-    selectedSheetName: selected.getName(),
-    selectedSheetId: selected.getSheetId(),
-    candidates: ranked.map(function (item) {
-      return {
-        sheetName: item.sheet.getName(),
-        sheetId: item.sheetId,
-        headerScore: item.headerScore,
-        lastRow: item.lastRow,
-        maxRows: item.maxRows,
-      };
-    }),
+  return spreadsheet.getSheets().find(function (candidate) {
+    return normalizeSheetTitle_(candidate.getName()) === normalizeSheetTitle_(expectedName);
+  }) || null;
+}
+
+function buildMonthSheetMissingError_(spreadsheet, branchCode, expectedName) {
+  const availableSheets = spreadsheet.getSheets().map(function (candidate) { return candidate.getName(); });
+  const error = new Error("Month sheet not found: " + expectedName);
+  error.status = "Month sheet not found";
+  error.branchCode = branchCode;
+  error.spreadsheetId = spreadsheet.getId();
+  error.spreadsheetName = spreadsheet.getName();
+  error.monthSheetName = expectedName;
+  error.availableSheets = availableSheets;
+  console.error("[GoogleSheets] monthSheetMissing " + JSON.stringify({
+    branchCode,
+    spreadsheetId: error.spreadsheetId,
+    spreadsheetName: error.spreadsheetName,
+    monthSheetName: expectedName,
+    status: error.status,
+    availableSheets,
   }));
-  return selected;
+  return error;
 }
 
 function getTargetSheet_(spreadsheet, branchCode, payload) {
   // All operational rows belong to the current month tab. Never fall back to
   // branch dashboards or create a new tab: a missing month tab is an error.
+  const expectedName = monthSheetNameForPayload_(payload || {});
   const monthSheet = findMonthSheet_(spreadsheet, payload || {});
   if (monthSheet) return monthSheet;
 
-  throw new Error(
-    "Current month sheet was not found for " + branchCode +
-    ". Expected a month tab such as \u0418\u044e\u043d\u044c 2026 or Iyun 2026. Available sheets: " +
-    spreadsheet.getSheets().map(function (candidate) { return candidate.getName(); }).join(", "),
-  );
+  throw buildMonthSheetMissingError_(spreadsheet, branchCode, expectedName);
 }
 
 function ensureColumns_(sheet, minColumns) {
@@ -682,7 +701,7 @@ function sheetAmountSigned_(payload) {
 
 function applyMoneyFormat_(sheet, row, payload) {
   const code = String(payload.currency || "UZS").toUpperCase();
-  const format = (FRACTION_DIGITS_BY_CURRENCY[code] || 0) > 0 ? "#,##0.00" : "#,##0";
+  const format = moneyNumberFormat_();
   const action = String(payload.action || "").toUpperCase();
   let column = null;
   if (action === "EXPENSE" || action === "SALARY") column = COLUMN.EXPENSE;
@@ -696,6 +715,10 @@ function applyMoneyFormat_(sheet, row, payload) {
     else column = CASH_COLUMN_BY_CURRENCY[code] || COLUMN.CASH_UZS;
   }
   if (column) sheet.getRange(row, column).setNumberFormat(format);
+}
+
+function moneyNumberFormat_() {
+  return MONEY_NUMBER_FORMAT;
 }
 
 function firstValue_() {
@@ -778,11 +801,16 @@ if (typeof module !== "undefined" && module.exports) {
     SCRIPT_VERSION,
     SHEETS,
     SHEET_BY_BRANCH_CODE,
+    MONTH_CHECK_ACTIONS,
     normalizeBranchCode_,
     getTargetSheet_,
     findMonthSheet_,
     headerStructureScore_,
     rankMonthSheets_,
+    tashkentYearMonth_,
+    monthSheetNameForDate_,
+    monthSheetNameForPayload_,
+    moneyNumberFormat_,
     buildLegacyRow_,
     buildNewOrderRow,
     buildDoplataRow,

@@ -113,6 +113,7 @@ const withDeliveryMetadata = (payload) => ({
   rowPolicy: "FIRST_EMPTY_ROW",
   idempotencyKey: [payload.action || "UNKNOWN", payload.branchCode || "NO_BRANCH", payloadEntityId(payload)].filter(Boolean).join(":"),
   ...payload,
+  monthSheetName: sheetMapper.monthSheetNameForPayload_(payload),
 });
 
 const deliveryLogMeta = (payload, extra = {}) => ({
@@ -122,6 +123,7 @@ const deliveryLogMeta = (payload, extra = {}) => ({
   webhookUrlMasked: maskWebhookUrl(),
   amount: payload?.amount ?? payload?.salaryAmount ?? payload?.finalAmount ?? null,
   currency: payload?.currency || null,
+  monthSheetName: payload?.monthSheetName || sheetMapper.monthSheetNameForPayload_(payload || {}),
   orderNumber: payload?.orderNumber || null,
   ...extra,
 });
@@ -149,6 +151,13 @@ const validateWebhookResult = (payload, json, expectedRow = sheetMapper.buildLeg
   }
   if (!json?.spreadsheetName || !json?.sheetName) {
     throw new Error("Google Sheets response is missing spreadsheetName or sheetName");
+  }
+  const expectedMonthSheetName = payload?.monthSheetName || sheetMapper.monthSheetNameForPayload_(payload || {});
+  if (json?.monthSheetName !== expectedMonthSheetName) {
+    throw new Error(`Google Sheets month sheet mismatch: expected ${expectedMonthSheetName}, received ${json?.monthSheetName || "missing"}`);
+  }
+  if (json?.sheetName !== expectedMonthSheetName) {
+    throw new Error(`Google Sheets wrote to wrong sheet: expected ${expectedMonthSheetName}, received ${json?.sheetName || "missing"}`);
   }
   const row = Array.isArray(json?.finalRow) ? json.finalRow : expectedRow;
   if (!Array.isArray(row) || row.length !== 22) {
@@ -384,6 +393,7 @@ const postWebhook = async (payload) => {
       spreadsheetId: json?.spreadsheetId || null,
       spreadsheetName: json?.spreadsheetName || null,
       sheetName: json?.sheetName || null,
+      monthSheetName: json?.monthSheetName || null,
       row: Number.isInteger(json?.row) ? json.row : null,
       error: json?.error || (!response.ok ? `HTTP ${response.status}: ${summarizeWebhookBody(responseBody)}` : responseParseError),
     });
@@ -960,6 +970,7 @@ const sendTestEvent = async (user, body) => {
     spreadsheetId: result?.responseJson?.spreadsheetId || null,
     spreadsheetName: result?.responseJson?.spreadsheetName || null,
     sheetName: result?.responseJson?.sheetName || null,
+    monthSheetName: result?.responseJson?.monthSheetName || payload.monthSheetName || null,
     row: Number.isInteger(result?.responseJson?.row) ? result.responseJson.row : null,
     error: result?.error || null,
     result,
