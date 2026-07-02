@@ -127,7 +127,7 @@ test("EXPENSE, SALARY and INKASSA map only to their financial blocks", () => {
   assert.equal(expenseRow[COLUMN.CHECK - 1], "");
   assert.equal(salaryRow[COLUMN.EXPENSE - 1], 250000);
   assert.equal(salaryRow[COLUMN.FIO - 1], "Ali");
-  assert.equal(salaryRow[COLUMN.NAME - 1], "Oylik - Ali");
+  assert.equal(salaryRow[COLUMN.NAME - 1], "\u0417\u0430\u0440\u043f\u043b\u0430\u0442\u0430");
   assert.equal(inkassaRow[COLUMN.BALANCE_USD - 1], 123.45);
   assert.equal(inkassaRow[COLUMN.EXPENSE - 1], "");
   assert.equal(inkassaRow[COLUMN.NAME - 1], "Inkassa - Bosh kassir");
@@ -175,7 +175,7 @@ test("INKASSA currencies use O-T only and never F-N revenue columns", () => {
 });
 
 test("backend accepts only versioned 22-column INKASSA webhook results", () => {
-  const scriptVersion = "v7-dynamic-month-sheet-2026-07-01";
+  const scriptVersion = "v8-salary-russian-label-2026-07-02";
   const monthSheetName = "\u0418\u044e\u043b\u044c 2026";
   const payload = sheets._internals.inkassaPayload({
     id: "inkassa-result-test",
@@ -431,7 +431,7 @@ test("required NEW_ORDER, INKASSA, EXPENSE, SALARY and DOPLATA A:V mappings are 
 
   assert.equal(salary[COLUMN.FIO - 1], "Vali");
   assert.equal(salary[COLUMN.EXPENSE - 1], 300000);
-  assert.equal(salary[COLUMN.NAME - 1], "Oylik - Vali");
+  assert.equal(salary[COLUMN.NAME - 1], "\u0417\u0430\u0440\u043f\u043b\u0430\u0442\u0430");
 
   assert.equal(doplata[COLUMN.PAYME - 1], 75000);
   assert.equal(debtPayment[COLUMN.CASH_UZS - 1], 200000);

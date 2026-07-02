@@ -88,7 +88,7 @@ const casesFor = (branchCode, createdAt) => {
       sheetAmount: 300000,
     }, (row) => {
       if (row[20] !== 300000) throw new Error(`SALARY U expected 300000, got ${row[20]}`);
-      if (row[21] !== "Oylik - Vali") throw new Error(`SALARY V mismatch: ${row[21]}`);
+      if (row[21] !== "\u0417\u0430\u0440\u043f\u043b\u0430\u0442\u0430") throw new Error(`SALARY V mismatch: ${row[21]}`);
     }],
     ["DOPLATA", {
       ...common,

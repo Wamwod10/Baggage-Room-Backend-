@@ -22,6 +22,7 @@ const branchNameByCode = {
   SVK: "Samarqand vokzal",
   SIA: "Samarqand aeroport",
 };
+const SALARY_LABEL_RU = "\u0417\u0430\u0440\u043f\u043b\u0430\u0442\u0430";
 const allowedBranchCodes = new Set(Object.keys(branchNameByCode));
 
 const normalizeBranchCode = (value) => {
@@ -645,10 +646,10 @@ const salaryPayload = (salary) =>
     checkNumber: "",
     checkNo: "",
     receiptNumber: "",
-    clientName: salary?.salaryReceiver || "Oylik",
-    fio: salary?.salaryReceiver || "Oylik",
-    fullName: salary?.salaryReceiver || "Oylik",
-    displayName: salary?.salaryReceiver || "Oylik",
+    clientName: salary?.salaryReceiver || SALARY_LABEL_RU,
+    fio: salary?.salaryReceiver || SALARY_LABEL_RU,
+    fullName: salary?.salaryReceiver || SALARY_LABEL_RU,
+    displayName: salary?.salaryReceiver || SALARY_LABEL_RU,
     recipientName: salary?.salaryReceiver || null,
     salaryReceiver: salary?.salaryReceiver || null,
     salaryAmountMinor: salary?.salaryAmount ?? null,

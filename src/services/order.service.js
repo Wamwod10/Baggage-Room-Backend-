@@ -8,7 +8,7 @@ const {
   sizesForBranch,
   MULTI_ORDER_LOCKER_BRANCH_CODES,
 } = require("./tariff.service");
-const { convertUzsToCurrencyMinor } = require("../utils/money");
+const { convertUzsToCurrencyMinor, currencyFractionDigits } = require("../utils/money");
 const { audit } = require("./activity.service");
 const { createNotification } = require("./notification.service");
 const { findOpenShift, createCashMovement } = require("./cashMovement.service");
@@ -46,10 +46,23 @@ const changeLabels = {
   items: "Bagaj",
 };
 
+const formatChangeMoney = (value, currency = "UZS") => {
+  const code = String(currency || "UZS").toUpperCase();
+  const digits = currencyFractionDigits[code] ?? 2;
+  const number = Number(value || 0);
+  if (!Number.isFinite(number)) return `${value} ${code}`;
+  const major = number / 10 ** digits;
+  const formatted = new Intl.NumberFormat("ru-RU", {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  }).format(major).replace(/[\u00a0\u202f]/g, " ");
+  return code === "UZS" ? `${formatted} so'm` : `${formatted} ${code}`;
+};
+
 const formatChangeValue = (key, value, currency = "UZS") => {
   if (value === undefined || value === null || value === "") return "-";
   if (key === "paymentType") return paymentLabel(value, { context: "order_edit" });
-  if (["finalAmount", "realPaidAmount"].includes(key)) return `${Number(value || 0)} ${currency}`;
+  if (["finalAmount", "realPaidAmount"].includes(key)) return formatChangeMoney(value, currency);
   if (key === "plannedCheckOut") return new Date(value).toISOString();
   return String(value);
 };
@@ -803,4 +816,18 @@ const markDelayedOrders = async (branchId = undefined) => {
   return markedCount;
 };
 
-module.exports = { listOrders, getOrder, createOrder, updateOrder, pickupOrder, cancelOrder, markDelayedOrders, sendOrderTelegram };
+module.exports = {
+  listOrders,
+  getOrder,
+  createOrder,
+  updateOrder,
+  pickupOrder,
+  cancelOrder,
+  markDelayedOrders,
+  sendOrderTelegram,
+  _internals: {
+    buildEditChanges,
+    formatChangeMoney,
+    formatChangeValue,
+  },
+};

@@ -37,7 +37,7 @@ const SHEET_NAME_PATTERN_BY_BRANCH_CODE = {
 
 const WRITABLE_ACTIONS = new Set(["NEW_ORDER", "DOPLATA", "DEBT_PAYMENT", "CANCEL_ORDER", "EXPENSE", "INKASSA", "SALARY"]);
 const MONTH_CHECK_ACTIONS = new Set(["CHECK_MONTH_SHEET"]);
-const SCRIPT_VERSION = "v7-dynamic-month-sheet-2026-07-01";
+const SCRIPT_VERSION = "v8-salary-russian-label-2026-07-02";
 const TASHKENT_OFFSET_MINUTES = 5 * 60;
 const LEGACY_WIDTH = 22; // A:V
 const LEGACY_TECHNICAL_COLUMN = 23; // W; cleaned once and never written again
@@ -96,6 +96,7 @@ const FRACTION_DIGITS_BY_CURRENCY = {
   TJS: 2,
 };
 const MONEY_NUMBER_FORMAT = "#,##0.00";
+const SALARY_LABEL_RU = "\u0417\u0430\u0440\u043f\u043b\u0430\u0442\u0430";
 
 const ACTION_STYLE = {
   DOPLATA: { background: "#d9ead3", fontColor: "#14532d" },
@@ -631,9 +632,9 @@ function buildExpenseRow(payload) {
 function buildSalaryRow(payload) {
   const row = createRow_(payload);
   const receiver = payload.salaryReceiver || payload.recipientName || payload.adminName || "";
-  row[COLUMN.FIO - 1] = receiver || payload.adminName || "Oylik";
+  row[COLUMN.FIO - 1] = receiver || payload.adminName || SALARY_LABEL_RU;
   row[COLUMN.EXPENSE - 1] = sheetAmount_(payload, payload.salaryAmount, payload.amount, payload.finalAmount, payload.amountUzs);
-  row[COLUMN.NAME - 1] = ["Oylik", receiver].filter(Boolean).join(" - ");
+  row[COLUMN.NAME - 1] = SALARY_LABEL_RU;
   return row;
 }
 

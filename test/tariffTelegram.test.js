@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const { calculatePrice } = require("../src/services/tariff.service");
 const { summarizeMovements } = require("../src/services/cashAccounting.service");
 const { computeShiftReport, normalizeCurrencyMap } = require("../src/services/shift.service");
+const { _internals: orderServiceInternals } = require("../src/services/order.service");
 const {
   formatMoney,
   inkassaMessage,
@@ -33,6 +34,13 @@ test("Telegram formats decimal currencies without multiplying by 100", () => {
   assert.equal(formatMoney(12345, "USD"), "123,45 USD");
   assert.equal(formatMoney(9950, "EUR"), "99,50 EUR");
   assert.equal(formatMoney(250000, "UZS"), "250 000 so'm");
+});
+
+test("order edit changes format minor-unit currencies for Telegram", () => {
+  assert.equal(orderServiceInternals.formatChangeValue("realPaidAmount", 1440, "USD"), "14,40 USD");
+  assert.equal(orderServiceInternals.formatChangeValue("realPaidAmount", 1500, "USD"), "15,00 USD");
+  assert.equal(orderServiceInternals.formatChangeValue("finalAmount", 21429, "RUB"), "214,29 RUB");
+  assert.equal(orderServiceInternals.formatChangeValue("realPaidAmount", 250000, "UZS"), "250 000 so'm");
 });
 
 test("Telegram uses exact selected payment labels and never falls back to cash", () => {
