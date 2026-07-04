@@ -326,12 +326,25 @@ const overtimePaymentMessageV2 = (order = {}) => [
   line("👤 Admin", formatAdmin(order.shiftOpenedBy || order.cashierAdmin || order.pickedUpBy || order.admin || order.createdBy, order.branch || order.branchName)),
 ].join("\n");
 
+const shiftSalesSnapshotMessage = (shift = {}) => {
+  const report = shift.report || {};
+  return [
+    "Savdo hisoboti",
+    line("Umumiy summa", formatCurrencyMap(shift.revenueByCurrency || report.revenueByCurrency)),
+    line("Naqd", formatCurrencyMap(shift.cashByCurrency || report.cashByCurrency)),
+    line("Terminal", formatCurrencyMap(shift.terminalByCurrency || report.terminalByCurrency)),
+    line("Click", formatCurrencyMap(shift.clickByCurrency || report.clickByCurrency)),
+    line("Payme", formatCurrencyMap(shift.paymeByCurrency || report.paymeByCurrency)),
+  ].join("\n");
+};
+
 module.exports = {
   formatMoney,
   formatCurrencyMap,
   orderMessage,
   shiftOpenedMessage: shiftOpenedMessageV2,
   shiftClosedMessage: shiftClosedMessageV2,
+  shiftSalesSnapshotMessage,
   orderCancelledMessage,
   delayedBaggageMessage,
   overtimePaymentMessage: overtimePaymentMessageV2,

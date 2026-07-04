@@ -12,6 +12,7 @@ const {
   orderCancelledMessage,
   overtimePaymentMessage,
   shiftClosedMessage,
+  shiftSalesSnapshotMessage,
 } = require("../src/utils/formatTelegramMessage");
 
 test("72+ and manual-hour tariff calculations use Settings tariff fields", () => {
@@ -144,6 +145,29 @@ test("Telegram shift report separates payment and currency balances", () => {
   assert.match(message, /Yopgan admin: Vali/);
   assert.match(message, /Boshlang'ich kassa: 100 000 so'm \/ 100,00 USD/);
   assert.match(message, /Qabul qilingan: 50 000 so'm \/ 50,00 USD/);
+});
+
+test("Telegram sales snapshot reports current shift payment totals", () => {
+  const message = shiftSalesSnapshotMessage({
+    branch: { name: "Toshkent xalqaro aeroport" },
+    openedBy: { name: "Ali" },
+    openedAt: new Date("2026-07-04T08:00:00.000Z"),
+    ordersCount: 12,
+    revenueByCurrency: { UZS: 3587000 },
+    cashByCurrency: { UZS: 2601000 },
+    terminalByCurrency: { UZS: 986000 },
+    clickByCurrency: {},
+    paymeByCurrency: {},
+  });
+
+  assert.match(message, /Savdo hisoboti/);
+  assert.doesNotMatch(message, /\n\n/);
+  assert.doesNotMatch(message, /Buyurtmalar:/);
+  assert.match(message, /Umumiy summa: 3 587 000 so'm/);
+  assert.match(message, /Naqd: 2 601 000 so'm/);
+  assert.match(message, /Terminal: 986 000 so'm/);
+  assert.match(message, /Click: 0 so'm/);
+  assert.match(message, /Payme: 0 so'm/);
 });
 
 test("shift opening, accepted, sales, expense and inkassa remain separate by currency", async () => {

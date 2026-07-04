@@ -13,6 +13,7 @@ const {
   orderEditMessage,
   lockerTransferMessage,
   lockerServiceMessage,
+  shiftSalesSnapshotMessage,
 } = require("../utils/formatTelegramMessage");
 const { AppError } = require("../utils/response");
 const logger = require("../utils/logger");
@@ -76,6 +77,7 @@ const sendBranchEvent = async (branchId, event, text) => {
 const sendNewOrder = (order) => sendBranchEvent(order.branchId, "newOrder", orderMessage(order));
 const sendShiftOpen = (shift) => sendBranchEvent(shift.branchId, "shiftOpen", shiftOpenedMessage(shift));
 const sendShiftClose = (shift) => sendBranchEvent(shift.branchId, "shiftClose", shiftClosedMessage(shift));
+const sendShiftSalesSnapshot = (shift) => sendBranchEvent(shift.branchId, "shiftSalesSnapshot", shiftSalesSnapshotMessage(shift));
 const sendOrderCancel = (order) => sendBranchEvent(order.branchId, "orderCancel", orderCancelledMessage(order));
 const sendDelayedBaggage = (order) => sendBranchEvent(order.branchId, "delayedBaggage", delayedBaggageMessage(order));
 const sendOvertimePayment = (order) => sendBranchEvent(order.branchId, "overtimePayment", overtimePaymentMessage(order));
@@ -172,6 +174,7 @@ module.exports = {
   sendNewOrder,
   sendShiftOpen,
   sendShiftClose,
+  sendShiftSalesSnapshot,
   sendOrderCancel,
   sendDelayedBaggage,
   sendOvertimePayment,

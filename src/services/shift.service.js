@@ -44,6 +44,44 @@ const currentShift = async (user, query = {}) => {
   return { ...shift, ...report, ordersCount };
 };
 
+const telegramReasonText = {
+  settings_not_found: "Telegram sozlamalari topilmadi",
+  missing_credentials: "Bot token yoki chat ID kiritilmagan",
+  disabled: "Telegram o'chirilgan",
+};
+
+const sendCurrentSalesTelegram = async (user, query = {}) => {
+  const branchId = getScopedBranchId(user, query.branchId || user.branchId);
+  if (!branchId) throw new AppError("branchId is required", 400);
+
+  const shift = await prisma.shift.findFirst({ where: { branchId, status: "OPEN" }, include, orderBy: { openedAt: "desc" } });
+  if (!shift) throw new AppError("Bu filialda ochiq smena yo'q", 404);
+
+  const { ordersCount, ...report } = await computeShiftReport(prisma, shift);
+  const snapshot = { ...shift, ...report, ordersCount };
+  const result = await telegram.sendSafely(
+    () => telegram.sendShiftSalesSnapshot(snapshot),
+    {
+      action: "SHIFT_SALES_SNAPSHOT",
+      branchId,
+      userId: user.id,
+      entityType: "ShiftSalesSnapshot",
+      entityId: `${shift.id}:${Date.now()}`,
+    },
+  );
+
+  if (result?.skipped) {
+    const reason = result.error || result.reason || "Telegram yuborilmadi";
+    throw new AppError(telegramReasonText[reason] || reason, result.error ? 502 : 400);
+  }
+
+  return {
+    sent: true,
+    messageId: result?.result?.message_id || null,
+    shift: snapshot,
+  };
+};
+
 const openShift = async (user, body) => {
   const branchId = getScopedBranchId(user, body.branchId || user.branchId);
   if (!branchId) throw new AppError("branchId is required", 400);
@@ -262,4 +300,4 @@ const closeShift = async (user, id, body) => {
   return result;
 };
 
-module.exports = { listShifts, currentShift, openShift, closeShift, computeShiftReport, normalizeCurrencyMap };
+module.exports = { listShifts, currentShift, sendCurrentSalesTelegram, openShift, closeShift, computeShiftReport, normalizeCurrencyMap };
