@@ -16,6 +16,11 @@ const telegram = require("./telegram.service");
 const googleSheets = require("./googleSheets.service");
 const { paginated } = require("../utils/pagination");
 const { normalizePaymentType, paymentLabel } = require("../utils/payment");
+const {
+  overtimeHoursAfterGrace,
+  isOverdueAfterGrace,
+  overdueThresholdDate,
+} = require("../utils/overtime");
 
 const includeOrder = {
   branch: { select: { id: true, name: true, code: true } },
@@ -466,7 +471,7 @@ const updateOrder = async (user, id, body) => {
       const plannedCheckOut = new Date(body.plannedCheckOut || body.checkOut);
       if (Number.isNaN(plannedCheckOut.getTime())) throw new AppError("Invalid checkOut", 400);
       data.plannedCheckOut = plannedCheckOut;
-      data.status = plannedCheckOut < new Date() ? "DELAYED" : "ACTIVE";
+      data.status = isOverdueAfterGrace(plannedCheckOut) ? "DELAYED" : "ACTIVE";
     }
     if (body.paymentType !== undefined) {
       const paymentType = normalizePaymentType(body.paymentType);
@@ -580,11 +585,15 @@ const pickupOrder = async (user, id, body) => {
     let debtPaidAmount = 0;
 
     const pickupTime = body.realPickupTime ? new Date(body.realPickupTime) : new Date();
-    const overtimeHours = Math.max(0, Math.ceil((pickupTime.getTime() - order.plannedCheckOut.getTime()) / 3600000));
+    const overtimeHours = overtimeHoursAfterGrace(order.plannedCheckOut, pickupTime);
     const overtimeAmount = Number(body.overtimeAmount || body.extraPayment || 0);
     const overtimeCurrency = body.currency || order.currency;
-    const overtimePaymentType = normalizePaymentType(body.paymentType);
-    if ((Number(body.overtimeAmount || body.extraPayment || 0) > 0 || Number(body.debtPaidAmount || 0) > 0) && !overtimePaymentType) {
+    const overtimePaymentType = normalizePaymentType(body.overtimePaymentType || body.doplataPaymentType || body.paymentType);
+    const debtPaymentType = normalizePaymentType(body.debtPaymentType || body.paymentType);
+    if (overtimeAmount > 0 && !overtimePaymentType) {
+      throw new AppError("overtimePaymentType is required", 400);
+    }
+    if (Number(body.debtPaidAmount || 0) > 0 && !debtPaymentType) {
       throw new AppError("paymentType is required", 400);
     }
     let updated = await tx.order.update({
@@ -595,13 +604,15 @@ const pickupOrder = async (user, id, body) => {
         pickedUpById: user.id,
         overtimeHours,
         overtimeAmount,
+        overtimePaymentType: overtimeAmount > 0 ? overtimePaymentType : null,
       },
       include: includeOrder,
     });
 
     await tx.locker.updateMany({ where: { currentOrderId: id }, data: { status: "EMPTY", currentOrderId: null } });
     const shift = await findOpenShift(tx, order.branchId);
-    if (overtimeAmount > 0) {
+    const shouldAddOvertimeDebt = overtimeAmount > 0 && overtimePaymentType === "DEBT";
+    if (overtimeAmount > 0 && overtimePaymentType !== "DEBT") {
       await createCashMovement({
         tx,
         branchId: order.branchId,
@@ -630,7 +641,7 @@ const pickupOrder = async (user, id, body) => {
           direction: "IN",
           amount: debtPaidAmount,
           currency: body.currency || order.currency,
-          paymentType: overtimePaymentType,
+          paymentType: debtPaymentType,
           note: `Debt payment ${order.orderNumber}`,
           createdById: user.id,
         });
@@ -651,7 +662,7 @@ const pickupOrder = async (user, id, body) => {
           ...order.debt,
           amount: remainingDebtAmount,
           paidAmount: debtPaidAmount,
-          paymentType: overtimePaymentType,
+          paymentType: debtPaymentType,
           currency: body.currency || order.currency,
           status: remainingDebtAmount === 0 ? "CLOSED" : "OPEN",
           paidAt: pickupTime,
@@ -681,13 +692,40 @@ const pickupOrder = async (user, id, body) => {
         debtPayment = {
           ...closedDebt,
           paidAmount: debtPaidAmount,
-          paymentType: overtimePaymentType,
+          paymentType: debtPaymentType,
           currency: body.currency || order.currency,
           closedBy: closedDebt.closedBy || user,
           paidAt: closedDebt.closedAt || pickupTime,
         };
       }
     }
+    if (shouldAddOvertimeDebt) {
+      const currentDebt = await tx.debt.findUnique({ where: { orderId: id } });
+      if (currentDebt && currentDebt.currency !== overtimeCurrency) {
+        throw new AppError("Overtime debt currency must match existing debt currency", 400);
+      }
+      await tx.debt.upsert({
+        where: { orderId: id },
+        create: {
+          orderId: id,
+          branchId: order.branchId,
+          clientName: order.clientName,
+          phone: order.phone,
+          amount: overtimeAmount,
+          currency: overtimeCurrency,
+        },
+        update: {
+          status: "OPEN",
+          closedAt: null,
+          closedById: null,
+          clientName: order.clientName,
+          phone: order.phone,
+          amount: Number(currentDebt?.amount || 0) + overtimeAmount,
+          currency: overtimeCurrency,
+        },
+      });
+    }
+    updated = await tx.order.findUnique({ where: { id }, include: includeOrder });
     await audit({ tx, branchId: order.branchId, userId: user.id, entityType: "Order", entityId: id, action: "ORDER_PICKUP", oldValue: order, newValue: updated, description: "Order picked up" });
     if (overtimeAmount > 0) {
       const shiftOpenedBy = shift?.acceptedByName || shift?.openedBy || null;
@@ -720,7 +758,7 @@ const pickupOrder = async (user, id, body) => {
   }
   if (Number(result.updated.overtimeAmount || 0) > 0) {
     googleSheets.sendSafely(
-      () => googleSheets.sendDoplata({ ...result.updated, overtimePaymentType: normalizePaymentType(body.paymentType) }),
+      () => googleSheets.sendDoplata({ ...result.updated, overtimePaymentType: result.updated.overtimePaymentType || normalizePaymentType(body.overtimePaymentType || body.doplataPaymentType || body.paymentType) }),
       { action: "DOPLATA", branchId: result.updated.branchId, userId: user.id, entityType: "OrderDoplata", entityId: `${id}:doplata:${result.updated.realPickupTime?.getTime?.() || Date.now()}` },
     );
   }
@@ -784,8 +822,9 @@ const cancelOrder = async (user, id, body) => {
 
 const markDelayedOrders = async (branchId = undefined) => {
   const now = new Date();
+  const threshold = overdueThresholdDate(now);
   const overdue = await prisma.order.findMany({
-    where: { ...(branchId ? { branchId } : {}), status: "ACTIVE", plannedCheckOut: { lt: now } },
+    where: { ...(branchId ? { branchId } : {}), status: "ACTIVE", plannedCheckOut: { lt: threshold } },
     include: {
       branch: { select: { id: true, name: true } },
       items: { select: { lockerNumber: true, locker: { select: { number: true } } } },

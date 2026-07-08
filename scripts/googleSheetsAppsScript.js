@@ -37,7 +37,7 @@ const SHEET_NAME_PATTERN_BY_BRANCH_CODE = {
 
 const WRITABLE_ACTIONS = new Set(["NEW_ORDER", "DOPLATA", "DEBT_PAYMENT", "CANCEL_ORDER", "EXPENSE", "INKASSA", "SALARY"]);
 const MONTH_CHECK_ACTIONS = new Set(["CHECK_MONTH_SHEET"]);
-const SCRIPT_VERSION = "v8-salary-russian-label-2026-07-02";
+const SCRIPT_VERSION = "v9-debt-doplata-payment-2026-07-09";
 const TASHKENT_OFFSET_MINUTES = 5 * 60;
 const LEGACY_WIDTH = 22; // A:V
 const LEGACY_TECHNICAL_COLUMN = 23; // W; cleaned once and never written again
@@ -556,6 +556,12 @@ function buildNewOrderRow(payload) {
   row[COLUMN.PERIOD - 1] = payload.period || payload.tariffHours || payload.storagePeriod || "";
   row[COLUMN.NAME - 1] = payload.operationName || "Хранение багажа";
 
+  if (String(payload.paymentType || "").toUpperCase() === "DEBT") {
+    row[COLUMN.CASH_UZS - 1] = "QARZ";
+    row[COLUMN.NAME - 1] = payload.note || payload.operationName || "Qarzdor buyurtma";
+    return row;
+  }
+
   const amount = sheetAmount_(payload, payload.amount, payload.finalAmount, payload.realPaidAmount, payload.paidAmount);
   if (amount !== "") writeRevenue_(row, payload, amount);
   return row;
@@ -586,7 +592,12 @@ function buildDoplataRow(payload) {
   row[COLUMN.PLACE - 1] = formatSizeCounts_(payload);
   row[COLUMN.CHECK - 1] = payload.orderNumber || payload.checkNumber || "";
   row[COLUMN.PERIOD - 1] = payload.doplataPeriod || payload.period || payload.storagePeriod || "DOPLATA";
-  row[COLUMN.NAME - 1] = payload.operationName || "Доплата";
+  row[COLUMN.NAME - 1] = payload.note || payload.operationName || "Qo'shimcha to'lov";
+
+  if (String(payload.paymentType || "").toUpperCase() === "DEBT") {
+    row[COLUMN.CASH_UZS - 1] = "DOPLATA QARZ";
+    return row;
+  }
 
   const amount = sheetAmount_(payload, payload.amount, payload.overtimeAmount, payload.finalAmount, payload.realPaidAmount);
   if (amount !== "") writeRevenue_(row, payload, amount);
@@ -710,6 +721,7 @@ function applyMoneyFormat_(sheet, row, payload) {
   if (action === "NEW_ORDER" || action === "DOPLATA" || action === "DEBT_PAYMENT" || action === "CANCEL_ORDER") {
     if (!payload.paymentType) throw new Error("paymentType is required for revenue format");
     const paymentType = String(payload.paymentType).toUpperCase();
+    if (paymentType === "DEBT") return;
     if (paymentType === "CLICK") column = COLUMN.CLICK;
     else if (paymentType === "PAYME") column = COLUMN.PAYME;
     else if (paymentType === "CARD" || paymentType === "TERMINAL" || paymentType === "TRANSFER") column = COLUMN.TERMINAL;

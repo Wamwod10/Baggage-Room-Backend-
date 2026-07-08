@@ -52,7 +52,7 @@ const formatBranch = (branch) => {
   return cleanText(branch);
 };
 
-const formatAdmin = (user, branch = null) => formatAdminName(user, { branch });
+const formatAdmin = (user, branch = null) => formatAdminName(user, { branch, fallback: "Noma'lum admin" });
 
 const shiftCashLeft = (shift = {}) => shift.systemExpectedCash ?? shift.closingCash ?? 0;
 const shiftRegularExpense = (shift = {}) => Math.max(Number(shift.expenseAmount || 0) - Number(shift.salaryAmount || 0), 0);
@@ -174,7 +174,8 @@ const overtimePaymentMessage = (order = {}) => [
   "",
   line("⌛ Kechikkan vaqt", `${cleanText(order.overtimeHours || 0)} soat`),
   line("💰 Qo'shimcha summa", formatMoney(order.overtimeAmount || order.extraPayment || 0, order.currency || "UZS")),
-  line("💳 To'lov", formatPayment(order.overtimePaymentType || order.paymentType)),
+  line("💳 Asosiy to'lov", formatPayment(order.paymentType)),
+  line("💳 Qo'shimcha to'lov", formatPayment(order.overtimePaymentType || order.doplataPaymentType)),
   "",
   line("👨‍💼 Admin", formatAdmin(order.shiftOpenedBy || order.cashierAdmin || order.pickedUpBy || order.admin || order.createdBy, order.branch || order.branchName)),
   line("📅 Sana", formatDateMinute(order.realPickupTime || order.updatedAt || new Date())),
@@ -323,6 +324,8 @@ const overtimePaymentMessageV2 = (order = {}) => [
   line("👤 Mijoz", order.clientName || order.client),
   line("⏰ Kechikkan vaqt", `${cleanText(order.overtimeHours || 0)} soat`),
   line("💰 Summa", formatMoney(order.overtimeAmount || order.extraPayment || 0, order.currency || "UZS")),
+  line("💳 Asosiy to'lov", formatPayment(order.paymentType)),
+  line("💳 Qo'shimcha to'lov", formatPayment(order.overtimePaymentType || order.doplataPaymentType)),
   line("👤 Admin", formatAdmin(order.shiftOpenedBy || order.cashierAdmin || order.pickedUpBy || order.admin || order.createdBy, order.branch || order.branchName)),
 ].join("\n");
 

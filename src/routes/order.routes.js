@@ -33,6 +33,8 @@ router.post(
         customHours: z.coerce.number().int().positive().optional(),
         currency: currency.default("UZS"),
         paymentType,
+        realPaidPaymentType: paymentType.optional(),
+        paidPaymentType: paymentType.optional(),
         calculatedAmount: amount.optional(),
         discountAmount: amount.optional(),
         discountReason: z.string().optional(),
@@ -97,6 +99,9 @@ router.post(
         extraPayment: amount.optional(),
         debtPaidAmount: amount.optional(),
         paymentType: paymentType.optional(),
+        overtimePaymentType: paymentType.optional(),
+        doplataPaymentType: paymentType.optional(),
+        debtPaymentType: paymentType.optional(),
         currency: currency.optional(),
       }),
     })

@@ -534,7 +534,9 @@ const sendSafely = async (delivery, { action = "UNKNOWN", branchId = null, userI
 };
 
 const newOrderSheetAmount = (order) =>
-  order?.realPaidAmount ?? order?.finalAmount ?? order?.calculatedAmount ?? null;
+  String(order?.paymentType || "").toUpperCase() === "DEBT"
+    ? 0
+    : order?.realPaidAmount ?? order?.finalAmount ?? order?.calculatedAmount ?? null;
 
 const sendNewOrder = (order) =>
   postWebhook(orderPayload("NEW_ORDER", order, { amount: newOrderSheetAmount(order) }));
@@ -547,8 +549,8 @@ const sendDoplata = (order) =>
     checkOut: toIso(order?.realPickupTime || order?.updatedAt),
     period: `DOPLATA ${Number(order?.overtimeHours || 0)}ч`,
     doplataPeriod: `DOPLATA ${Number(order?.overtimeHours || 0)}ч`,
-    operationName: "Доплата",
-    note: "DOPLATA",
+    operationName: "Qo'shimcha to'lov",
+    note: "Qo'shimcha to'lov",
   }));
 
 const sendOrderCancel = (order, reversal = {}) => {

@@ -175,7 +175,7 @@ test("INKASSA currencies use O-T only and never F-N revenue columns", () => {
 });
 
 test("backend accepts only versioned 22-column INKASSA webhook results", () => {
-  const scriptVersion = "v8-salary-russian-label-2026-07-02";
+  const scriptVersion = "v9-debt-doplata-payment-2026-07-09";
   const monthSheetName = "\u0418\u044e\u043b\u044c 2026";
   const payload = sheets._internals.inkassaPayload({
     id: "inkassa-result-test",
@@ -354,6 +354,42 @@ test("CANCEL_ORDER writes negative reversal to the selected payment column", () 
   assert.equal(appsScript.buildLegacyRow_(clickPayload)[COLUMN.CLICK - 1], -50000);
 });
 
+test("DEBT orders and DEBT doplata mark debt without writing numeric revenue", () => {
+  assert.equal(sheets._internals.newOrderSheetAmount({ paymentType: "DEBT", realPaidAmount: 0, finalAmount: 200000 }), 0);
+
+  const debtOrderPayload = sheets._internals.orderPayload("NEW_ORDER", {
+    id: "debt-order",
+    branch: { code: "TIA", name: "Toshkent aeroport" },
+    orderNumber: "TIA-DEBT-1",
+    clientName: "Debt Client",
+    items: [{ size: "M", count: 1 }],
+    finalAmount: 200000,
+    realPaidAmount: 0,
+    currency: "UZS",
+    paymentType: "DEBT",
+  }, { amount: sheets._internals.newOrderSheetAmount({ paymentType: "DEBT", realPaidAmount: 0, finalAmount: 200000 }) });
+  const debtOrderRow = appsScript.buildLegacyRow_(debtOrderPayload);
+
+  assert.equal(debtOrderRow[COLUMN.CASH_UZS - 1], "QARZ");
+  assert.equal(debtOrderRow[COLUMN.NAME - 1], "Qarzdor buyurtma");
+  assert.deepEqual(debtOrderRow.slice(COLUMN.CASH_USD - 1, COLUMN.TERMINAL), new Array(8).fill(""));
+
+  const debtDoplataRow = appsScript.buildDoplataRow({
+    action: "DOPLATA",
+    createdAt: "2026-07-09T10:00:00+05:00",
+    clientName: "Debt Client",
+    orderNumber: "TIA-DEBT-1",
+    doplataPeriod: "DOPLATA 3 soat",
+    paymentType: "DEBT",
+    currency: "UZS",
+    sheetAmount: 75000,
+  });
+
+  assert.equal(debtDoplataRow[COLUMN.CASH_UZS - 1], "DOPLATA QARZ");
+  assert.equal(debtDoplataRow[COLUMN.NAME - 1], "Qo'shimcha to'lov");
+  assert.deepEqual(debtDoplataRow.slice(COLUMN.CASH_USD - 1, COLUMN.TERMINAL), new Array(8).fill(""));
+});
+
 test("required NEW_ORDER, INKASSA, EXPENSE, SALARY and DOPLATA A:V mappings are exact", () => {
   const createdAt = "2026-06-24T10:00:00+05:00";
   const order = appsScript.buildNewOrderRow({
@@ -438,6 +474,7 @@ test("required NEW_ORDER, INKASSA, EXPENSE, SALARY and DOPLATA A:V mappings are 
   assert.equal(debtPayment[COLUMN.PERIOD - 1], "QARZ");
   assert.equal(debtPayment[COLUMN.NAME - 1], "Qarz to'lovi");
   assert.equal(doplata[COLUMN.PERIOD - 1], "DOPLATA 3ч");
+  assert.equal(doplata[COLUMN.NAME - 1], "Qo'shimcha to'lov");
 });
 
 test("localized decimal strings stay decimals instead of becoming 100x larger", () => {

@@ -6,6 +6,11 @@ const { summarizeMovements } = require("../src/services/cashAccounting.service")
 const { computeShiftReport, normalizeCurrencyMap } = require("../src/services/shift.service");
 const { _internals: orderServiceInternals } = require("../src/services/order.service");
 const {
+  OVERTIME_GRACE_MINUTES,
+  overtimeHoursAfterGrace,
+  isOverdueAfterGrace,
+} = require("../src/utils/overtime");
+const {
   formatMoney,
   inkassaMessage,
   orderMessage,
@@ -50,6 +55,7 @@ test("Telegram uses exact selected payment labels and never falls back to cash",
   assert.match(orderMessage({ paymentType: "PAYME", realPaidAmount: 100000, currency: "UZS" }), /To'lov: Payme/);
   assert.match(orderMessage({ paymentType: "DEBT", finalAmount: 100000, currency: "UZS" }), /To'lov: Qarz/);
   assert.doesNotMatch(orderMessage({ paymentType: null, finalAmount: 100000, currency: "UZS" }), /To'lov: Naqd/);
+  assert.match(orderMessage({ paymentType: null, finalAmount: 100000, currency: "UZS" }), /To'lov: Noma'lum/);
 });
 
 test("cash accounting subtracts cancel reversal movements from revenue", () => {
@@ -78,6 +84,8 @@ test("Inkassa and doplata Telegram messages use real admin and safe business ide
     overtimeHours: 3,
     overtimeAmount: 45000,
     currency: "UZS",
+    paymentType: "CASH",
+    overtimePaymentType: "TERMINAL",
     pickedUpBy: { name: "Ali" },
   });
   assert.match(inkassa, /🏦 Inkassa/);
@@ -85,8 +93,19 @@ test("Inkassa and doplata Telegram messages use real admin and safe business ide
   assert.doesNotMatch(inkassa, /Admin: Toshkent/);
   assert.match(doplata, /⚠️ Qo'shimcha to'lov/);
   assert.match(doplata, /Buyurtma: TIA-20260622-1001/);
+  assert.match(doplata, /Asosiy to'lov: Naqd/);
+  assert.match(doplata, /Qo'shimcha to'lov: Terminal/);
   assert.match(doplata, /Admin: Ali/);
   assert.doesNotMatch(`${inkassa}\n${doplata}`, /undefined|null|branchId|order\.id/);
+});
+
+test("overtime grace period is 10 minutes and starts charging after that", () => {
+  const checkout = new Date("2026-07-09T10:00:00.000Z");
+  assert.equal(OVERTIME_GRACE_MINUTES, 10);
+  assert.equal(isOverdueAfterGrace(checkout, new Date("2026-07-09T10:09:00.000Z")), false);
+  assert.equal(isOverdueAfterGrace(checkout, new Date("2026-07-09T10:10:00.000Z")), false);
+  assert.equal(isOverdueAfterGrace(checkout, new Date("2026-07-09T10:11:00.000Z")), true);
+  assert.equal(overtimeHoursAfterGrace(checkout, new Date("2026-07-09T10:11:00.000Z")), 1);
 });
 
 test("Telegram admin labels do not use branch names as admin names", () => {

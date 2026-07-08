@@ -187,6 +187,7 @@ model Order {
   realPaidReason     String?
   overtimeHours      Int           @default(0)
   overtimeAmount     Int           @default(0)
+  overtimePaymentType PaymentType?
   checkIn            DateTime
   plannedCheckOut    DateTime
   realPickupTime     DateTime?
