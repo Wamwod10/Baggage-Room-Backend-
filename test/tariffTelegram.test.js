@@ -75,7 +75,8 @@ test("Inkassa and doplata Telegram messages use real admin and safe business ide
     receiverName: "Bosh kassir",
     amount: 21429,
     currency: "RUB",
-    createdBy: { name: "Ali" },
+    adminName: "Ali",
+    createdBy: { name: "Toshkent xalqaro aeroport", login: "tosh_airport" },
   });
   const doplata = overtimePaymentMessage({
     branch: { name: "Toshkent xalqaro aeroport" },
@@ -108,7 +109,7 @@ test("overtime grace period is 10 minutes and starts charging after that", () =>
   assert.equal(overtimeHoursAfterGrace(checkout, new Date("2026-07-09T10:11:00.000Z")), 1);
 });
 
-test("Telegram admin labels do not use branch names as admin names", () => {
+test("Telegram admin labels do not use branch names or branch logins as admin names", () => {
   const message = orderCancelledMessage({
     branch: { name: "Toshkent Shimoliy vokzal" },
     orderNumber: "TSV-000010",
@@ -120,8 +121,9 @@ test("Telegram admin labels do not use branch names as admin names", () => {
   });
 
   assert.match(message, /Filial: Toshkent Shimoliy vokzal/);
-  assert.match(message, /Admin: tosh_shimoliy/);
+  assert.match(message, /Admin: Noma'lum admin/);
   assert.doesNotMatch(message, /Admin: Toshkent Shimoliy vokzal/);
+  assert.doesNotMatch(message, /Admin: tosh_shimoliy/);
 });
 
 test("Doplata Telegram message uses shift opener name before pickup login", () => {

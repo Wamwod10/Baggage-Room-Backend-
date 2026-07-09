@@ -91,10 +91,17 @@ const branchName = (entity) => {
   return branchNameByCode[code] || entity?.branchName || entity?.branch?.name || entity?.branch || null;
 };
 
-const adminNameFor = (entity, relationName = "createdBy") => formatAdminName(
-  entity?.[relationName] || { name: entity?.adminName, login: entity?.adminLogin },
-  { branch: entity?.branch || entity?.branchName || branchName(entity), fallback: null },
-);
+const adminNameFor = (entity, relationName = "createdBy") => {
+  const branch = entity?.branch || entity?.branchName || branchName(entity);
+  if (entity?.adminName || entity?.adminLogin) {
+    const explicit = formatAdminName(
+      { name: entity?.adminName, login: entity?.adminLogin },
+      { branch, fallback: null },
+    );
+    if (explicit) return explicit;
+  }
+  return formatAdminName(entity?.[relationName], { branch, fallback: null });
+};
 
 const validateBranchCode = (payload) => {
   const normalized = normalizeBranchCode(payload.branchCode || payload.branchName || payload.branch);

@@ -11,6 +11,7 @@ const { computeShiftReport } = require("./shift.service");
 const includeInkassa = {
   branch: { select: { id: true, name: true, code: true } },
   createdBy: { select: { id: true, name: true, login: true } },
+  shift: { select: { id: true, acceptedByName: true, openedBy: { select: { id: true, name: true, login: true } } } },
 };
 
 const listInkassa = async (user, query) => {
@@ -45,9 +46,13 @@ const createInkassa = async (user, body) => {
     await audit({ tx, branchId, userId: user.id, entityType: "Inkassa", entityId: inkassa.id, action: "INKASSA_CREATE", newValue: inkassa, description: body.note || "Inkassa" });
     return inkassa;
   });
-  telegram.sendSafely(() => telegram.sendInkassa(inkassa), { action: "INKASSA", branchId, userId: user.id, entityType: "Inkassa", entityId: inkassa.id });
-  googleSheets.sendSafely(() => googleSheets.sendInkassa(inkassa), { action: "INKASSA", branchId, userId: user.id, entityType: "Inkassa", entityId: inkassa.id });
-  return inkassa;
+  const payload = {
+    ...inkassa,
+    adminName: inkassa.shift?.acceptedByName || null,
+  };
+  telegram.sendSafely(() => telegram.sendInkassa(payload), { action: "INKASSA", branchId, userId: user.id, entityType: "Inkassa", entityId: inkassa.id });
+  googleSheets.sendSafely(() => googleSheets.sendInkassa(payload), { action: "INKASSA", branchId, userId: user.id, entityType: "Inkassa", entityId: inkassa.id });
+  return payload;
 };
 
 module.exports = { listInkassa, createInkassa };

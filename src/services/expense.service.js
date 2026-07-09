@@ -10,6 +10,7 @@ const googleSheets = require("./googleSheets.service");
 const includeExpense = {
   branch: { select: { id: true, name: true, code: true } },
   createdBy: { select: { id: true, name: true, login: true } },
+  shift: { select: { id: true, acceptedByName: true, openedBy: { select: { id: true, name: true, login: true } } } },
 };
 
 const listExpenses = async (user, query) => {
@@ -39,9 +40,13 @@ const createExpense = async (user, body) => {
     await audit({ tx, branchId, userId: user.id, entityType: "Expense", entityId: expense.id, action: "EXPENSE_CREATE", newValue: expense, description: body.reason });
     return expense;
   });
-  telegram.sendSafely(() => telegram.sendExpense(expense), { action: "EXPENSE", branchId, userId: user.id, entityType: "Expense", entityId: expense.id });
-  googleSheets.sendSafely(() => googleSheets.sendExpense(expense), { action: "EXPENSE", branchId, userId: user.id, entityType: "Expense", entityId: expense.id });
-  return expense;
+  const payload = {
+    ...expense,
+    adminName: expense.shift?.acceptedByName || null,
+  };
+  telegram.sendSafely(() => telegram.sendExpense(payload), { action: "EXPENSE", branchId, userId: user.id, entityType: "Expense", entityId: expense.id });
+  googleSheets.sendSafely(() => googleSheets.sendExpense(payload), { action: "EXPENSE", branchId, userId: user.id, entityType: "Expense", entityId: expense.id });
+  return payload;
 };
 
 const deleteExpense = async (user, id) => {

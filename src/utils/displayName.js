@@ -8,7 +8,21 @@ const KNOWN_BRANCH_NAMES = [
   "Samarqand aeroport",
 ];
 
+const KNOWN_BRANCH_LOGINS = [
+  "tosh_airport",
+  "toshkent_airport",
+  "tosh_shimoliy",
+  "toshkent_shimoliy",
+  "tosh_janubiy",
+  "toshkent_janubiy",
+  "sam_vokzal",
+  "samarqand_vokzal",
+  "sam_airport",
+  "samarqand_airport",
+];
+
 const normalize = (value) => String(value || "").toLowerCase().replace(/\s+/g, " ").trim();
+const normalizeIdentifier = (value) => normalize(value).replace(/[\s-]+/g, "_");
 
 const isLikelyDatabaseId = (value = "") => {
   if (typeof value !== "string") return false;
@@ -32,11 +46,13 @@ const branchNameCandidates = (branch) => {
 
 const isBranchDisplayName = (value, branch = null) => {
   const text = normalize(value);
+  const identifier = normalizeIdentifier(value);
   if (!text) return false;
   return [...branchNameCandidates(branch), ...KNOWN_BRANCH_NAMES]
     .map(normalize)
     .filter(Boolean)
-    .includes(text);
+    .includes(text) ||
+    KNOWN_BRANCH_LOGINS.includes(identifier);
 };
 
 const formatAdminName = (user, { branch = null, fallback = "-" } = {}) => {

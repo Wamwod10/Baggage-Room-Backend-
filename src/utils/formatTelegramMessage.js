@@ -216,7 +216,7 @@ const inkassaMessage = (inkassa = {}) => [
   line("👤 Kimga", inkassa.receiverName || inkassa.receiver || inkassa.recipient),
   line("💰 Summa", formatMoney(inkassa.amount || 0, inkassa.currency || "UZS")),
   line("📝 Izoh", inkassa.note || inkassa.description),
-  line("👤 Admin", formatAdmin(inkassa.createdBy || inkassa.admin || inkassa.adminName, inkassa.branch || inkassa.branchName)),
+  line("👤 Admin", formatAdmin(inkassa.adminName || inkassa.admin || inkassa.createdBy, inkassa.branch || inkassa.branchName)),
   line("🕘 Sana", formatDate(inkassa.createdAt || new Date())),
 ].join("\n");
 
@@ -227,7 +227,7 @@ const expenseMessage = (expense = {}) => [
   line("📂 Turi", expense.category || expense.type),
   line("💰 Summa", formatMoney(expense.amount || 0, expense.currency || "UZS")),
   line("📝 Sabab", expense.reason || expense.note || expense.description),
-  line("👤 Admin", formatAdmin(expense.createdBy || expense.admin || expense.adminName, expense.branch || expense.branchName)),
+  line("👤 Admin", formatAdmin(expense.adminName || expense.admin || expense.createdBy, expense.branch || expense.branchName)),
 ].join("\n");
 
 const orderEditMessage = (order = {}, changes = {}) => {
