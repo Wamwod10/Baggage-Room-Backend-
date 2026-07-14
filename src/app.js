@@ -71,9 +71,14 @@ app.use(express.urlencoded({ extended: true }));
 app.use(
   rateLimit({
     windowMs: 15 * 60 * 1000,
-    limit: 300,
+    limit: Number(process.env.API_RATE_LIMIT_MAX || 3000),
     standardHeaders: true,
     legacyHeaders: false,
+    skip: (req) => req.method === "OPTIONS" || req.path === "/health",
+    message: {
+      success: false,
+      message: "Juda ko'p so'rov yuborildi. Iltimos, birozdan keyin qayta urinib ko'ring.",
+    },
   })
 );
 app.use(
