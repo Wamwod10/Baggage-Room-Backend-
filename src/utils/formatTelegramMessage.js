@@ -63,6 +63,7 @@ const formatLockerNumber = (value) => {
 };
 
 const orderNumber = (order = {}) => cleanText(order.orderNumber || order.displayId);
+const overtimeCurrency = (order = {}) => order.overtimeCurrency || order.currency || "UZS";
 const line = (label, value) => `${label}: ${cleanText(value)}`;
 
 const orderMessage = (order = {}) => {
@@ -160,7 +161,7 @@ const delayedBaggageMessage = (order = {}) => {
     line("📞 Telefon", order.phone),
     line("🔐 Yacheyka", formatLockerNumber(firstItem?.lockerNumber || firstItem?.locker?.number || order.lockerNumber)),
     line("⏰ Tugashi kerak edi", formatDate(order.plannedCheckOut)),
-    line("💰 Qo'shimcha hisob", formatMoney(order.overtimeAmount || order.extraCharge || 0, order.currency || "UZS")),
+    line("💰 Qo'shimcha hisob", formatMoney(order.overtimeAmount || order.extraCharge || 0, overtimeCurrency(order))),
   ].join("\n");
 };
 
@@ -173,7 +174,7 @@ const overtimePaymentMessage = (order = {}) => [
   line("📞 Telefon", order.phone),
   "",
   line("⌛ Kechikkan vaqt", `${cleanText(order.overtimeHours || 0)} soat`),
-  line("💰 Qo'shimcha summa", formatMoney(order.overtimeAmount || order.extraPayment || 0, order.currency || "UZS")),
+  line("💰 Qo'shimcha summa", formatMoney(order.overtimeAmount || order.extraPayment || 0, overtimeCurrency(order))),
   line("💳 Asosiy to'lov", formatPayment(order.paymentType)),
   line("💳 Qo'shimcha to'lov", formatPayment(order.overtimePaymentType || order.doplataPaymentType)),
   "",
@@ -323,7 +324,7 @@ const overtimePaymentMessageV2 = (order = {}) => [
   line("🧾 Buyurtma", orderNumber(order)),
   line("👤 Mijoz", order.clientName || order.client),
   line("⏰ Kechikkan vaqt", `${cleanText(order.overtimeHours || 0)} soat`),
-  line("💰 Summa", formatMoney(order.overtimeAmount || order.extraPayment || 0, order.currency || "UZS")),
+  line("💰 Summa", formatMoney(order.overtimeAmount || order.extraPayment || 0, overtimeCurrency(order))),
   line("💳 Asosiy to'lov", formatPayment(order.paymentType)),
   line("💳 Qo'shimcha to'lov", formatPayment(order.overtimePaymentType || order.doplataPaymentType)),
   line("👤 Admin", formatAdmin(order.shiftOpenedBy || order.cashierAdmin || order.pickedUpBy || order.admin || order.createdBy, order.branch || order.branchName)),

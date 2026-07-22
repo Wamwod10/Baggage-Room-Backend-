@@ -79,6 +79,10 @@ router.patch(
       currency: currency.optional(),
       finalAmount: amount.optional(),
       realPaidAmount: amount.optional(),
+      overtimeAmount: amount.optional(),
+      overtimePaymentType: paymentType.optional(),
+      doplataPaymentType: paymentType.optional(),
+      overtimeCurrency: currency.optional(),
       items: z.array(z.object({
         id: z.string().min(1),
         lockerId: z.string().min(1).optional(),

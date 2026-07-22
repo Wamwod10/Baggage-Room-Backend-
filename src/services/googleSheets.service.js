@@ -712,11 +712,12 @@ const inkassaPayload = (inkassa) => {
   const receiverLabel = receiver || INKASSA_ROW_LABEL;
   const adminName = adminNameFor(inkassa);
   const adminLogin = inkassa?.createdBy?.login || inkassa?.adminLogin || null;
+  const code = branchCode(inkassa);
   const createdAt = toIso(inkassa?.createdAt || new Date());
   const sourceData = {
     id: inkassa?.id || null,
     branchId: inkassa?.branchId || inkassa?.branch?.id || null,
-    branchCode: branchCode(inkassa),
+    branchCode: code,
     branchName: branchName(inkassa),
     shiftId: inkassa?.shiftId || null,
     receiverName: receiver,
@@ -732,7 +733,7 @@ const inkassaPayload = (inkassa) => {
 
   return withDeliveryMetadata({
     action: "INKASSA",
-    branchCode: branchCode(inkassa),
+    branchCode: code,
     branchName: branchName(inkassa),
     branch: branchName(inkassa),
     entityId: inkassa?.id || null,

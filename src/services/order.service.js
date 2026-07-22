@@ -8,10 +8,11 @@ const {
   sizesForBranch,
   MULTI_ORDER_LOCKER_BRANCH_CODES,
 } = require("./tariff.service");
-const { convertUzsToCurrencyMinor, currencyFractionDigits } = require("../utils/money");
+const { CURRENCIES, convertUzsToCurrencyMinor, currencyFractionDigits } = require("../utils/money");
 const { audit } = require("./activity.service");
 const { createNotification } = require("./notification.service");
 const { findOpenShift, createCashMovement } = require("./cashMovement.service");
+const { computeShiftReport, normalizeCurrencyMap } = require("./shift.service");
 const telegram = require("./telegram.service");
 const googleSheets = require("./googleSheets.service");
 const { paginated } = require("../utils/pagination");
@@ -28,6 +29,19 @@ const includeOrder = {
   pickedUpBy: { select: { id: true, name: true, login: true } },
   cancelledBy: { select: { id: true, name: true, login: true } },
   items: { include: { locker: true } },
+  cashMovements: {
+    select: {
+      id: true,
+      type: true,
+      direction: true,
+      amount: true,
+      currency: true,
+      paymentType: true,
+      note: true,
+      createdAt: true,
+    },
+    orderBy: { createdAt: "asc" },
+  },
   debt: true,
 };
 
@@ -47,6 +61,8 @@ const changeLabels = {
   currency: "Valyuta",
   finalAmount: "Summa",
   realPaidAmount: "Real to'lov",
+  overtimeAmount: "Qo'shimcha summa",
+  overtimePaymentType: "Qo'shimcha to'lov",
   note: "Izoh",
   items: "Bagaj",
 };
@@ -66,8 +82,8 @@ const formatChangeMoney = (value, currency = "UZS") => {
 
 const formatChangeValue = (key, value, currency = "UZS") => {
   if (value === undefined || value === null || value === "") return "-";
-  if (key === "paymentType") return paymentLabel(value, { context: "order_edit" });
-  if (["finalAmount", "realPaidAmount"].includes(key)) return formatChangeMoney(value, currency);
+  if (["paymentType", "overtimePaymentType"].includes(key)) return paymentLabel(value, { context: "order_edit" });
+  if (["finalAmount", "realPaidAmount", "overtimeAmount"].includes(key)) return formatChangeMoney(value, currency);
   if (key === "plannedCheckOut") return new Date(value).toISOString();
   return String(value);
 };
@@ -148,6 +164,128 @@ const resetInitialPaymentMovement = async ({ tx, order, amount, currency, paymen
       note: `Order ${order.orderNumber}`,
       createdById: userId,
     });
+  }
+};
+
+const isZeroCurrencyMap = (value = {}) =>
+  CURRENCIES.every((currency) => Number(value?.[currency] || 0) === 0);
+
+const refreshStoredShiftTotals = async ({ tx, shiftId }) => {
+  if (!shiftId) return null;
+  const shift = await tx.shift.findUnique({ where: { id: shiftId } });
+  if (!shift) return null;
+
+  const report = await computeShiftReport(tx, shift);
+  const shouldKeepBalancedClose = shift.status === "CLOSED" && isZeroCurrencyMap(shift.differenceByCurrency);
+  const currentClosing = normalizeCurrencyMap(shift.closingCashByCurrency, shift.closingCash || 0);
+  const closingCashByCurrency = shouldKeepBalancedClose
+    ? report.cashBalanceByCurrency
+    : currentClosing;
+  const differenceByCurrency = Object.fromEntries(CURRENCIES.map((currency) => [
+    currency,
+    Number(closingCashByCurrency[currency] || 0) - Number(report.cashBalanceByCurrency[currency] || 0),
+  ]));
+
+  return tx.shift.update({
+    where: { id: shiftId },
+    data: {
+      totalRevenue: report.totalRevenue,
+      cashRevenue: report.cashRevenue,
+      cardRevenue: report.cardRevenue,
+      terminalRevenue: report.terminalRevenue,
+      clickRevenue: report.clickRevenue,
+      paymeRevenue: report.paymeRevenue,
+      transferRevenue: report.transferRevenue,
+      debtAmount: report.debtAmount,
+      expenseAmount: report.expenseAmount,
+      inkassaAmount: report.inkassaAmount,
+      systemExpectedCash: report.systemExpectedCash,
+      ...(shift.status === "CLOSED" ? {
+        closingCash: closingCashByCurrency.UZS,
+        closingCashByCurrency,
+        difference: differenceByCurrency.UZS,
+        differenceByCurrency,
+      } : {}),
+    },
+  });
+};
+
+const findShiftIdForOrderTime = async ({ tx, order, fallbackShiftId = null }) => {
+  if (fallbackShiftId) return fallbackShiftId;
+  const referenceTime = order.realPickupTime || order.createdAt || new Date();
+  const shift = await tx.shift.findFirst({
+    where: {
+      branchId: order.branchId,
+      openedAt: { lte: referenceTime },
+      OR: [
+        { closedAt: null },
+        { closedAt: { gte: referenceTime } },
+      ],
+    },
+    orderBy: { openedAt: "desc" },
+    select: { id: true },
+  });
+  return shift?.id || null;
+};
+
+const syncHistoricalRevenueMovement = async ({
+  tx,
+  order,
+  movements,
+  amount,
+  currency,
+  paymentType,
+  note,
+  userId,
+}) => {
+  const affectedShiftIds = new Set(movements.map((movement) => movement.shiftId).filter(Boolean));
+  const primary = movements.find((movement) => movement.direction === "IN") || movements[0] || null;
+  const targetPaymentType = paymentType === "DEBT" ? null : paymentType;
+  const shouldHaveRevenue = Number(amount || 0) > 0 && targetPaymentType;
+
+  if (primary) {
+    await tx.cashMovement.update({
+      where: { id: primary.id },
+      data: {
+        direction: "IN",
+        amount: shouldHaveRevenue ? Number(amount || 0) : 0,
+        currency,
+        paymentType: targetPaymentType,
+        note,
+      },
+    });
+  } else if (shouldHaveRevenue) {
+    const shiftId = await findShiftIdForOrderTime({ tx, order });
+    if (shiftId) affectedShiftIds.add(shiftId);
+    await createCashMovement({
+      tx,
+      branchId: order.branchId,
+      shiftId,
+      orderId: order.id,
+      type: "ORDER_PAYMENT",
+      direction: "IN",
+      amount: Number(amount || 0),
+      currency,
+      paymentType: targetPaymentType,
+      note,
+      createdById: userId,
+    });
+  }
+
+  for (const movement of movements) {
+    if (primary && movement.id === primary.id) continue;
+    await tx.cashMovement.update({
+      where: { id: movement.id },
+      data: {
+        amount: 0,
+        currency,
+        paymentType: targetPaymentType,
+      },
+    });
+  }
+
+  for (const shiftId of affectedShiftIds) {
+    await refreshStoredShiftTotals({ tx, shiftId });
   }
 };
 
@@ -461,7 +599,7 @@ const updateOrder = async (user, id, body) => {
     const current = await tx.order.findUnique({ where: { id }, include: includeOrder });
     if (!current) throw new AppError("Order not found", 404);
     getScopedBranchId(user, current.branchId);
-    if (!["ACTIVE", "DELAYED"].includes(current.status)) throw new AppError("Only active orders can be edited", 400);
+    if (!["ACTIVE", "DELAYED", "PICKED_UP"].includes(current.status)) throw new AppError("Only active or picked up orders can be edited", 400);
 
     const data = {};
     for (const key of ["clientName", "phone", "passport", "note", "discountReason", "realPaidReason"]) {
@@ -471,7 +609,9 @@ const updateOrder = async (user, id, body) => {
       const plannedCheckOut = new Date(body.plannedCheckOut || body.checkOut);
       if (Number.isNaN(plannedCheckOut.getTime())) throw new AppError("Invalid checkOut", 400);
       data.plannedCheckOut = plannedCheckOut;
-      data.status = isOverdueAfterGrace(plannedCheckOut) ? "DELAYED" : "ACTIVE";
+      if (["ACTIVE", "DELAYED"].includes(current.status)) {
+        data.status = isOverdueAfterGrace(plannedCheckOut) ? "DELAYED" : "ACTIVE";
+      }
     }
     if (body.paymentType !== undefined) {
       const paymentType = normalizePaymentType(body.paymentType);
@@ -481,6 +621,14 @@ const updateOrder = async (user, id, body) => {
     if (body.currency !== undefined) data.currency = body.currency;
     if (body.finalAmount !== undefined) data.finalAmount = Number(body.finalAmount);
     if (body.realPaidAmount !== undefined) data.realPaidAmount = Number(body.realPaidAmount);
+    if (body.overtimeAmount !== undefined) data.overtimeAmount = Number(body.overtimeAmount);
+    if (body.overtimePaymentType !== undefined || body.doplataPaymentType !== undefined) {
+      const overtimePaymentType = normalizePaymentType(body.overtimePaymentType || body.doplataPaymentType);
+      if (!overtimePaymentType && Number(body.overtimeAmount ?? current.overtimeAmount ?? 0) > 0) {
+        throw new AppError("overtimePaymentType is required", 400);
+      }
+      data.overtimePaymentType = overtimePaymentType;
+    }
 
     const nextPaymentType = data.paymentType || current.paymentType;
     if (nextPaymentType === "DEBT" && body.realPaidAmount === undefined) data.realPaidAmount = 0;
@@ -547,12 +695,57 @@ const updateOrder = async (user, id, body) => {
 
     const paymentFieldsChanged = ["paymentType", "currency", "finalAmount", "realPaidAmount"].some((key) => body[key] !== undefined);
     if (paymentFieldsChanged) {
-      await resetInitialPaymentMovement({
+      if (current.status === "PICKED_UP") {
+        const existing = await tx.cashMovement.findMany({
+          where: {
+            orderId: current.id,
+            type: "ORDER_PAYMENT",
+            note: { not: { startsWith: "Overtime" } },
+          },
+          orderBy: { createdAt: "asc" },
+        });
+        await syncHistoricalRevenueMovement({
+          tx,
+          order: current,
+          movements: existing,
+          amount: Number(updatedBase.realPaidAmount || 0),
+          currency: updatedBase.currency,
+          paymentType: updatedBase.paymentType,
+          note: `Order ${current.orderNumber}`,
+          userId: user.id,
+        });
+      } else {
+        await resetInitialPaymentMovement({
+          tx,
+          order: current,
+          amount: Number(updatedBase.realPaidAmount || 0),
+          currency: updatedBase.currency,
+          paymentType: updatedBase.paymentType === "DEBT" ? null : updatedBase.paymentType,
+          userId: user.id,
+        });
+      }
+    }
+
+    const overtimeFieldsChanged = ["overtimeAmount", "overtimePaymentType", "doplataPaymentType", "overtimeCurrency"].some((key) => body[key] !== undefined);
+    if (overtimeFieldsChanged) {
+      const overtimeCurrency = body.overtimeCurrency || updatedBase.currency;
+      const overtimePaymentType = data.overtimePaymentType ?? updatedBase.overtimePaymentType;
+      const existing = await tx.cashMovement.findMany({
+        where: {
+          orderId: current.id,
+          type: "ORDER_PAYMENT",
+          note: { startsWith: "Overtime" },
+        },
+        orderBy: { createdAt: "asc" },
+      });
+      await syncHistoricalRevenueMovement({
         tx,
         order: current,
-        amount: Number(updatedBase.realPaidAmount || 0),
-        currency: updatedBase.currency,
-        paymentType: updatedBase.paymentType === "DEBT" ? null : updatedBase.paymentType,
+        movements: existing,
+        amount: Number(updatedBase.overtimeAmount || 0),
+        currency: overtimeCurrency,
+        paymentType: overtimePaymentType,
+        note: `Overtime ${current.orderNumber}`,
         userId: user.id,
       });
     }
@@ -562,7 +755,21 @@ const updateOrder = async (user, id, body) => {
     }
 
     const updated = await tx.order.findUnique({ where: { id }, include: includeOrder });
-    const changes = buildEditChanges(current, updated, ["clientName", "phone", "passport", "plannedCheckOut", "paymentType", "currency", "finalAmount", "realPaidAmount", "note"]);
+    const currentOvertimeCurrency = (current.cashMovements || []).find((movement) => String(movement.note || "").startsWith("Overtime"))?.currency || current.currency;
+    const nextOvertimeCurrency = body.overtimeCurrency || currentOvertimeCurrency;
+    const changes = buildEditChanges(current, updated, ["clientName", "phone", "passport", "plannedCheckOut", "paymentType", "currency", "finalAmount", "realPaidAmount", "overtimePaymentType", "note"]);
+    if (body.overtimeAmount !== undefined && Number(current.overtimeAmount || 0) !== Number(updated.overtimeAmount || 0)) {
+      changes[changeLabels.overtimeAmount] = {
+        old: formatChangeMoney(current.overtimeAmount, currentOvertimeCurrency),
+        next: formatChangeMoney(updated.overtimeAmount, nextOvertimeCurrency),
+      };
+    }
+    if (body.overtimeCurrency !== undefined && body.overtimeCurrency !== currentOvertimeCurrency) {
+      changes["Qo'shimcha valyuta"] = {
+        old: currentOvertimeCurrency,
+        next: body.overtimeCurrency,
+      };
+    }
     if (itemChanged) changes[changeLabels.items] = { old: "oldingi", next: "yangilandi" };
     await audit({ tx, branchId: current.branchId, userId: user.id, entityType: "Order", entityId: id, action: "ORDER_EDIT", oldValue: current, newValue: updated, description: "Order edited" });
     return { updated, changes };
