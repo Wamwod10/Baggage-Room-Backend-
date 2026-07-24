@@ -3,8 +3,8 @@ const { branchWhere, getScopedBranchId } = require("../utils/scope");
 const { dateRangeWhere, formatTashkentDateKey, getTashkentParts, startOfToday } = require("../utils/date");
 const { sum, byKeySum, byCurrency, subtractCurrencyMaps } = require("../utils/money");
 const { markDelayedOrders } = require("./order.service");
-const { computeShiftReport } = require("./shift.service");
-const { summarizeMovements, sumCurrencyMaps } = require("./cashAccounting.service");
+const { computeShiftReport, normalizeCurrencyMap } = require("./shift.service");
+const { summarizeMovements, sumCurrencyMaps, cashBalanceByCurrency } = require("./cashAccounting.service");
 
 const asNumber = (value) => Number(value || 0);
 const dayKey = (date) => formatTashkentDateKey(date);
@@ -25,6 +25,101 @@ const paymentCurrencyBreakdown = (movements = []) =>
     result[paymentType] = byCurrency(movements.filter((item) => aliases.includes(item.paymentType)));
     return result;
   }, {});
+
+const groupByValue = (items, keySelector) =>
+  items.reduce((acc, item) => {
+    const key = keySelector(item);
+    if (!key) return acc;
+    if (!acc[key]) acc[key] = [];
+    acc[key].push(item);
+    return acc;
+  }, {});
+
+const isBetweenDates = (value, start, end) => {
+  const time = new Date(value).getTime();
+  return time >= new Date(start).getTime() && time <= new Date(end).getTime();
+};
+
+const buildShiftReports = ({ shifts, movements, debts, orders, now = new Date() }) => {
+  const movementsByShiftId = groupByValue(movements, (item) => item.shiftId);
+
+  return shifts.map((shift) => {
+    const reportEnd = shift.closedAt || now;
+    const shiftDebts = debts.filter(
+      (item) =>
+        item.branchId === shift.branchId &&
+        isBetweenDates(item.createdAt, shift.openedAt, reportEnd),
+    );
+    const openDebts = shiftDebts.filter((item) => item.status === "OPEN");
+    const ordersCount = orders.filter(
+      (item) =>
+        item.branchId === shift.branchId &&
+        isBetweenDates(item.createdAt, shift.openedAt, reportEnd),
+    ).length;
+
+    const summary = summarizeMovements(movementsByShiftId[shift.id] || []);
+    const salaryMovements = summary.groups.expenses.filter((movement) =>
+      movement.type === "EXPENSE" && String(movement.note || "").startsWith("Oylik:"),
+    );
+    const revenueByCurrency = summary.revenueByCurrency;
+    const cashByCurrency = summary.cashByCurrency;
+    const terminalByCurrency = summary.terminalByCurrency;
+    const clickByCurrency = summary.clickByCurrency;
+    const paymeByCurrency = summary.paymeByCurrency;
+    const expenseByCurrency = summary.expenseByCurrency;
+    const salaryByCurrency = byCurrency(salaryMovements);
+    const inkassaByCurrency = summary.inkassaByCurrency;
+    const debtByCurrency = byCurrency(openDebts);
+    const openingCashByCurrency = normalizeCurrencyMap(shift.openingCashByCurrency, shift.openingCash);
+    const acceptedCashByCurrency = normalizeCurrencyMap(shift.acceptedCashByCurrency, shift.acceptedCash);
+    const balanceByCurrency = cashBalanceByCurrency({
+      openingCashByCurrency,
+      acceptedCashByCurrency,
+      cashRevenueByCurrency: cashByCurrency,
+      expenseByCurrency,
+      inkassaByCurrency,
+      manualInByCurrency: summary.manualInByCurrency,
+      manualOutByCurrency: summary.manualOutByCurrency,
+    });
+    const totalRevenue = revenueByCurrency.UZS;
+    const terminalRevenue = terminalByCurrency.UZS;
+
+    return {
+      ...shift,
+      totalRevenue,
+      cashRevenue: cashByCurrency.UZS,
+      cardRevenue: terminalRevenue,
+      terminalRevenue,
+      clickRevenue: clickByCurrency.UZS,
+      paymeRevenue: paymeByCurrency.UZS,
+      transferRevenue: summary.transferByCurrency.UZS,
+      debtAmount: debtByCurrency.UZS,
+      expenseAmount: expenseByCurrency.UZS,
+      salaryAmount: salaryByCurrency.UZS,
+      inkassaAmount: inkassaByCurrency.UZS,
+      systemExpectedCash: balanceByCurrency.UZS,
+      ordersCount,
+      openingCashByCurrency,
+      acceptedCashByCurrency,
+      revenueByCurrency,
+      cashByCurrency,
+      terminalByCurrency,
+      clickByCurrency,
+      paymeByCurrency,
+      expenseByCurrency,
+      salaryByCurrency,
+      inkassaByCurrency,
+      debtByCurrency,
+      cashBalanceByCurrency: balanceByCurrency,
+      paymentByCurrency: {
+        CASH: cashByCurrency,
+        TERMINAL: terminalByCurrency,
+        CLICK: clickByCurrency,
+        PAYME: paymeByCurrency,
+      },
+    };
+  });
+};
 
 const buildBranchSummary = ({ branches, orders, lockers, movements }) =>
   branches.map((branch) => {
@@ -151,30 +246,61 @@ const reports = async (user, query) => {
   const range = dateRangeWhere(query.dateFrom, query.dateTo);
   const shiftRange = dateRangeWhere(query.dateFrom, query.dateTo, "openedAt");
   const [movements, orders, lockers, debts, auditLogs, shifts, expenses, inkassa, branches] = await Promise.all([
-    prisma.cashMovement.findMany({ where: { ...scope, ...range }, include: { branch: true, createdBy: { select: { id: true, name: true, login: true } } } }),
+    prisma.cashMovement.findMany({
+      where: { ...scope, ...range },
+      include: { branch: { select: { id: true, name: true } }, createdBy: { select: { id: true, name: true, login: true } } },
+    }),
     prisma.order.findMany({
       where: { ...scope, ...range },
-      include: { branch: true, items: true, createdBy: { select: { id: true, name: true, login: true } } },
+      select: {
+        id: true,
+        branchId: true,
+        status: true,
+        createdAt: true,
+        items: { select: { size: true, count: true, finalPrice: true } },
+      },
     }),
-    prisma.locker.findMany({ where: scope, include: { branch: true } }),
+    prisma.locker.findMany({ where: scope, select: { id: true, branchId: true, status: true } }),
     prisma.debt.findMany({ where: { ...scope, ...range } }),
-    prisma.auditLog.findMany({ where: { ...scope, ...range }, include: { user: { select: { id: true, name: true, login: true } } }, orderBy: { createdAt: "desc" }, take: 200 }),
+    Promise.resolve([]),
     prisma.shift.findMany({
       where: { ...scope, ...shiftRange },
-      include: { branch: true, openedBy: { select: { id: true, name: true, login: true } } },
+      select: {
+        id: true,
+        branchId: true,
+        openedById: true,
+        openingCash: true,
+        acceptedCash: true,
+        openingCashByCurrency: true,
+        acceptedCashByCurrency: true,
+        openedAt: true,
+        closedAt: true,
+        status: true,
+        branch: { select: { id: true, name: true, code: true } },
+        openedBy: { select: { id: true, name: true, login: true } },
+      },
       orderBy: { openedAt: "desc" },
     }),
-    prisma.expense.findMany({ where: { ...scope, ...range }, include: { branch: true, createdBy: { select: { id: true, name: true, login: true } } } }),
-    prisma.inkassa.findMany({ where: { ...scope, ...range }, include: { branch: true, createdBy: { select: { id: true, name: true, login: true } } } }),
-    prisma.branch.findMany({ where: scope.branchId ? { id: scope.branchId } : {}, orderBy: { name: "asc" } }),
+    prisma.expense.findMany({ where: { ...scope, ...range }, select: { id: true, branchId: true, category: true, amount: true, currency: true, createdAt: true } }),
+    prisma.inkassa.findMany({ where: { ...scope, ...range }, select: { id: true, branchId: true, amount: true, currency: true, createdAt: true } }),
+    prisma.branch.findMany({ where: scope.branchId ? { id: scope.branchId } : {}, select: { id: true, name: true, code: true }, orderBy: { name: "asc" } }),
   ]);
 
-  const shiftsWithReports = await Promise.all(
-    shifts.map(async (shift) => {
-      const { ordersCount, ...report } = await computeShiftReport(prisma, shift);
-      return { ...shift, ...report, ordersCount };
-    }),
-  );
+  const reportNow = new Date();
+  const shiftIds = shifts.map((shift) => shift.id);
+  let shiftsWithReports = [];
+
+  if (shiftIds.length) {
+    const shiftIdSet = new Set(shiftIds);
+
+    shiftsWithReports = buildShiftReports({
+      shifts,
+      movements: movements.filter((movement) => shiftIdSet.has(movement.shiftId)),
+      debts,
+      orders,
+      now: reportNow,
+    });
+  }
 
   const movementSummary = summarizeMovements(movements);
   const inMovements = movementSummary.groups.revenueIn;
@@ -363,10 +489,10 @@ const reports = async (user, query) => {
       inkassa: totalInkassa,
     },
     branchRanking: branchComparison.slice().sort((a, b) => b.score - a.score || b.revenue - a.revenue),
-    cashMovement: movements,
-    expenses,
-    inkassa,
-    shifts: shiftsWithReports,
+    cashMovement: [],
+    expenses: [],
+    inkassa: [],
+    shifts: [],
     peakHours,
     adminActivity: auditLogs,
   };
