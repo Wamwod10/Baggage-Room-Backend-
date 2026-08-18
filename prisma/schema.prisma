@@ -146,6 +146,7 @@ model Locker {
   @@unique([branchId, number])
   @@index([branchId])
   @@index([status])
+  @@index([branchId, status])
 }
 
 model Tariff {
@@ -212,6 +213,12 @@ model Order {
   @@index([status])
   @@index([createdAt])
   @@index([phone])
+  @@index([branchId, createdAt])
+  @@index([branchId, status, createdAt])
+  @@index([branchId, status, plannedCheckOut])
+  @@index([status, plannedCheckOut])
+  @@index([branchId, paymentType, createdAt])
+  @@index([branchId, orderNumber])
 }
 
 model OrderItem {
@@ -275,6 +282,7 @@ model Shift {
   @@index([branchId])
   @@index([status])
   @@index([openedAt])
+  @@index([branchId, status, openedAt])
 }
 
 model Expense {
@@ -333,7 +341,11 @@ model CashMovement {
 
   @@index([branchId])
   @@index([shiftId])
+  @@index([orderId])
   @@index([createdAt])
+  @@index([branchId, createdAt])
+  @@index([branchId, type, createdAt])
+  @@index([shiftId, createdAt])
 }
 
 model Debt {
@@ -355,6 +367,7 @@ model Debt {
   @@index([branchId])
   @@index([phone])
   @@index([status])
+  @@index([branchId, status, createdAt])
 }
 
 model AuditLog {

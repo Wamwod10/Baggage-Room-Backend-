@@ -48,11 +48,12 @@ const closeDebt = async (user, id, body) => {
     if (!paymentType) throw new AppError("paymentType is required", 400);
     const shift = await findOpenShift(tx, debt.branchId);
 
-    const updated = await tx.debt.update({
-      where: { id },
+    const closed = await tx.debt.updateMany({
+      where: { id, status: "OPEN" },
       data: { status: "CLOSED", closedAt: new Date(), closedById: user.id },
-      include: includeDebt,
     });
+    if (closed.count === 0) throw new AppError("Debt is already closed", 409);
+    const updated = await tx.debt.findUnique({ where: { id }, include: includeDebt });
     await createCashMovement({
       tx,
       branchId: debt.branchId,

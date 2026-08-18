@@ -15,7 +15,8 @@ const { findOpenShift, createCashMovement } = require("./cashMovement.service");
 const { computeShiftReport, normalizeCurrencyMap } = require("./shift.service");
 const telegram = require("./telegram.service");
 const googleSheets = require("./googleSheets.service");
-const { paginated } = require("../utils/pagination");
+const { getPagination } = require("../utils/pagination");
+const { createTimer } = require("../utils/perf");
 const { normalizePaymentType, paymentLabel } = require("../utils/payment");
 const {
   overtimeHoursAfterGrace,
@@ -43,6 +44,126 @@ const includeOrder = {
     orderBy: { createdAt: "asc" },
   },
   debt: true,
+};
+
+const listOrderSelect = {
+  id: true,
+  orderNumber: true,
+  branchId: true,
+  clientName: true,
+  phone: true,
+  passport: true,
+  status: true,
+  tariffHours: true,
+  customHours: true,
+  currency: true,
+  paymentType: true,
+  calculatedAmount: true,
+  discountAmount: true,
+  finalAmount: true,
+  realPaidAmount: true,
+  paymentDifference: true,
+  overtimeHours: true,
+  overtimeAmount: true,
+  overtimePaymentType: true,
+  checkIn: true,
+  plannedCheckOut: true,
+  realPickupTime: true,
+  note: true,
+  cancelReason: true,
+  createdAt: true,
+  updatedAt: true,
+};
+
+const orderSortFields = {
+  createdAt: "createdAt",
+  updatedAt: "updatedAt",
+  checkIn: "checkIn",
+  plannedCheckOut: "plannedCheckOut",
+  orderNumber: "orderNumber",
+  status: "status",
+  paymentType: "paymentType",
+  finalAmount: "finalAmount",
+  realPaidAmount: "realPaidAmount",
+};
+
+const parseStatuses = (query = {}) => {
+  const raw = query.statuses || query.status;
+  if (!raw) return [];
+  return String(raw)
+    .split(",")
+    .map((item) => item.trim().toUpperCase())
+    .filter(Boolean);
+};
+
+const isTruthyQuery = (value) => /^(1|true|yes)$/i.test(String(value || ""));
+
+const orderListOrderBy = (query = {}) => {
+  const sortBy = orderSortFields[query.sortBy] || "createdAt";
+  const sortOrder = String(query.sortOrder || "desc").toLowerCase() === "asc" ? "asc" : "desc";
+  return sortBy === "createdAt"
+    ? [{ createdAt: sortOrder }, { id: sortOrder }]
+    : [{ [sortBy]: sortOrder }, { createdAt: "desc" }, { id: "desc" }];
+};
+
+const hydrateListOrders = async (orders, timer) => {
+  if (!orders.length) return [];
+  const orderIds = orders.map((order) => order.id);
+  const branchIds = [...new Set(orders.map((order) => order.branchId).filter(Boolean))];
+  const [branches, items, debts] = await timer.time("orders.db.relations", () =>
+    Promise.all([
+      prisma.branch.findMany({
+        where: { id: { in: branchIds } },
+        select: { id: true, name: true, code: true },
+      }),
+      prisma.orderItem.findMany({
+        where: { orderId: { in: orderIds } },
+        select: {
+          id: true,
+          orderId: true,
+          lockerId: true,
+          lockerNumber: true,
+          size: true,
+          count: true,
+          unitPrice: true,
+          originalPrice: true,
+          discountAmount: true,
+          finalPrice: true,
+          currency: true,
+        },
+      }),
+      prisma.debt.findMany({
+        where: { orderId: { in: orderIds } },
+        select: {
+          id: true,
+          orderId: true,
+          amount: true,
+          currency: true,
+          status: true,
+        },
+      }),
+    ]),
+  );
+  const branchesById = new Map(branches.map((branch) => [branch.id, branch]));
+  const debtsByOrderId = new Map(debts.map((debt) => [debt.orderId, debt]));
+  const itemsByOrderId = items.reduce((map, item) => {
+    const current = map.get(item.orderId) || [];
+    const { orderId, ...itemData } = item;
+    current.push(itemData);
+    map.set(orderId, current);
+    return map;
+  }, new Map());
+
+  for (const itemList of itemsByOrderId.values()) {
+    itemList.sort((a, b) => Number(a.lockerNumber || 0) - Number(b.lockerNumber || 0));
+  }
+
+  return orders.map((order) => ({
+    ...order,
+    branch: branchesById.get(order.branchId) || null,
+    items: itemsByOrderId.get(order.id) || [],
+    debt: debtsByOrderId.get(order.id) || null,
+  }));
 };
 
 const telegramReasonText = {
@@ -301,6 +422,11 @@ const normalizeTelegramResult = (result = {}) => {
   };
 };
 
+const ensureSingleStatusTransition = async ({ model, where, data, errorMessage }) => {
+  const updated = await model.updateMany({ where, data });
+  if (updated.count === 0) throw new AppError(errorMessage, 409);
+};
+
 const sendNewOrderTelegram = async (order, meta = {}) => {
   const result = await telegram.sendSafely(
     () => telegram.sendNewOrder(order),
@@ -343,22 +469,56 @@ const normalizeOrderItems = (body) => {
 };
 
 const listOrders = async (user, query) => {
+  const timer = createTimer("orders.list", {
+    page: Number(query.page || 1),
+    limit: Number(query.limit || 50),
+  });
+  const statuses = parseStatuses(query);
   const where = {
     ...branchWhere(user, query.branchId),
     ...dateRangeWhere(query.dateFrom, query.dateTo),
-    ...(query.status ? { status: query.status } : {}),
+    ...(statuses.length === 1 ? { status: statuses[0] } : {}),
+    ...(statuses.length > 1 ? { status: { in: statuses } } : {}),
     ...(query.paymentType ? { paymentType: query.paymentType } : {}),
     ...(query.currency ? { currency: query.currency } : {}),
   };
-  if (query.search) {
+  if (isTruthyQuery(query.active)) {
     where.OR = [
+      { status: { in: ["ACTIVE", "DELAYED"] } },
+      { debt: { is: { status: "OPEN" } } },
+    ];
+  }
+  if (isTruthyQuery(query.debtOnly)) {
+    where.debt = { is: { status: "OPEN" } };
+  }
+  if (query.search) {
+    const searchWhere = [
       { orderNumber: { contains: query.search, mode: "insensitive" } },
       { clientName: { contains: query.search, mode: "insensitive" } },
       { phone: { contains: query.search, mode: "insensitive" } },
       { passport: { contains: query.search, mode: "insensitive" } },
     ];
+    where.AND = [...(where.AND || []), { OR: searchWhere }];
   }
-  return paginated(prisma.order, { where, include: includeOrder, orderBy: { createdAt: "desc" }, query });
+  const { page, limit, skip } = getPagination(query);
+  const [orders, total] = await Promise.all([
+    timer.time("orders.db.findMany", () =>
+      prisma.order.findMany({ where, select: listOrderSelect, orderBy: orderListOrderBy(query), skip, take: limit }),
+    ),
+    timer.time("orders.db.count", () => prisma.order.count({ where })),
+  ]);
+  const items = await hydrateListOrders(orders, timer);
+  const result = {
+    items,
+    pagination: {
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit),
+    },
+  };
+  timer.end({ rows: items.length, total });
+  return result;
 };
 
 const getOrder = async (user, id) => {
@@ -803,8 +963,9 @@ const pickupOrder = async (user, id, body) => {
     if (Number(body.debtPaidAmount || 0) > 0 && !debtPaymentType) {
       throw new AppError("paymentType is required", 400);
     }
-    let updated = await tx.order.update({
-      where: { id },
+    await ensureSingleStatusTransition({
+      model: tx.order,
+      where: { id, status: { in: ["ACTIVE", "DELAYED"] } },
       data: {
         status: "PICKED_UP",
         realPickupTime: pickupTime,
@@ -813,8 +974,8 @@ const pickupOrder = async (user, id, body) => {
         overtimeAmount,
         overtimePaymentType: overtimeAmount > 0 ? overtimePaymentType : null,
       },
-      include: includeOrder,
     });
+    let updated = await tx.order.findUnique({ where: { id }, include: includeOrder });
 
     await tx.locker.updateMany({ where: { currentOrderId: id }, data: { status: "EMPTY", currentOrderId: null } });
     const shift = await findOpenShift(tx, order.branchId);
@@ -977,11 +1138,12 @@ const cancelOrder = async (user, id, body) => {
     const order = await tx.order.findUnique({ where: { id }, include: includeOrder });
     if (!order || !["ACTIVE", "DELAYED"].includes(order.status)) throw new AppError("Active order not found", 404);
     getScopedBranchId(user, order.branchId);
-    const updated = await tx.order.update({
-      where: { id },
+    await ensureSingleStatusTransition({
+      model: tx.order,
+      where: { id, status: { in: ["ACTIVE", "DELAYED"] } },
       data: { status: "CANCELLED", cancelledById: user.id, cancelReason: body.cancelReason || body.reason || null },
-      include: includeOrder,
     });
+    const updated = await tx.order.findUnique({ where: { id }, include: includeOrder });
     await tx.locker.updateMany({ where: { currentOrderId: id }, data: { status: "EMPTY", currentOrderId: null } });
     if (order.debt?.status === "OPEN") {
       await tx.debt.update({

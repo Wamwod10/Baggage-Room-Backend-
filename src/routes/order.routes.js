@@ -15,7 +15,24 @@ const orderItem = z.object({
 
 router.get(
   "/",
-  validate(z.object({ query: z.object({ branchId: z.string().optional(), dateFrom: z.string().optional(), dateTo: z.string().optional(), status: orderStatus.optional(), paymentType: paymentType.optional(), currency: currency.optional(), search: z.string().optional(), page: z.coerce.number().int().positive().optional(), limit: z.coerce.number().int().positive().max(200).optional() }) })),
+  validate(z.object({
+    query: z.object({
+      branchId: z.string().optional(),
+      dateFrom: z.string().optional(),
+      dateTo: z.string().optional(),
+      status: orderStatus.optional(),
+      statuses: z.string().optional(),
+      paymentType: paymentType.optional(),
+      currency: currency.optional(),
+      search: z.string().optional(),
+      active: z.string().optional(),
+      debtOnly: z.string().optional(),
+      sortBy: z.enum(["createdAt", "updatedAt", "checkIn", "plannedCheckOut", "orderNumber", "status", "paymentType", "finalAmount", "realPaidAmount"]).optional(),
+      sortOrder: z.enum(["asc", "desc"]).optional(),
+      page: z.coerce.number().int().positive().optional(),
+      limit: z.coerce.number().int().positive().max(200).optional(),
+    }),
+  })),
   orderController.list
 );
 router.get("/:id", validate(idParam), orderController.get);
