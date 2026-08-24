@@ -5,6 +5,7 @@ const cors = require("cors");
 const helmet = require("helmet");
 const morgan = require("morgan");
 const rateLimit = require("express-rate-limit");
+const prisma = require("./config/prisma");
 const authMiddleware = require("./middleware/auth.middleware");
 const { notFound, errorMiddleware } = require("./middleware/error.middleware");
 
@@ -28,6 +29,13 @@ const systemRoutes = require("./routes/system.routes");
 const googleSheetsRoutes = require("./routes/googleSheets.routes");
 
 const app = express();
+const perfLoggingEnabled = /^(1|true|yes)$/i.test(String(process.env.PERF_LOG || ""));
+const isDevelopment = process.env.NODE_ENV === "development";
+const parseEnvInt = (name, fallback, min, max) => {
+  const value = Number.parseInt(process.env[name] || "", 10);
+  if (!Number.isInteger(value)) return fallback;
+  return Math.min(max, Math.max(min, value));
+};
 
 const productionFrontendOrigins = [
   "https://qonoqbaggage.uz",
@@ -71,23 +79,53 @@ app.use(express.urlencoded({ extended: true }));
 app.use(
   rateLimit({
     windowMs: 15 * 60 * 1000,
-    limit: Number(process.env.API_RATE_LIMIT_MAX || 3000),
+    limit: parseEnvInt("API_RATE_LIMIT_MAX", 3000, 100, 100000),
     standardHeaders: true,
     legacyHeaders: false,
-    skip: (req) => req.method === "OPTIONS" || req.path === "/health",
+    skip: (req) => req.method === "OPTIONS" || req.path === "/health" || req.path === "/ready",
     message: {
       success: false,
       message: "Juda ko'p so'rov yuborildi. Iltimos, birozdan keyin qayta urinib ko'ring.",
     },
   })
 );
+
+const productionMorganFormat = (tokens, req, res) => [
+  tokens.method(req),
+  req.path,
+  tokens.status(req, res),
+  `${tokens["response-time"](req, res)} ms`,
+].join(" ");
+
 app.use(
-  morgan(process.env.NODE_ENV === "production" ? "combined" : "dev", {
-    skip: (req) => req.path.startsWith("/api/auth/login"),
-  })
+  morgan(
+    isDevelopment ? "dev" : productionMorganFormat,
+    {
+      skip: (req) => req.path.startsWith("/api/auth/login")
+        || req.path === "/health"
+        || req.path === "/ready"
+        || (!isDevelopment && !perfLoggingEnabled),
+    },
+  )
 );
 
 app.get("/health", (_req, res) => res.json({ success: true, data: { status: "ok" } }));
+app.get("/ready", async (_req, res) => {
+  let timeoutId = null;
+  try {
+    await Promise.race([
+      prisma.$queryRaw`SELECT 1`,
+      new Promise((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error("Database readiness timeout")), 4000);
+      }),
+    ]);
+    return res.json({ success: true, data: { status: "ready" } });
+  } catch {
+    return res.status(503).json({ success: false, data: { status: "not_ready" } });
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+});
 app.use("/api/auth", authRoutes);
 
 app.use(authMiddleware);

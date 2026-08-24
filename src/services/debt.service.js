@@ -76,17 +76,6 @@ const closeDebt = async (user, id, body) => {
       },
     });
     await audit({ tx, branchId: debt.branchId, userId: user.id, entityType: "Debt", entityId: id, action: "DEBT_CLOSE", oldValue: debt, newValue: updated, description: "Debt closed" });
-    telegram.sendSafely(
-      () => telegram.sendDebtClosed({
-        ...updated,
-        paidAmount,
-        paymentType,
-        currency: body.currency || debt.currency,
-        closedBy: updated.closedBy || user,
-        paidAt: updated.closedAt,
-      }),
-      { action: "DEBT_CLOSED", branchId: debt.branchId, userId: user.id, entityType: "Debt", entityId: id },
-    );
     return {
       ...updated,
       paidAmount,
@@ -94,6 +83,10 @@ const closeDebt = async (user, id, body) => {
       currency: body.currency || debt.currency,
     };
   });
+  telegram.sendSafely(
+    () => telegram.sendDebtClosed({ ...result, closedBy: result.closedBy || user, paidAt: result.closedAt }),
+    { action: "DEBT_CLOSED", branchId: result.branchId, userId: user.id, entityType: "Debt", entityId: id },
+  );
   googleSheets.sendSafely(
     () => googleSheets.sendDebtPayment(result, { amount: result.paidAmount, paymentType: result.paymentType, currency: result.currency }),
     { action: "DEBT_PAYMENT", branchId: result.branchId, userId: user.id, entityType: "DebtPayment", entityId: `${id}:${result.closedAt?.getTime?.() || Date.now()}` },

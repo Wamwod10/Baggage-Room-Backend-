@@ -58,8 +58,8 @@ const sendRaw = async (setting, text, { requireEnabled = true } = {}) => {
     clearTimeout(timeout);
   }
   if (!response.ok) {
-    const body = await response.text();
-    throw new AppError(`Telegram send failed: ${body}`, 502);
+    await response.text().catch(() => "");
+    throw new AppError(`Telegram send failed: HTTP ${response.status}`, 502);
   }
   return response.json();
 };

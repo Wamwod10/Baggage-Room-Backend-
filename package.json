@@ -12,6 +12,8 @@
     "test:sheets:real": "node scripts/googleSheetsRealMappingTest.js",
     "test:sheets:months": "node scripts/googleSheetsMonthSheetCheck.js",
     "test:sheets:inkassa:real": "node scripts/googleSheetsInkassaRealTest.js",
+    "load:test": "node scripts/productionLoadTest.js",
+    "db:readiness": "node --require dotenv/config scripts/productionDbSnapshot.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:deploy": "prisma migrate deploy",
@@ -20,8 +22,8 @@
     "reset:data": "node scripts/resetProductionData.js"
   },
   "dependencies": {
-    "@prisma/adapter-pg": "^7.8.0",
-    "@prisma/client": "^6.9.0",
+    "@prisma/adapter-pg": "^6.19.3",
+    "@prisma/client": "^6.19.3",
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.5",
     "dotenv": "^16.5.0",
@@ -35,7 +37,7 @@
   },
   "devDependencies": {
     "nodemon": "^3.1.10",
-    "prisma": "^6.9.0"
+    "prisma": "^6.19.3"
   },
   "engines": {
     "node": "20.x"

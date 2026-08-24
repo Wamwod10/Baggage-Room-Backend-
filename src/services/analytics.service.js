@@ -2,7 +2,6 @@ const prisma = require("../config/prisma");
 const { branchWhere, getScopedBranchId } = require("../utils/scope");
 const { dateRangeWhere, formatTashkentDateKey, getTashkentParts, startOfToday } = require("../utils/date");
 const { sum, byKeySum, byCurrency, subtractCurrencyMaps } = require("../utils/money");
-const { markDelayedOrders } = require("./order.service");
 const { computeShiftReport, normalizeCurrencyMap } = require("./shift.service");
 const { summarizeMovements, sumCurrencyMaps, cashBalanceByCurrency } = require("./cashAccounting.service");
 
@@ -150,7 +149,6 @@ const buildBranchSummary = ({ branches, orders, lockers, movements }) =>
 
 const dashboard = async (user, query) => {
   const scopedBranchId = getScopedBranchId(user, query.branchId);
-  await markDelayedOrders(scopedBranchId);
   const scope = scopedBranchId ? { branchId: scopedBranchId } : {};
   const branchScope = scopedBranchId ? { id: scopedBranchId } : {};
   const today = startOfToday();
@@ -163,20 +161,21 @@ const dashboard = async (user, query) => {
     lockers,
     delayedOrders,
     cancelledOrders,
-    inkassa,
     shifts,
     branches,
     todayOrders,
   ] = await Promise.all([
-    prisma.cashMovement.findMany({ where: { ...scope, createdAt: { gte: today } } }),
+    prisma.cashMovement.findMany({
+      where: { ...scope, createdAt: { gte: today } },
+      select: { branchId: true, type: true, direction: true, amount: true, currency: true, paymentType: true, createdAt: true },
+    }),
     prisma.order.count({ where: { ...scope, status: { in: ["ACTIVE", "DELAYED"] } } }),
     prisma.order.count({ where: scope }),
     prisma.order.count({ where: { ...scope, createdAt: { gte: today } } }),
-    prisma.debt.findMany({ where: { ...scope, status: "OPEN" } }),
-    prisma.locker.findMany({ where: scope, include: { branch: { select: { id: true, name: true, code: true } } } }),
+    prisma.debt.findMany({ where: { ...scope, status: "OPEN" }, select: { amount: true, currency: true } }),
+    prisma.locker.findMany({ where: scope, select: { branchId: true, status: true } }),
     prisma.order.count({ where: { ...scope, status: "DELAYED" } }),
     prisma.order.count({ where: { ...scope, status: "CANCELLED" } }),
-    prisma.inkassa.findMany({ where: { ...scope, createdAt: { gte: today } } }),
     prisma.shift.findMany({ where: { ...scope, status: "OPEN" }, include: { branch: { select: { id: true, name: true } } } }),
     prisma.branch.findMany({ where: branchScope, orderBy: { name: "asc" } }),
     prisma.order.findMany({ where: { ...scope, createdAt: { gte: today } }, select: { id: true, branchId: true, status: true } }),
@@ -248,7 +247,19 @@ const reports = async (user, query) => {
   const [movements, orders, lockers, debts, auditLogs, shifts, expenses, inkassa, branches] = await Promise.all([
     prisma.cashMovement.findMany({
       where: { ...scope, ...range },
-      include: { branch: { select: { id: true, name: true } }, createdBy: { select: { id: true, name: true, login: true } } },
+      select: {
+        branchId: true,
+        shiftId: true,
+        type: true,
+        direction: true,
+        amount: true,
+        currency: true,
+        paymentType: true,
+        note: true,
+        createdAt: true,
+        branch: { select: { id: true, name: true } },
+        createdBy: { select: { id: true, name: true, login: true } },
+      },
     }),
     prisma.order.findMany({
       where: { ...scope, ...range },
@@ -261,7 +272,7 @@ const reports = async (user, query) => {
       },
     }),
     prisma.locker.findMany({ where: scope, select: { id: true, branchId: true, status: true } }),
-    prisma.debt.findMany({ where: { ...scope, ...range } }),
+    prisma.debt.findMany({ where: { ...scope, ...range }, select: { branchId: true, amount: true, currency: true, status: true, createdAt: true } }),
     Promise.resolve([]),
     prisma.shift.findMany({
       where: { ...scope, ...shiftRange },

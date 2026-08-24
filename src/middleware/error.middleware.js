@@ -3,7 +3,7 @@ const { fail } = require("../utils/response");
 const logger = require("../utils/logger");
 
 const notFound = (req, _res, next) => {
-  const error = new Error(`Route not found: ${req.method} ${req.originalUrl}`);
+  const error = new Error(`Route not found: ${req.method} ${req.path}`);
   error.statusCode = 404;
   next(error);
 };
@@ -24,9 +24,13 @@ const errorMiddleware = (err, _req, res, _next) => {
     errors = [{ code: err.code, meta: err.meta }];
   }
 
-  if (process.env.NODE_ENV !== "production") {
-    logger.error("Request failed", { message, stack: err.stack });
-  }
+  logger.error("Request failed", {
+    method: _req.method,
+    path: _req.path,
+    statusCode,
+    message,
+    ...(process.env.NODE_ENV !== "production" ? { stack: err.stack } : {}),
+  });
 
   return fail(res, message, statusCode, errors);
 };

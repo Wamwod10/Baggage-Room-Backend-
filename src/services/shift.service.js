@@ -89,20 +89,26 @@ const openShift = async (user, body) => {
   if (existing) throw new AppError("This branch already has an open shift", 400);
   const openingCashByCurrency = normalizeCurrencyMap(body.openingCashByCurrency, body.openingCash);
   const acceptedCashByCurrency = normalizeCurrencyMap(body.acceptedCashByCurrency, body.acceptedCash);
-  const shift = await prisma.shift.create({
-    data: {
-      branchId,
-      openedById: user.id,
-      openingCash: openingCashByCurrency.UZS,
-      acceptedCash: acceptedCashByCurrency.UZS,
-      openingCashByCurrency,
-      acceptedCashByCurrency,
-      acceptedFromName: body.acceptedFromName || null,
-      acceptedByName: body.acceptedByName || null,
-      handoverToName: body.handoverToName || null,
-    },
-    include,
-  });
+  let shift;
+  try {
+    shift = await prisma.shift.create({
+      data: {
+        branchId,
+        openedById: user.id,
+        openingCash: openingCashByCurrency.UZS,
+        acceptedCash: acceptedCashByCurrency.UZS,
+        openingCashByCurrency,
+        acceptedCashByCurrency,
+        acceptedFromName: body.acceptedFromName || null,
+        acceptedByName: body.acceptedByName || null,
+        handoverToName: body.handoverToName || null,
+      },
+      include,
+    });
+  } catch (error) {
+    if (error?.code === "P2002") throw new AppError("This branch already has an open shift", 409);
+    throw error;
+  }
   await audit({ branchId, userId: user.id, entityType: "Shift", entityId: shift.id, action: "SHIFT_OPEN", newValue: shift, description: "Shift opened" });
   const result = { ...shift, openingCashByCurrency, acceptedCashByCurrency };
   telegram.sendSafely(() => telegram.sendShiftOpen(result), { action: "SHIFT_OPEN", branchId, userId: user.id, entityType: "Shift", entityId: shift.id });
@@ -110,10 +116,12 @@ const openShift = async (user, body) => {
 };
 
 const computeShiftReport = async (tx, shift) => {
-  const movements = await tx.cashMovement.findMany({ where: { shiftId: shift.id } });
   const reportEnd = shift.closedAt || new Date();
-  const debts = await tx.debt.findMany({ where: { branchId: shift.branchId, createdAt: { gte: shift.openedAt, lte: reportEnd } } });
-  const ordersCount = await tx.order.count({ where: { branchId: shift.branchId, createdAt: { gte: shift.openedAt, lte: reportEnd } } });
+  const [movements, debts, ordersCount] = await Promise.all([
+    tx.cashMovement.findMany({ where: { shiftId: shift.id } }),
+    tx.debt.findMany({ where: { branchId: shift.branchId, createdAt: { gte: shift.openedAt, lte: reportEnd } } }),
+    tx.order.count({ where: { branchId: shift.branchId, createdAt: { gte: shift.openedAt, lte: reportEnd } } }),
+  ]);
 
   const openDebts = debts.filter((item) => item.status === "OPEN");
   const summary = summarizeMovements(movements);
@@ -258,8 +266,8 @@ const closeShift = async (user, id, body) => {
       Number(closingCashByCurrency[currency] || 0) - Number(report.cashBalanceByCurrency[currency] || 0),
     ]));
     const closingCash = closingCashByCurrency.UZS;
-    const updated = await tx.shift.update({
-      where: { id },
+    const updatedWrite = await tx.shift.updateMany({
+      where: { id, status: "OPEN" },
       data: {
         totalRevenue: report.totalRevenue,
         cashRevenue: report.cashRevenue,
@@ -281,8 +289,9 @@ const closeShift = async (user, id, body) => {
         status: "CLOSED",
         handoverToName: body.handoverToName || shift.handoverToName,
       },
-      include,
     });
+    if (updatedWrite.count !== 1) throw new AppError("Bu smena boshqa operator tomonidan yopildi", 409);
+    const updated = await tx.shift.findUnique({ where: { id }, include });
     const result = { ...updated, ...report, closingCashByCurrency, differenceByCurrency, salaryAmount: reportSalaryAmount, ordersCount, salaryReceiver: salaryAmount > 0 ? salaryReceiver : null };
     await audit({ tx, branchId: shift.branchId, userId: user.id, entityType: "Shift", entityId: id, action: "SHIFT_CLOSE", oldValue: shift, newValue: result, description: "Shift closed" });
     return result;

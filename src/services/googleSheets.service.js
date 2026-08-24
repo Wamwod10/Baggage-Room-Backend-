@@ -5,7 +5,10 @@ const { formatAdminName } = require("../utils/displayName");
 const { normalizeCurrencyAmount } = require("../utils/money");
 const sheetMapper = require("../../scripts/googleSheetsAppsScript");
 
-const TIMEOUT_MS = Number(process.env.GOOGLE_SHEETS_TIMEOUT_MS || 15000);
+const configuredTimeout = Number.parseInt(process.env.GOOGLE_SHEETS_TIMEOUT_MS || "", 10);
+const TIMEOUT_MS = Number.isInteger(configuredTimeout)
+  ? Math.min(Math.max(configuredTimeout, 1000), 120000)
+  : 15000;
 const EXPECTED_SCRIPT_VERSION = sheetMapper.SCRIPT_VERSION;
 const EXPECTED_SPREADSHEET_ID_BY_BRANCH_CODE = {
   TIA: "1-RSJgecVrUUGzWK6XYpgK6J0pU0fuT5jckbXoiFCoD8",
@@ -71,6 +74,7 @@ const webhookError = (message, { status = null, body = null, json = null } = {})
 const isEnabled = () => ["true", "1", "yes", "on"].includes(String(enabledValue()).toLowerCase()) && Boolean(getWebhookUrl());
 const DELIVERABLE_ACTIONS = new Set(["NEW_ORDER", "DOPLATA", "DEBT_PAYMENT", "CANCEL_ORDER", "EXPENSE", "INKASSA", "SALARY"]);
 const shouldDeliver = (payload) => DELIVERABLE_ACTIONS.has(String(payload?.action || "").toUpperCase());
+const pendingDeliveryKeys = new Set();
 
 const toIso = (value) => {
   if (!value) return null;
@@ -367,12 +371,6 @@ const postWebhook = async (payload) => {
     validateBranchCode(payload);
 
     const finalRow = sheetMapper.buildLegacyRow_(payload);
-    logger.info("[GoogleSheets] finalRow", {
-      action: payload.action,
-      branchCode: payload.branchCode,
-      row: finalRow,
-      scriptVersion: EXPECTED_SCRIPT_VERSION,
-    });
     logger.info("[GoogleSheets] sending", deliveryLogMeta(payload));
     timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
@@ -388,13 +386,12 @@ const postWebhook = async (payload) => {
     let responseParseError = null;
     try {
       json = responseBody ? JSON.parse(responseBody) : null;
-    } catch (error) {
+    } catch (_error) {
       json = null;
-      responseParseError = `Non-JSON Google Sheets response: ${summarizeWebhookBody(responseBody) || error.message}`;
+      responseParseError = "Google Sheets returned a non-JSON response";
     }
     logger.info("[GoogleSheets] response", {
       status: response.status,
-      body: json || summarizeWebhookBody(responseBody),
       success: json?.success === true || json?.ok === true,
       scriptVersion: json?.scriptVersion || null,
       branchCode: json?.branchCode || null,
@@ -403,11 +400,11 @@ const postWebhook = async (payload) => {
       sheetName: json?.sheetName || null,
       monthSheetName: json?.monthSheetName || null,
       row: Number.isInteger(json?.row) ? json.row : null,
-      error: json?.error || (!response.ok ? `HTTP ${response.status}: ${summarizeWebhookBody(responseBody)}` : responseParseError),
+      error: json?.error || (!response.ok ? `HTTP ${response.status}` : responseParseError),
     });
     if (!response.ok) {
       throw webhookError(
-        `Google Sheets webhook failed: HTTP ${response.status}: ${json?.error || summarizeWebhookBody(responseBody) || "empty response"}`,
+        `Google Sheets webhook failed: HTTP ${response.status}${json?.error ? `: ${json.error}` : ""}`,
         { status: response.status, body: responseBody, json },
       );
     }
@@ -419,7 +416,7 @@ const postWebhook = async (payload) => {
       });
     }
     if (json && (json.success === false || json.ok === false || json.error || ["error", "failed", "fail"].includes(String(json.status || "").toLowerCase()))) {
-      throw webhookError(`Google Sheets webhook rejected payload: ${responseBody}`, {
+      throw webhookError(`Google Sheets webhook rejected payload${json.error ? `: ${json.error}` : ""}`, {
         status: response.status,
         body: responseBody,
         json,
@@ -430,7 +427,6 @@ const postWebhook = async (payload) => {
       status: response.status,
       idempotencyKey: payload.idempotencyKey,
       scriptVersion: verified.scriptVersion,
-      response: responseBody.slice(0, 500),
     }));
     return {
       ok: true,
@@ -477,7 +473,8 @@ const markDelivered = async ({ action, branchId, userId, entityType, entityId },
         description: deliveryKey({ action, entityType, entityId }),
         newValue: {
           action,
-          response: result?.response || null,
+          status: result?.status || null,
+          row: Number.isInteger(result?.responseJson?.row) ? result.responseJson.row : null,
         },
       },
     })
@@ -485,6 +482,12 @@ const markDelivered = async ({ action, branchId, userId, entityType, entityId },
 };
 
 const sendSafely = async (delivery, { action = "UNKNOWN", branchId = null, userId = null, entityType = "GoogleSheets", entityId = "google-sheets" } = {}) => {
+  const key = deliveryKey({ action, entityType, entityId });
+  if (pendingDeliveryKeys.has(key)) {
+    logger.info("Google Sheets pending duplicate delivery skipped", { action, branchId, entityType, entityId });
+    return { skipped: true, duplicate: true, pending: true };
+  }
+  pendingDeliveryKeys.add(key);
   try {
     if (await wasDelivered({ action, entityType, entityId })) {
       logger.info("Google Sheets duplicate delivery skipped", { action, branchId, entityType, entityId });
@@ -537,6 +540,8 @@ const sendSafely = async (delivery, { action = "UNKNOWN", branchId = null, userI
       responseJson: error.webhookJson ?? null,
       scriptVersion: error.webhookJson?.scriptVersion || null,
     };
+  } finally {
+    pendingDeliveryKeys.delete(key);
   }
 };
 

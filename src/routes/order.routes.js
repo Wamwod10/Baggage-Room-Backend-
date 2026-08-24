@@ -25,6 +25,8 @@ router.get(
       paymentType: paymentType.optional(),
       currency: currency.optional(),
       search: z.string().optional(),
+      phone: z.string().optional(),
+      passport: z.string().optional(),
       active: z.string().optional(),
       debtOnly: z.string().optional(),
       sortBy: z.enum(["createdAt", "updatedAt", "checkIn", "plannedCheckOut", "orderNumber", "status", "paymentType", "finalAmount", "realPaidAmount"]).optional(),

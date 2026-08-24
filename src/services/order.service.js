@@ -75,6 +75,26 @@ const listOrderSelect = {
   updatedAt: true,
 };
 
+const orderMutationInclude = {
+  branch: { select: { id: true, name: true, code: true } },
+  createdBy: { select: { id: true, name: true, login: true } },
+  items: {
+    select: {
+      id: true,
+      lockerId: true,
+      lockerNumber: true,
+      size: true,
+      count: true,
+      unitPrice: true,
+      originalPrice: true,
+      discountAmount: true,
+      finalPrice: true,
+      currency: true,
+    },
+  },
+  debt: true,
+};
+
 const orderSortFields = {
   createdAt: "createdAt",
   updatedAt: "updatedAt",
@@ -481,6 +501,8 @@ const listOrders = async (user, query) => {
     ...(statuses.length > 1 ? { status: { in: statuses } } : {}),
     ...(query.paymentType ? { paymentType: query.paymentType } : {}),
     ...(query.currency ? { currency: query.currency } : {}),
+    ...(query.phone ? { phone: query.phone } : {}),
+    ...(query.passport ? { passport: query.passport } : {}),
   };
   if (isTruthyQuery(query.active)) {
     where.OR = [
@@ -491,12 +513,13 @@ const listOrders = async (user, query) => {
   if (isTruthyQuery(query.debtOnly)) {
     where.debt = { is: { status: "OPEN" } };
   }
-  if (query.search) {
+  const searchTerm = String(query.search || "").trim();
+  if (searchTerm.length >= 2) {
     const searchWhere = [
-      { orderNumber: { contains: query.search, mode: "insensitive" } },
-      { clientName: { contains: query.search, mode: "insensitive" } },
-      { phone: { contains: query.search, mode: "insensitive" } },
-      { passport: { contains: query.search, mode: "insensitive" } },
+      { orderNumber: { contains: searchTerm, mode: "insensitive" } },
+      { clientName: { contains: searchTerm, mode: "insensitive" } },
+      { phone: { contains: searchTerm, mode: "insensitive" } },
+      { passport: { contains: searchTerm, mode: "insensitive" } },
     ];
     where.AND = [...(where.AND || []), { OR: searchWhere }];
   }
@@ -528,7 +551,7 @@ const getOrder = async (user, id) => {
   return order;
 };
 
-const createOrder = async (user, body) => {
+const createOrder = async (user, body, { idempotencyKey } = {}) => {
   const warnings = [];
   if (!body.branchId) {
     throw new AppError("branchId is required", 400, [
@@ -549,13 +572,28 @@ const createOrder = async (user, body) => {
   const branchId = getScopedBranchId(user, requestedBranchId);
   if (!branchId) throw new AppError("branchId is required", 400, [{ field: "branchId", message: "branchId is required" }]);
 
+  const requestKey = String(idempotencyKey || "").trim().slice(0, 120) || null;
+  if (requestKey) {
+    const existing = await prisma.order.findUnique({ where: { idempotencyKey: requestKey }, include: includeOrder });
+    if (existing) {
+      getScopedBranchId(user, existing.branchId);
+      return {
+        order: existing,
+        warnings: [{ type: "IDEMPOTENT_REPLAY", message: "Order creation already completed" }],
+        telegram: { sent: false, skipped: true, duplicate: true },
+      };
+    }
+  }
+
   const duplicate = await prisma.order.findFirst({
     where: { branchId, phone: body.phone, status: { in: ["ACTIVE", "DELAYED"] } },
     select: { id: true, orderNumber: true },
   });
   if (duplicate) warnings.push({ type: "DUPLICATE_ACTIVE_CUSTOMER", orderNumber: duplicate.orderNumber });
 
-  const created = await prisma.$transaction(async (tx) => {
+  let created;
+  try {
+    created = await prisma.$transaction(async (tx) => {
     const branch = await tx.branch.findUnique({ where: { id: branchId } });
     if (!branch) throw new AppError("Branch not found", 404);
 
@@ -665,6 +703,7 @@ const createOrder = async (user, body) => {
     const order = await tx.order.create({
       data: {
         orderNumber,
+        idempotencyKey: requestKey,
         branchId,
         clientName: body.clientName,
         phone: body.phone,
@@ -686,12 +725,21 @@ const createOrder = async (user, body) => {
         createdById: user.id,
         items: { create: itemRows.map((item) => item.data) },
       },
-      include: includeOrder,
+      include: orderMutationInclude,
     });
 
     if (!allowsMultiOrderLockers) {
-      for (const locker of lockers) {
-        await tx.locker.update({ where: { id: locker.id }, data: { status: "BUSY", currentOrderId: order.id } });
+      const claimedLockers = await tx.locker.updateMany({
+        where: {
+          id: { in: uniqueLockerIds },
+          branchId,
+          status: "EMPTY",
+          currentOrderId: null,
+        },
+        data: { status: "BUSY", currentOrderId: order.id },
+      });
+      if (claimedLockers.count !== uniqueLockerIds.length) {
+        throw new AppError("One or more lockers were taken by another operator", 409);
       }
     }
 
@@ -731,15 +779,27 @@ const createOrder = async (user, body) => {
       relatedOrderId: order.id,
     });
     await audit({ tx, branchId, userId: user.id, entityType: "Order", entityId: order.id, action: "ORDER_CREATE", newValue: order, description: "Order created" });
-    return tx.order.findUnique({ where: { id: order.id }, include: includeOrder });
-  });
+    return tx.order.findUnique({ where: { id: order.id }, include: orderMutationInclude });
+    });
+  } catch (error) {
+    const target = Array.isArray(error?.meta?.target) ? error.meta.target.join(",") : String(error?.meta?.target || "");
+    if (!requestKey || error?.code !== "P2002" || !target.includes("idempotencyKey")) throw error;
 
-  const telegramResult = await sendNewOrderTelegram(created, { userId: user.id });
-  if (!telegramResult.sent) {
-    warnings.push({ type: "TELEGRAM_NOT_SENT", message: telegramResult.message, reason: telegramResult.reason });
+    const existing = await prisma.order.findUnique({ where: { idempotencyKey: requestKey }, include: includeOrder });
+    if (!existing) throw error;
+    getScopedBranchId(user, existing.branchId);
+    return {
+      order: existing,
+      warnings: [{ type: "IDEMPOTENT_REPLAY", message: "Order creation already completed" }],
+      telegram: { sent: false, skipped: true, duplicate: true },
+    };
   }
+
+  // Telegram is an external best-effort side effect. It must not keep the
+  // order response open for up to the provider timeout.
+  void sendNewOrderTelegram(created, { userId: user.id });
   googleSheets.sendSafely(() => googleSheets.sendNewOrder(created), { action: "NEW_ORDER", branchId, userId: user.id, entityType: "Order", entityId: created.id });
-  return { order: created, warnings, telegram: telegramResult };
+  return { order: created, warnings, telegram: { sent: null, pending: true } };
 };
 
 const sendOrderTelegram = async (user, id) => {
@@ -810,8 +870,12 @@ const updateOrder = async (user, id, body) => {
           const locker = await tx.locker.findUnique({ where: { id: item.lockerId } });
           if (!locker || locker.branchId !== current.branchId) throw new AppError("Locker not found in this branch", 400);
           if (locker.status !== "EMPTY" || locker.currentOrderId) throw new AppError("New locker must be empty", 400);
+          const claimedLocker = await tx.locker.updateMany({
+            where: { id: locker.id, branchId: current.branchId, status: "EMPTY", currentOrderId: null },
+            data: { status: current.status === "DELAYED" ? "DELAYED" : "BUSY", currentOrderId: id },
+          });
+          if (claimedLocker.count !== 1) throw new AppError("New locker was taken by another operator", 409);
           await tx.locker.update({ where: { id: currentItem.lockerId }, data: { status: "EMPTY", currentOrderId: null } });
-          await tx.locker.update({ where: { id: locker.id }, data: { status: data.status === "DELAYED" ? "DELAYED" : "BUSY", currentOrderId: id } });
           itemData.lockerId = locker.id;
           itemData.lockerNumber = locker.number;
           itemData.size = itemData.size || locker.size;
@@ -823,7 +887,14 @@ const updateOrder = async (user, id, body) => {
       }
     }
 
-    const updatedBase = await tx.order.update({ where: { id }, data, include: includeOrder });
+    const updatedBaseWrite = await tx.order.updateMany({
+      where: { id, updatedAt: current.updatedAt },
+      data,
+    });
+    if (updatedBaseWrite.count !== 1) {
+      throw new AppError("Order was changed by another operator. Reload and try again.", 409);
+    }
+    const updatedBase = await tx.order.findUnique({ where: { id }, include: includeOrder });
     const nextDebtAmount = Math.max(0, Number(updatedBase.finalAmount || 0) - Number(updatedBase.realPaidAmount || 0));
     if (updatedBase.paymentType === "DEBT" && nextDebtAmount > 0) {
       await tx.debt.upsert({
@@ -1095,15 +1166,22 @@ const pickupOrder = async (user, id, body) => {
     }
     updated = await tx.order.findUnique({ where: { id }, include: includeOrder });
     await audit({ tx, branchId: order.branchId, userId: user.id, entityType: "Order", entityId: id, action: "ORDER_PICKUP", oldValue: order, newValue: updated, description: "Order picked up" });
-    if (overtimeAmount > 0) {
-      const shiftOpenedBy = shift?.acceptedByName || shift?.openedBy || null;
-      telegram.sendSafely(
-        () => telegram.sendOvertimePayment({ ...updated, currency: overtimeCurrency, overtimeCurrency, overtimePaymentType, shiftOpenedBy }),
-        { action: "OVERTIME_PAYMENT", branchId: order.branchId, userId: user.id, entityType: "Order", entityId: `${id}:overtime` },
-      );
-    }
-    return { updated: { ...updated, overtimeCurrency, overtimePaymentType }, closedDebt, debtPayment, debtPaidAmount };
+    return {
+      updated: { ...updated, overtimeCurrency, overtimePaymentType },
+      closedDebt,
+      debtPayment,
+      debtPaidAmount,
+      overtimeTelegram: overtimeAmount > 0
+        ? { shiftOpenedBy: shift?.acceptedByName || shift?.openedBy || null }
+        : null,
+    };
   });
+  if (result.overtimeTelegram) {
+    telegram.sendSafely(
+      () => telegram.sendOvertimePayment({ ...result.updated, ...result.overtimeTelegram }),
+      { action: "OVERTIME_PAYMENT", branchId: result.updated.branchId, userId: user.id, entityType: "Order", entityId: `${id}:overtime` },
+    );
+  }
   if (result.debtPayment) {
     telegram.sendSafely(
       () => telegram.sendDebtClosed(result.debtPayment),
@@ -1192,18 +1270,23 @@ const cancelOrder = async (user, id, body) => {
 const markDelayedOrders = async (branchId = undefined) => {
   const now = new Date();
   const threshold = overdueThresholdDate(now);
-  const overdue = await prisma.order.findMany({
-    where: { ...(branchId ? { branchId } : {}), status: "ACTIVE", plannedCheckOut: { lt: threshold } },
-    include: {
-      branch: { select: { id: true, name: true } },
-      items: { select: { lockerNumber: true, locker: { select: { number: true } } } },
-    },
-  });
-  let markedCount = 0;
-  for (const order of overdue) {
-    const marked = await prisma.$transaction(async (tx) => {
+  const result = await prisma.$transaction(async (tx) => {
+    const [{ locked }] = await tx.$queryRaw`
+      SELECT pg_try_advisory_xact_lock(hashtext('baggage-room:overdue-job')) AS locked
+    `;
+    if (!locked) return { delayedOrders: [] };
+
+    const overdue = await tx.order.findMany({
+      where: { ...(branchId ? { branchId } : {}), status: "ACTIVE", plannedCheckOut: { lt: threshold } },
+      include: {
+        branch: { select: { id: true, name: true } },
+        items: { select: { lockerNumber: true, locker: { select: { number: true } } } },
+      },
+    });
+    const delayedOrders = [];
+    for (const order of overdue) {
       const updated = await tx.order.updateMany({ where: { id: order.id, status: "ACTIVE" }, data: { status: "DELAYED" } });
-      if (updated.count === 0) return false;
+      if (updated.count === 0) continue;
       await tx.locker.updateMany({ where: { currentOrderId: order.id }, data: { status: "DELAYED" } });
       await createNotification({
         tx,
@@ -1214,14 +1297,18 @@ const markDelayedOrders = async (branchId = undefined) => {
         priority: 3,
         relatedOrderId: order.id,
       });
-      return true;
-    });
-    if (marked) {
-      markedCount += 1;
-      telegram.sendSafely(() => telegram.sendDelayedBaggage(order), { action: "DELAYED_BAGGAGE", branchId: order.branchId, entityType: "Order", entityId: order.id });
+      delayedOrders.push(order);
     }
+    return { delayedOrders };
+  });
+
+  for (const order of result.delayedOrders) {
+    void telegram.sendSafely(
+      () => telegram.sendDelayedBaggage(order),
+      { action: "DELAYED_BAGGAGE", branchId: order.branchId, entityType: "Order", entityId: order.id },
+    );
   }
-  return markedCount;
+  return result.delayedOrders.length;
 };
 
 module.exports = {

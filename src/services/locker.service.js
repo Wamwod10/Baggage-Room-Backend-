@@ -30,22 +30,32 @@ const getLocker = async (user, id) => {
 };
 
 const setService = async (user, id, data) => {
-  const locker = await getLocker(user, id);
-  if (locker.status === "BUSY" || locker.currentOrderId) throw new AppError("Busy locker cannot be moved to service", 400);
-  const updated = await prisma.locker.update({
-    where: { id },
-    data: { status: "SERVICE", serviceReason: data.serviceReason || data.reason || null },
+  const transactionResult = await prisma.$transaction(async (tx) => {
+    const locker = await tx.locker.findUnique({ where: { id }, include });
+    if (!locker) throw new AppError("Locker not found", 404);
+    getScopedBranchId(user, locker.branchId);
+    if (locker.status === "BUSY" || locker.currentOrderId) throw new AppError("Busy locker cannot be moved to service", 400);
+
+    const changed = await tx.locker.updateMany({
+      where: { id, currentOrderId: null, status: { not: "BUSY" } },
+      data: { status: "SERVICE", serviceReason: data.serviceReason || data.reason || null },
+    });
+    if (changed.count !== 1) throw new AppError("Locker state changed by another operator", 409);
+    const updated = await tx.locker.findUnique({ where: { id } });
+    await audit({
+      tx,
+      branchId: locker.branchId,
+      userId: user.id,
+      entityType: "Locker",
+      entityId: id,
+      action: "LOCKER_SERVICE",
+      oldValue: locker,
+      newValue: updated,
+      description: "Locker moved to service",
+    });
+    return { locker, updated };
   });
-  await audit({
-    branchId: locker.branchId,
-    userId: user.id,
-    entityType: "Locker",
-    entityId: id,
-    action: "LOCKER_SERVICE",
-    oldValue: locker,
-    newValue: updated,
-    description: "Locker moved to service",
-  });
+  const { locker, updated } = transactionResult;
   telegram.sendSafely(
     () => telegram.sendLockerService({ branchId: locker.branchId, branch: locker.branch, locker: locker.number, status: "SERVICE", reason: data.serviceReason || data.reason, createdBy: user }),
     { action: "LOCKER_SERVICE", branchId: locker.branchId, userId: user.id, entityType: "Locker", entityId: `${id}:service:${updated.updatedAt.getTime()}` },
@@ -54,22 +64,29 @@ const setService = async (user, id, data) => {
 };
 
 const restore = async (user, id) => {
-  const locker = await getLocker(user, id);
-  if (locker.currentOrderId) throw new AppError("Locker with active order cannot be restored", 400);
-  const updated = await prisma.locker.update({
-    where: { id },
-    data: { status: "EMPTY", serviceReason: null },
+  const transactionResult = await prisma.$transaction(async (tx) => {
+    const locker = await tx.locker.findUnique({ where: { id }, include });
+    if (!locker) throw new AppError("Locker not found", 404);
+    getScopedBranchId(user, locker.branchId);
+    if (locker.currentOrderId) throw new AppError("Locker with active order cannot be restored", 400);
+
+    const changed = await tx.locker.updateMany({ where: { id, currentOrderId: null }, data: { status: "EMPTY", serviceReason: null } });
+    if (changed.count !== 1) throw new AppError("Locker state changed by another operator", 409);
+    const updated = await tx.locker.findUnique({ where: { id } });
+    await audit({
+      tx,
+      branchId: locker.branchId,
+      userId: user.id,
+      entityType: "Locker",
+      entityId: id,
+      action: "LOCKER_RESTORE",
+      oldValue: locker,
+      newValue: updated,
+      description: "Locker restored from service",
+    });
+    return { locker, updated };
   });
-  await audit({
-    branchId: locker.branchId,
-    userId: user.id,
-    entityType: "Locker",
-    entityId: id,
-    action: "LOCKER_RESTORE",
-    oldValue: locker,
-    newValue: updated,
-    description: "Locker restored from service",
-  });
+  const { locker, updated } = transactionResult;
   telegram.sendSafely(
     () => telegram.sendLockerService({ branchId: locker.branchId, branch: locker.branch, locker: locker.number, status: "EMPTY", reason: locker.serviceReason, createdBy: user }),
     { action: "LOCKER_RESTORE", branchId: locker.branchId, userId: user.id, entityType: "Locker", entityId: `${id}:restore:${updated.updatedAt.getTime()}` },
@@ -78,7 +95,7 @@ const restore = async (user, id) => {
 };
 
 const transfer = async (user, data) => {
-  return prisma.$transaction(async (tx) => {
+  const transactionResult = await prisma.$transaction(async (tx) => {
     const order = await tx.order.findUnique({ where: { id: data.orderId }, include: { items: true, branch: { select: { id: true, name: true } } } });
     if (!order || !["ACTIVE", "DELAYED"].includes(order.status)) throw new AppError("Active order not found", 404);
     getScopedBranchId(user, order.branchId);
@@ -92,12 +109,22 @@ const transfer = async (user, data) => {
     const hasSourceItems = order.items.some((orderItem) => orderItem.lockerId === from.id);
     if (!hasSourceItems) throw new AppError("Source locker is not attached to this order", 400);
 
-    await tx.orderItem.updateMany({
+    const movedItems = await tx.orderItem.updateMany({
       where: { orderId: order.id, lockerId: from.id },
       data: { lockerId: to.id, lockerNumber: to.number },
     });
-    await tx.locker.update({ where: { id: from.id }, data: { status: "EMPTY", currentOrderId: null } });
-    await tx.locker.update({ where: { id: to.id }, data: { status: order.status === "DELAYED" ? "DELAYED" : "BUSY", currentOrderId: order.id } });
+    if (movedItems.count === 0) throw new AppError("Source locker was changed by another operator", 409);
+    const claimedTarget = await tx.locker.updateMany({
+      where: { id: to.id, branchId: order.branchId, status: "EMPTY", currentOrderId: null },
+      data: { status: order.status === "DELAYED" ? "DELAYED" : "BUSY", currentOrderId: order.id },
+    });
+    if (claimedTarget.count !== 1) throw new AppError("Target locker was taken by another operator", 409);
+
+    const releasedSource = await tx.locker.updateMany({
+      where: { id: from.id, branchId: order.branchId, currentOrderId: order.id },
+      data: { status: "EMPTY", currentOrderId: null },
+    });
+    if (releasedSource.count !== 1) throw new AppError("Source locker was changed by another operator", 409);
 
     const result = await tx.order.findUnique({ where: { id: order.id }, include: { items: true } });
     await audit({
@@ -111,12 +138,33 @@ const transfer = async (user, data) => {
       newValue: { toLockerId: to.id, toLockerNumber: to.number },
       description: data.note || "Locker transferred",
     });
-    telegram.sendSafely(
-      () => telegram.sendLockerTransfer({ branchId: order.branchId, branch: order.branch, from: from.number, to: to.number, order: order.orderNumber, note: data.note, createdBy: user }),
-      { action: "LOCKER_TRANSFER", branchId: order.branchId, userId: user.id, entityType: "Order", entityId: `${order.id}:locker-transfer:${from.id}:${to.id}` },
-    );
-    return result;
+    return {
+      result,
+      telegramPayload: {
+        branchId: order.branchId,
+        branch: order.branch,
+        from: from.number,
+        to: to.number,
+        order: order.orderNumber,
+        note: data.note,
+        createdBy: user,
+        entityId: `${order.id}:locker-transfer:${from.id}:${to.id}`,
+      },
+    };
   });
+
+  const { result, telegramPayload } = transactionResult;
+  telegram.sendSafely(
+    () => telegram.sendLockerTransfer(telegramPayload),
+    {
+      action: "LOCKER_TRANSFER",
+      branchId: telegramPayload.branchId,
+      userId: user.id,
+      entityType: "Order",
+      entityId: telegramPayload.entityId,
+    },
+  );
+  return result;
 };
 
 module.exports = { listLockers, getLocker, setService, restore, transfer };

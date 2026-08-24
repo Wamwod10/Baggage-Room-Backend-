@@ -30,7 +30,10 @@ const normalizePaymentType = (payment) => {
 const paymentLabel = (payment, { context = "payment" } = {}) => {
   const normalized = normalizePaymentType(payment);
   if (!normalized) {
-    logger.error("Payment type is missing or unsupported", { context, payment });
+    logger.error("Payment type is missing or unsupported", {
+      context,
+      reason: payment === undefined || payment === null || payment === "" ? "missing" : "unsupported",
+    });
     return "Noma'lum";
   }
   return paymentLabels[normalized];

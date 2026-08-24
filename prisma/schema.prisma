@@ -147,6 +147,7 @@ model Locker {
   @@index([branchId])
   @@index([status])
   @@index([branchId, status])
+  @@index([currentOrderId])
 }
 
 model Tariff {
@@ -170,6 +171,7 @@ model Tariff {
 model Order {
   id                 String        @id @default(cuid())
   orderNumber        String        @unique
+  idempotencyKey     String?       @unique
   branchId           String
   clientName         String
   phone              String
@@ -219,6 +221,8 @@ model Order {
   @@index([status, plannedCheckOut])
   @@index([branchId, paymentType, createdAt])
   @@index([branchId, orderNumber])
+  @@index([branchId, phone, status, createdAt])
+  @@index([branchId, passport, status, createdAt])
 }
 
 model OrderItem {
@@ -301,6 +305,7 @@ model Expense {
 
   @@index([branchId])
   @@index([createdAt])
+  @@index([branchId, createdAt])
 }
 
 model Inkassa {
@@ -319,6 +324,7 @@ model Inkassa {
 
   @@index([branchId])
   @@index([createdAt])
+  @@index([branchId, createdAt])
 }
 
 model CashMovement {
@@ -387,6 +393,7 @@ model AuditLog {
   @@index([branchId])
   @@index([userId])
   @@index([createdAt])
+  @@index([branchId, createdAt])
 }
 
 model Notification {
@@ -405,6 +412,8 @@ model Notification {
   @@index([branchId])
   @@index([isRead])
   @@index([createdAt])
+  @@index([branchId, isRead, priority, createdAt])
+  @@index([isRead, priority, createdAt])
 }
 
 model TelegramSetting {
