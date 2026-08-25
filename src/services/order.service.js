@@ -552,31 +552,50 @@ const getOrder = async (user, id) => {
 };
 
 const createOrder = async (user, body, { idempotencyKey } = {}) => {
+  const timer = createTimer("orders.create", {
+    hasIdempotencyKey: Boolean(idempotencyKey),
+    itemCount: Array.isArray(body.items) ? body.items.length : Array.isArray(body.lockerIds) ? body.lockerIds.length : 0,
+  });
   const warnings = [];
   if (!body.branchId) {
+    timer.end({ ok: false, statusCode: 400, stage: "validation" });
     throw new AppError("branchId is required", 400, [
       { field: "branchId", message: "branchId is required" },
     ]);
   }
   if (!body.clientName || !String(body.clientName).trim()) {
+    timer.end({ ok: false, statusCode: 400, stage: "validation" });
     throw new AppError("clientName is required", 400, [
       { field: "clientName", message: "clientName is required" },
     ]);
   }
   if (!body.phone || !String(body.phone).trim()) {
+    timer.end({ ok: false, statusCode: 400, stage: "validation" });
     throw new AppError("phone is required", 400, [
       { field: "phone", message: "phone is required" },
     ]);
   }
   const requestedBranchId = body.branchId;
   const branchId = getScopedBranchId(user, requestedBranchId);
-  if (!branchId) throw new AppError("branchId is required", 400, [{ field: "branchId", message: "branchId is required" }]);
+  if (!branchId) {
+    timer.end({ ok: false, statusCode: 400, stage: "scope" });
+    throw new AppError("branchId is required", 400, [{ field: "branchId", message: "branchId is required" }]);
+  }
 
   const requestKey = String(idempotencyKey || "").trim().slice(0, 120) || null;
+  if (!requestKey) {
+    timer.end({ ok: false, statusCode: 400, stage: "idempotency" });
+    throw new AppError("Idempotency-Key header is required", 400, [
+      { field: "Idempotency-Key", message: "Idempotency-Key header is required" },
+    ]);
+  }
   if (requestKey) {
-    const existing = await prisma.order.findUnique({ where: { idempotencyKey: requestKey }, include: includeOrder });
+    const existing = await timer.time("idempotency lookup", () =>
+      prisma.order.findUnique({ where: { idempotencyKey: requestKey }, include: includeOrder }),
+    );
     if (existing) {
       getScopedBranchId(user, existing.branchId);
+      timer.end({ ok: true, outcome: "idempotent_replay" });
       return {
         order: existing,
         warnings: [{ type: "IDEMPOTENT_REPLAY", message: "Order creation already completed" }],
@@ -585,23 +604,30 @@ const createOrder = async (user, body, { idempotencyKey } = {}) => {
     }
   }
 
-  const duplicate = await prisma.order.findFirst({
-    where: { branchId, phone: body.phone, status: { in: ["ACTIVE", "DELAYED"] } },
-    select: { id: true, orderNumber: true },
-  });
+  const duplicate = await timer.time("duplicate customer lookup", () =>
+    prisma.order.findFirst({
+      where: { branchId, phone: body.phone, status: { in: ["ACTIVE", "DELAYED"] } },
+      select: { id: true, orderNumber: true },
+    }),
+  );
   if (duplicate) warnings.push({ type: "DUPLICATE_ACTIVE_CUSTOMER", orderNumber: duplicate.orderNumber });
 
   let created;
   try {
-    created = await prisma.$transaction(async (tx) => {
-    const branch = await tx.branch.findUnique({ where: { id: branchId } });
+    created = await timer.time("transaction total", () => prisma.$transaction(async (tx) => {
+    const branch = await timer.time("branch lookup", () => tx.branch.findUnique({ where: { id: branchId } }));
     if (!branch) throw new AppError("Branch not found", 404);
+
+    const shift = await timer.time("shift lookup", () => findOpenShift(tx, branchId));
+    if (!shift) throw new AppError("Avval kassani oching. Ochiq shift topilmadi.", 409);
 
     const inputItems = normalizeOrderItems(body);
     const allowsMultiOrderLockers = MULTI_ORDER_LOCKER_BRANCH_CODES.has(branch.code);
     const lockerIds = inputItems.map((item) => item.lockerId);
     const uniqueLockerIds = [...new Set(lockerIds)];
-    const lockers = await tx.locker.findMany({ where: { id: { in: uniqueLockerIds }, branchId } });
+    const lockers = await timer.time("locker lookup", () =>
+      tx.locker.findMany({ where: { id: { in: uniqueLockerIds }, branchId } }),
+    );
     if (lockers.length !== uniqueLockerIds.length) {
       throw new AppError("One or more lockers were not found in this branch", 400, [
         { field: "items.lockerId", message: "Locker not found in this branch" },
@@ -618,7 +644,7 @@ const createOrder = async (user, body, { idempotencyKey } = {}) => {
       }
     }
 
-    const tariffs = await tx.tariff.findMany({ where: { branchId } });
+    const tariffs = await timer.time("tariffs", () => tx.tariff.findMany({ where: { branchId } }));
     const tariffsBySize = Object.fromEntries(tariffs.map((tariff) => [tariff.size, tariff]));
     const allowedSizes = new Set(sizesForBranch(branch));
     const isCustomTariff = body.customHours !== undefined && body.customHours !== null;
@@ -698,9 +724,9 @@ const createOrder = async (user, body, { idempotencyKey } = {}) => {
     const realPaidAmount = paymentType === "DEBT" ? Number(body.realPaidAmount || 0) : Number(body.realPaidAmount ?? finalAmount);
     const checkIn = body.checkIn ? new Date(body.checkIn) : new Date();
     const plannedCheckOut = body.plannedCheckOut ? new Date(body.plannedCheckOut) : addHours(checkIn, tariffHours);
-    const orderNumber = await generateOrderNumber(tx, branch.code);
+    const orderNumber = await timer.time("order number generation", () => generateOrderNumber(tx, branch.code));
 
-    const order = await tx.order.create({
+    const order = await timer.time("order create", () => tx.order.create({
       data: {
         orderNumber,
         idempotencyKey: requestKey,
@@ -726,10 +752,10 @@ const createOrder = async (user, body, { idempotencyKey } = {}) => {
         items: { create: itemRows.map((item) => item.data) },
       },
       include: orderMutationInclude,
-    });
+    }));
 
     if (!allowsMultiOrderLockers) {
-      const claimedLockers = await tx.locker.updateMany({
+      const claimedLockers = await timer.time("locker lookup/claim", () => tx.locker.updateMany({
         where: {
           id: { in: uniqueLockerIds },
           branchId,
@@ -737,24 +763,25 @@ const createOrder = async (user, body, { idempotencyKey } = {}) => {
           currentOrderId: null,
         },
         data: { status: "BUSY", currentOrderId: order.id },
-      });
+      }));
       if (claimedLockers.count !== uniqueLockerIds.length) {
         throw new AppError("One or more lockers were taken by another operator", 409);
       }
     }
 
-    const shift = await findOpenShift(tx, branchId);
     if (paymentType === "DEBT" && finalAmount - realPaidAmount > 0) {
-      await tx.debt.create({
+      await timer.time("debt", () => tx.debt.create({
         data: { orderId: order.id, branchId, clientName: body.clientName, phone: body.phone, amount: finalAmount - realPaidAmount, currency },
-      });
+      }));
+    } else {
+      await timer.time("debt", async () => null);
     }
     const paidPaymentType = paymentType === "DEBT" ? normalizePaymentType(body.realPaidPaymentType || body.paidPaymentType) : paymentType;
     if (realPaidAmount > 0 && !paidPaymentType) {
       throw new AppError("paidPaymentType is required for partial debt payment", 400);
     }
     if (realPaidAmount > 0) {
-      await createCashMovement({
+      await timer.time("cash movement", () => createCashMovement({
         tx,
         branchId,
         shiftId: shift?.id || null,
@@ -766,10 +793,12 @@ const createOrder = async (user, body, { idempotencyKey } = {}) => {
         paymentType: paidPaymentType,
         note: `Order ${order.orderNumber}`,
         createdById: user.id,
-      });
+      }));
+    } else {
+      await timer.time("cash movement", async () => null);
     }
 
-    await createNotification({
+    await timer.time("notification", () => createNotification({
       tx,
       branchId,
       type: "SUCCESS",
@@ -777,17 +806,28 @@ const createOrder = async (user, body, { idempotencyKey } = {}) => {
       message: `${order.orderNumber} ${order.clientName} uchun yaratildi`,
       priority: 1,
       relatedOrderId: order.id,
-    });
-    await audit({ tx, branchId, userId: user.id, entityType: "Order", entityId: order.id, action: "ORDER_CREATE", newValue: order, description: "Order created" });
+    }));
+    await timer.time("audit", () =>
+      audit({ tx, branchId, userId: user.id, entityType: "Order", entityId: order.id, action: "ORDER_CREATE", newValue: order, description: "Order created" }),
+    );
     return tx.order.findUnique({ where: { id: order.id }, include: orderMutationInclude });
-    });
+    }));
   } catch (error) {
     const target = Array.isArray(error?.meta?.target) ? error.meta.target.join(",") : String(error?.meta?.target || "");
-    if (!requestKey || error?.code !== "P2002" || !target.includes("idempotencyKey")) throw error;
+    if (!requestKey || error?.code !== "P2002" || !target.includes("idempotencyKey")) {
+      timer.end({ ok: false, statusCode: error.statusCode || 500, stage: "create" });
+      throw error;
+    }
 
-    const existing = await prisma.order.findUnique({ where: { idempotencyKey: requestKey }, include: includeOrder });
-    if (!existing) throw error;
+    const existing = await timer.time("idempotency conflict lookup", () =>
+      prisma.order.findUnique({ where: { idempotencyKey: requestKey }, include: includeOrder }),
+    );
+    if (!existing) {
+      timer.end({ ok: false, statusCode: error.statusCode || 500, stage: "idempotency_conflict" });
+      throw error;
+    }
     getScopedBranchId(user, existing.branchId);
+    timer.end({ ok: true, outcome: "idempotent_replay" });
     return {
       order: existing,
       warnings: [{ type: "IDEMPOTENT_REPLAY", message: "Order creation already completed" }],
@@ -799,6 +839,7 @@ const createOrder = async (user, body, { idempotencyKey } = {}) => {
   // order response open for up to the provider timeout.
   void sendNewOrderTelegram(created, { userId: user.id });
   googleSheets.sendSafely(() => googleSheets.sendNewOrder(created), { action: "NEW_ORDER", branchId, userId: user.id, entityType: "Order", entityId: created.id });
+  timer.end({ ok: true, outcome: "created", warnings: warnings.length });
   return { order: created, warnings, telegram: { sent: null, pending: true } };
 };
 
@@ -1014,10 +1055,16 @@ const updateOrder = async (user, id, body) => {
 };
 
 const pickupOrder = async (user, id, body) => {
-  const result = await prisma.$transaction(async (tx) => {
-    const order = await tx.order.findUnique({ where: { id }, include: includeOrder });
+  const timer = createTimer("orders.pickup", {
+    hasOvertime: Number(body.overtimeAmount || body.extraPayment || 0) > 0,
+    hasDebtPayment: body.debtPaidAmount !== undefined,
+  });
+  let result;
+  try {
+  result = await timer.time("transaction total", () => prisma.$transaction(async (tx) => {
+    const order = await timer.time("order lookup", () => tx.order.findUnique({ where: { id }, include: includeOrder }));
     if (!order || !["ACTIVE", "DELAYED"].includes(order.status)) throw new AppError("Active order not found", 404);
-    getScopedBranchId(user, order.branchId);
+    await timer.time("branch lookup", async () => getScopedBranchId(user, order.branchId));
     let closedDebt = null;
     let debtPayment = null;
     let debtPaidAmount = 0;
@@ -1034,7 +1081,7 @@ const pickupOrder = async (user, id, body) => {
     if (Number(body.debtPaidAmount || 0) > 0 && !debtPaymentType) {
       throw new AppError("paymentType is required", 400);
     }
-    await ensureSingleStatusTransition({
+    await timer.time("order status transition", () => ensureSingleStatusTransition({
       model: tx.order,
       where: { id, status: { in: ["ACTIVE", "DELAYED"] } },
       data: {
@@ -1045,14 +1092,14 @@ const pickupOrder = async (user, id, body) => {
         overtimeAmount,
         overtimePaymentType: overtimeAmount > 0 ? overtimePaymentType : null,
       },
-    });
-    let updated = await tx.order.findUnique({ where: { id }, include: includeOrder });
+    }));
+    let updated = await timer.time("order lookup after transition", () => tx.order.findUnique({ where: { id }, include: includeOrder }));
 
-    await tx.locker.updateMany({ where: { currentOrderId: id }, data: { status: "EMPTY", currentOrderId: null } });
-    const shift = await findOpenShift(tx, order.branchId);
+    await timer.time("locker lookup/claim", () => tx.locker.updateMany({ where: { currentOrderId: id }, data: { status: "EMPTY", currentOrderId: null } }));
+    const shift = await timer.time("shift lookup", () => findOpenShift(tx, order.branchId));
     const shouldAddOvertimeDebt = overtimeAmount > 0 && overtimePaymentType === "DEBT";
     if (overtimeAmount > 0 && overtimePaymentType !== "DEBT") {
-      await createCashMovement({
+      await timer.time("cash movement", () => createCashMovement({
         tx,
         branchId: order.branchId,
         shiftId: shift?.id || null,
@@ -1064,14 +1111,16 @@ const pickupOrder = async (user, id, body) => {
         paymentType: overtimePaymentType,
         note: `Overtime ${order.orderNumber}`,
         createdById: user.id,
-      });
+      }));
+    } else {
+      await timer.time("cash movement", async () => null);
     }
     if (order.debt?.status === "OPEN" && body.debtPaidAmount !== undefined) {
       debtPaidAmount = Number(body.debtPaidAmount);
       if (debtPaidAmount > order.debt.amount) throw new AppError("Debt payment cannot exceed open debt amount", 400);
       if (debtPaidAmount > 0) {
         const remainingDebtAmount = order.debt.amount - debtPaidAmount;
-        await createCashMovement({
+        await timer.time("debt cash movement", () => createCashMovement({
           tx,
           branchId: order.branchId,
           shiftId: shift?.id || null,
@@ -1083,20 +1132,20 @@ const pickupOrder = async (user, id, body) => {
           paymentType: debtPaymentType,
           note: `Debt payment ${order.orderNumber}`,
           createdById: user.id,
-        });
-        await tx.debt.update({
+        }));
+        await timer.time("debt", () => tx.debt.update({
           where: { id: order.debt.id },
           data: { amount: remainingDebtAmount },
-        });
+        }));
         const newRealPaidAmount = Number(order.realPaidAmount || 0) + debtPaidAmount;
-        updated = await tx.order.update({
+        updated = await timer.time("order paid total update", () => tx.order.update({
           where: { id },
           data: {
             realPaidAmount: newRealPaidAmount,
             paymentDifference: newRealPaidAmount - Number(order.finalAmount || 0),
           },
           include: includeOrder,
-        });
+        }));
         debtPayment = {
           ...order.debt,
           amount: remainingDebtAmount,
@@ -1119,7 +1168,7 @@ const pickupOrder = async (user, id, body) => {
         };
       }
       if (debtPaidAmount === order.debt.amount) {
-        closedDebt = await tx.debt.update({
+        closedDebt = await timer.time("debt", () => tx.debt.update({
           where: { id: order.debt.id },
           data: { status: "CLOSED", closedAt: new Date(), closedById: user.id },
           include: {
@@ -1127,7 +1176,7 @@ const pickupOrder = async (user, id, body) => {
             order: { select: { id: true, orderNumber: true, passport: true, checkIn: true, plannedCheckOut: true, realPickupTime: true } },
             closedBy: { select: { id: true, name: true, login: true } },
           },
-        });
+        }));
         debtPayment = {
           ...closedDebt,
           paidAmount: debtPaidAmount,
@@ -1139,11 +1188,11 @@ const pickupOrder = async (user, id, body) => {
       }
     }
     if (shouldAddOvertimeDebt) {
-      const currentDebt = await tx.debt.findUnique({ where: { orderId: id } });
+      const currentDebt = await timer.time("debt", () => tx.debt.findUnique({ where: { orderId: id } }));
       if (currentDebt && currentDebt.currency !== overtimeCurrency) {
         throw new AppError("Overtime debt currency must match existing debt currency", 400);
       }
-      await tx.debt.upsert({
+      await timer.time("debt", () => tx.debt.upsert({
         where: { orderId: id },
         create: {
           orderId: id,
@@ -1162,10 +1211,11 @@ const pickupOrder = async (user, id, body) => {
           amount: Number(currentDebt?.amount || 0) + overtimeAmount,
           currency: overtimeCurrency,
         },
-      });
+      }));
     }
-    updated = await tx.order.findUnique({ where: { id }, include: includeOrder });
-    await audit({ tx, branchId: order.branchId, userId: user.id, entityType: "Order", entityId: id, action: "ORDER_PICKUP", oldValue: order, newValue: updated, description: "Order picked up" });
+    updated = await timer.time("order lookup final", () => tx.order.findUnique({ where: { id }, include: includeOrder }));
+    await timer.time("notification", async () => null);
+    await timer.time("audit", () => audit({ tx, branchId: order.branchId, userId: user.id, entityType: "Order", entityId: id, action: "ORDER_PICKUP", oldValue: order, newValue: updated, description: "Order picked up" }));
     return {
       updated: { ...updated, overtimeCurrency, overtimePaymentType },
       closedDebt,
@@ -1175,7 +1225,11 @@ const pickupOrder = async (user, id, body) => {
         ? { shiftOpenedBy: shift?.acceptedByName || shift?.openedBy || null }
         : null,
     };
-  });
+  }));
+  } catch (error) {
+    timer.end({ ok: false, statusCode: error.statusCode || 500, stage: "pickup" });
+    throw error;
+  }
   if (result.overtimeTelegram) {
     telegram.sendSafely(
       () => telegram.sendOvertimePayment({ ...result.updated, ...result.overtimeTelegram }),
@@ -1208,6 +1262,7 @@ const pickupOrder = async (user, id, body) => {
       { action: "DOPLATA", branchId: result.updated.branchId, userId: user.id, entityType: "OrderDoplata", entityId: `${id}:doplata:${result.updated.realPickupTime?.getTime?.() || Date.now()}` },
     );
   }
+  timer.end({ ok: true, outcome: "picked_up" });
   return result.updated;
 };
 
