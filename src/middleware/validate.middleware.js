@@ -43,6 +43,7 @@ const validate = (schema) => (req, _res, next) => {
   req.body = result.data.body || req.body;
   req.query = result.data.query || req.query;
   req.params = result.data.params || req.params;
+  req.perfMark?.("validation");
   next();
 };
 

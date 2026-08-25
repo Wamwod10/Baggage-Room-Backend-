@@ -7,6 +7,7 @@ const { findOpenShift, createCashMovement } = require("./cashMovement.service");
 const telegram = require("./telegram.service");
 const googleSheets = require("./googleSheets.service");
 const { normalizePaymentType } = require("../utils/payment");
+const { requireIdempotencyKey } = require("../utils/idempotency");
 
 const includeDebt = {
   order: { select: { id: true, orderNumber: true, status: true, passport: true, checkIn: true, plannedCheckOut: true, realPickupTime: true } },
@@ -32,10 +33,18 @@ const listDebts = async (user, query) => {
     where,
     include: includeDebt,
     orderBy: { createdAt: "desc" },
+    take: Math.min(Math.max(Number(query.limit || 200), 1), 200),
   });
 };
 
-const closeDebt = async (user, id, body) => {
+const closeDebt = async (user, id, body, { idempotencyKey } = {}) => {
+  const requestKey = requireIdempotencyKey(idempotencyKey);
+  const replay = await prisma.debt.findUnique({ where: { closeIdempotencyKey: requestKey }, include: includeDebt });
+  if (replay) {
+    getScopedBranchId(user, replay.branchId);
+    if (replay.id !== id) throw new AppError("Idempotency key belongs to another debt", 409);
+    return { ...replay, idempotentReplay: true };
+  }
   const result = await prisma.$transaction(async (tx) => {
     const debt = await tx.debt.findUnique({ where: { id }, include: { order: true } });
     if (!debt) throw new AppError("Debt not found", 404);
@@ -50,7 +59,7 @@ const closeDebt = async (user, id, body) => {
 
     const closed = await tx.debt.updateMany({
       where: { id, status: "OPEN" },
-      data: { status: "CLOSED", closedAt: new Date(), closedById: user.id },
+      data: { status: "CLOSED", closedAt: new Date(), closedById: user.id, closeIdempotencyKey: requestKey },
     });
     if (closed.count === 0) throw new AppError("Debt is already closed", 409);
     const updated = await tx.debt.findUnique({ where: { id }, include: includeDebt });
@@ -82,7 +91,16 @@ const closeDebt = async (user, id, body) => {
       paymentType,
       currency: body.currency || debt.currency,
     };
+  }).catch(async (error) => {
+    const existing = await prisma.debt.findUnique({ where: { closeIdempotencyKey: requestKey }, include: includeDebt });
+    if (existing) {
+      getScopedBranchId(user, existing.branchId);
+      if (existing.id !== id) throw new AppError("Idempotency key belongs to another debt", 409);
+      return { ...existing, idempotentReplay: true };
+    }
+    throw error;
   });
+  if (result.idempotentReplay) return result;
   telegram.sendSafely(
     () => telegram.sendDebtClosed({ ...result, closedBy: result.closedBy || user, paidAt: result.closedAt }),
     { action: "DEBT_CLOSED", branchId: result.branchId, userId: user.id, entityType: "Debt", entityId: id },

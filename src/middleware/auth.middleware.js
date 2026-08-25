@@ -25,6 +25,7 @@ const authMiddleware = asyncHandler(async (req, _res, next) => {
 
   if (!user || !user.isActive) throw new AppError("User is not active", 401);
   req.user = user;
+  req.perfMark?.("auth");
   next();
 });
 

@@ -28,12 +28,23 @@ const parseLocalParts = (value) => {
 
 const hasExplicitTimezone = (value) => /[T\s].*(Z|[+-]\d{2}:?\d{2})$/i.test(String(value));
 
+const isValidLocalParts = (parts) => {
+  const normalized = new Date(Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second, parts.millisecond));
+  return normalized.getUTCFullYear() === parts.year &&
+    normalized.getUTCMonth() === parts.month - 1 &&
+    normalized.getUTCDate() === parts.day &&
+    normalized.getUTCHours() === parts.hour &&
+    normalized.getUTCMinutes() === parts.minute &&
+    normalized.getUTCSeconds() === parts.second;
+};
+
 const parseDate = (value, field = "date", boundary = "exact") => {
   if (!value) return undefined;
   const localParts = parseLocalParts(value);
   let date;
 
   if (localParts && !hasExplicitTimezone(value)) {
+    if (!isValidLocalParts(localParts)) throw new AppError(`Invalid ${field}`, 400);
     const endOfDay = boundary === "end" && localParts.dateOnly;
     date = localTashkentToUtc(
       localParts.year,

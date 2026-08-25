@@ -8,6 +8,7 @@ const telegram = require("./telegram.service");
 const googleSheets = require("./googleSheets.service");
 const { createCashMovement } = require("./cashMovement.service");
 const { summarizeMovements, cashBalanceByCurrency } = require("./cashAccounting.service");
+const { requireIdempotencyKey, isUniqueConflictFor } = require("../utils/idempotency");
 
 const include = {
   branch: { select: { id: true, name: true, code: true } },
@@ -28,11 +29,31 @@ const normalizeCurrencyMap = (value, fallbackUzs = 0) => {
 
 const listShifts = async (user, query) => {
   const where = { ...branchWhere(user, query.branchId), ...dateRangeWhere(query.dateFrom, query.dateTo, "openedAt"), ...(query.status ? { status: query.status } : {}) };
-  const shifts = await prisma.shift.findMany({ where, include, orderBy: { openedAt: "desc" } });
-  return Promise.all(shifts.map(async (shift) => ({
-    ...shift,
-    ...(await computeShiftReport(prisma, shift)),
-  })));
+  const limit = Math.min(Math.max(Number(query.limit || 50), 1), 100);
+  const shifts = await prisma.shift.findMany({ where, include, orderBy: { openedAt: "desc" }, take: limit });
+  if (!shifts.length) return [];
+
+  const shiftIds = shifts.map((shift) => shift.id);
+  const branchIds = [...new Set(shifts.map((shift) => shift.branchId))];
+  const earliestOpen = shifts.reduce((earliest, shift) => shift.openedAt < earliest ? shift.openedAt : earliest, shifts[0].openedAt);
+  const [movements, debts, orders] = await Promise.all([
+    prisma.cashMovement.findMany({ where: { shiftId: { in: shiftIds } } }),
+    prisma.debt.findMany({ where: { branchId: { in: branchIds }, createdAt: { gte: earliestOpen } } }),
+    prisma.order.findMany({ where: { branchId: { in: branchIds }, createdAt: { gte: earliestOpen } }, select: { branchId: true, createdAt: true } }),
+  ]);
+
+  return shifts.map((shift) => {
+    const reportEnd = shift.closedAt || new Date();
+    return {
+      ...shift,
+      ...buildShiftReport(
+        shift,
+        movements.filter((item) => item.shiftId === shift.id),
+        debts.filter((item) => item.branchId === shift.branchId && item.createdAt >= shift.openedAt && item.createdAt <= reportEnd),
+        orders.filter((item) => item.branchId === shift.branchId && item.createdAt >= shift.openedAt && item.createdAt <= reportEnd).length,
+      ),
+    };
+  });
 };
 
 const currentShift = async (user, query = {}) => {
@@ -82,9 +103,15 @@ const sendCurrentSalesTelegram = async (user, query = {}) => {
   };
 };
 
-const openShift = async (user, body) => {
+const openShift = async (user, body, { idempotencyKey } = {}) => {
   const branchId = getScopedBranchId(user, body.branchId || user.branchId);
   if (!branchId) throw new AppError("branchId is required", 400);
+  const requestKey = requireIdempotencyKey(idempotencyKey);
+  const replay = await prisma.shift.findUnique({ where: { idempotencyKey: requestKey }, include });
+  if (replay) {
+    if (replay.branchId !== branchId) throw new AppError("Idempotency key belongs to another branch", 409);
+    return { ...replay, idempotentReplay: true };
+  }
   const existing = await prisma.shift.findFirst({ where: { branchId, status: "OPEN" } });
   if (existing) throw new AppError("This branch already has an open shift", 400);
   const openingCashByCurrency = normalizeCurrencyMap(body.openingCashByCurrency, body.openingCash);
@@ -93,6 +120,7 @@ const openShift = async (user, body) => {
   try {
     shift = await prisma.shift.create({
       data: {
+        idempotencyKey: requestKey,
         branchId,
         openedById: user.id,
         openingCash: openingCashByCurrency.UZS,
@@ -106,6 +134,10 @@ const openShift = async (user, body) => {
       include,
     });
   } catch (error) {
+    if (isUniqueConflictFor(error, "idempotencyKey")) {
+      const existingByKey = await prisma.shift.findUnique({ where: { idempotencyKey: requestKey }, include });
+      if (existingByKey?.branchId === branchId) return { ...existingByKey, idempotentReplay: true };
+    }
     if (error?.code === "P2002") throw new AppError("This branch already has an open shift", 409);
     throw error;
   }
@@ -115,14 +147,7 @@ const openShift = async (user, body) => {
   return result;
 };
 
-const computeShiftReport = async (tx, shift) => {
-  const reportEnd = shift.closedAt || new Date();
-  const [movements, debts, ordersCount] = await Promise.all([
-    tx.cashMovement.findMany({ where: { shiftId: shift.id } }),
-    tx.debt.findMany({ where: { branchId: shift.branchId, createdAt: { gte: shift.openedAt, lte: reportEnd } } }),
-    tx.order.count({ where: { branchId: shift.branchId, createdAt: { gte: shift.openedAt, lte: reportEnd } } }),
-  ]);
-
+const buildShiftReport = (shift, movements, debts, ordersCount) => {
   const openDebts = debts.filter((item) => item.status === "OPEN");
   const summary = summarizeMovements(movements);
   const salaryMovements = summary.groups.expenses.filter(isSalaryMovement);
@@ -211,7 +236,24 @@ const computeShiftReport = async (tx, shift) => {
   };
 };
 
-const closeShift = async (user, id, body) => {
+const computeShiftReport = async (tx, shift) => {
+  const reportEnd = shift.closedAt || new Date();
+  const [movements, debts, ordersCount] = await Promise.all([
+    tx.cashMovement.findMany({ where: { shiftId: shift.id } }),
+    tx.debt.findMany({ where: { branchId: shift.branchId, createdAt: { gte: shift.openedAt, lte: reportEnd } } }),
+    tx.order.count({ where: { branchId: shift.branchId, createdAt: { gte: shift.openedAt, lte: reportEnd } } }),
+  ]);
+  return buildShiftReport(shift, movements, debts, ordersCount);
+};
+
+const closeShift = async (user, id, body, { idempotencyKey } = {}) => {
+  const requestKey = requireIdempotencyKey(idempotencyKey);
+  const replay = await prisma.shift.findUnique({ where: { closeIdempotencyKey: requestKey }, include });
+  if (replay) {
+    getScopedBranchId(user, replay.branchId);
+    if (replay.id !== id) throw new AppError("Idempotency key belongs to another shift", 409);
+    return { ...replay, idempotentReplay: true };
+  }
   const result = await prisma.$transaction(async (tx) => {
     const shift = await tx.shift.findUnique({ where: { id } });
     if (!shift || shift.status !== "OPEN") throw new AppError("Bu filialda ochiq smena yo'q", 404);
@@ -287,6 +329,7 @@ const closeShift = async (user, id, body) => {
         closedById: user.id,
         closedAt: new Date(),
         status: "CLOSED",
+        closeIdempotencyKey: requestKey,
         handoverToName: body.handoverToName || shift.handoverToName,
       },
     });
@@ -295,7 +338,16 @@ const closeShift = async (user, id, body) => {
     const result = { ...updated, ...report, closingCashByCurrency, differenceByCurrency, salaryAmount: reportSalaryAmount, ordersCount, salaryReceiver: salaryAmount > 0 ? salaryReceiver : null };
     await audit({ tx, branchId: shift.branchId, userId: user.id, entityType: "Shift", entityId: id, action: "SHIFT_CLOSE", oldValue: shift, newValue: result, description: "Shift closed" });
     return result;
+  }).catch(async (error) => {
+    const existing = await prisma.shift.findUnique({ where: { closeIdempotencyKey: requestKey }, include });
+    if (existing) {
+      getScopedBranchId(user, existing.branchId);
+      if (existing.id !== id) throw new AppError("Idempotency key belongs to another shift", 409);
+      return { ...existing, idempotentReplay: true };
+    }
+    throw error;
   });
+  if (result.idempotentReplay) return result;
   telegram.sendSafely(() => telegram.sendShiftClose(result), { action: "SHIFT_CLOSE", branchId: result.branchId, userId: user.id, entityType: "Shift", entityId: id });
   if (result.salaryReceiver && Number(result.salaryAmount || 0) > 0) {
     googleSheets.sendSafely(

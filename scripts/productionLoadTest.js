@@ -14,7 +14,7 @@ const { performance } = require("node:perf_hooks");
 const baseUrl = String(process.env.LOAD_TEST_BASE_URL || "http://127.0.0.1:5000")
   .trim()
   .replace(/\/+$/, "");
-const token = String(process.env.LOAD_TEST_TOKEN || "").trim();
+let token = String(process.env.LOAD_TEST_TOKEN || "").trim();
 const branchId = String(process.env.LOAD_TEST_BRANCH_ID || "").trim();
 const envInt = (name, fallback, min, max) => {
   const value = Number.parseInt(process.env[name] || "", 10);
@@ -38,15 +38,34 @@ const authenticatedEndpoints = branchId
       `/api/orders?branchId=${encodeURIComponent(branchId)}&limit=50`,
       `/api/notifications?branchId=${encodeURIComponent(branchId)}&isRead=false&limit=20`,
       `/api/analytics/dashboard?branchId=${encodeURIComponent(branchId)}`,
+      `/api/audit?branchId=${encodeURIComponent(branchId)}&limit=20`,
+      `/api/cash-movements?branchId=${encodeURIComponent(branchId)}&limit=20`,
+      `/api/shifts?branchId=${encodeURIComponent(branchId)}`,
+      `/api/expenses?branchId=${encodeURIComponent(branchId)}`,
+      `/api/inkassa?branchId=${encodeURIComponent(branchId)}`,
     ]
   : [];
 
 const endpoints = configuredEndpoints.length
   ? configuredEndpoints
-  : ["/health", "/ready", ...(token ? authenticatedEndpoints : [])];
+  : ["/health", "/ready", ...authenticatedEndpoints];
 
 const samples = [];
-const deadline = performance.now() + durationSeconds * 1000;
+let deadline = 0;
+
+const authenticate = async () => {
+  if (token || !process.env.LOAD_TEST_LOGIN) return;
+  const password = String(process.env.LOAD_TEST_PASSWORD || process.env.SEED_PASSWORD || "");
+  if (!password) throw new Error("LOAD_TEST_PASSWORD is required when LOAD_TEST_LOGIN is set");
+  const response = await fetch(`${baseUrl}/api/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ login: process.env.LOAD_TEST_LOGIN, password }),
+  });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok || !payload?.data?.token) throw new Error(`Load-test authentication failed: HTTP ${response.status}`);
+  token = payload.data.token;
+};
 
 const request = async (path) => {
   const controller = new AbortController();
@@ -116,7 +135,10 @@ if (!endpoints.length) {
   throw new Error("No load-test endpoints configured");
 }
 
-Promise.all(Array.from({ length: virtualUsers }, runWorker)).then(() => {
+authenticate().then(() => {
+  deadline = performance.now() + durationSeconds * 1000;
+  return Promise.all(Array.from({ length: virtualUsers }, runWorker));
+}).then(() => {
   const byEndpoint = Object.fromEntries(
     endpoints.map((path) => [path, summarize(samples.filter((row) => row.path === path))]),
   );

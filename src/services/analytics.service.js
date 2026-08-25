@@ -2,7 +2,7 @@ const prisma = require("../config/prisma");
 const { branchWhere, getScopedBranchId } = require("../utils/scope");
 const { dateRangeWhere, formatTashkentDateKey, getTashkentParts, startOfToday } = require("../utils/date");
 const { sum, byKeySum, byCurrency, subtractCurrencyMaps } = require("../utils/money");
-const { computeShiftReport, normalizeCurrencyMap } = require("./shift.service");
+const { normalizeCurrencyMap } = require("./shift.service");
 const { summarizeMovements, sumCurrencyMaps, cashBalanceByCurrency } = require("./cashAccounting.service");
 
 const asNumber = (value) => Number(value || 0);
@@ -154,13 +154,9 @@ const dashboard = async (user, query) => {
   const today = startOfToday();
   const [
     todayMovements,
-    activeOrders,
-    totalOrders,
-    todayClients,
+    orderStatusCounts,
     openDebts,
     lockers,
-    delayedOrders,
-    cancelledOrders,
     shifts,
     branches,
     todayOrders,
@@ -169,24 +165,32 @@ const dashboard = async (user, query) => {
       where: { ...scope, createdAt: { gte: today } },
       select: { branchId: true, type: true, direction: true, amount: true, currency: true, paymentType: true, createdAt: true },
     }),
-    prisma.order.count({ where: { ...scope, status: { in: ["ACTIVE", "DELAYED"] } } }),
-    prisma.order.count({ where: scope }),
-    prisma.order.count({ where: { ...scope, createdAt: { gte: today } } }),
+    prisma.order.groupBy({ by: ["status"], where: scope, _count: { _all: true } }),
     prisma.debt.findMany({ where: { ...scope, status: "OPEN" }, select: { amount: true, currency: true } }),
     prisma.locker.findMany({ where: scope, select: { branchId: true, status: true } }),
-    prisma.order.count({ where: { ...scope, status: "DELAYED" } }),
-    prisma.order.count({ where: { ...scope, status: "CANCELLED" } }),
     prisma.shift.findMany({ where: { ...scope, status: "OPEN" }, include: { branch: { select: { id: true, name: true } } } }),
     prisma.branch.findMany({ where: branchScope, orderBy: { name: "asc" } }),
     prisma.order.findMany({ where: { ...scope, createdAt: { gte: today } }, select: { id: true, branchId: true, status: true } }),
   ]);
 
-  const shiftStatus = await Promise.all(
-    shifts.map(async (shift) => {
-      const { ordersCount, ...report } = await computeShiftReport(prisma, shift);
-      return { ...shift, ...report, ordersCount };
-    }),
-  );
+  const statusCounts = Object.fromEntries(orderStatusCounts.map((item) => [item.status, item._count._all]));
+  const activeOrders = Number(statusCounts.ACTIVE || 0) + Number(statusCounts.DELAYED || 0);
+  const totalOrders = Object.values(statusCounts).reduce((total, count) => total + Number(count || 0), 0);
+  const todayClients = todayOrders.length;
+  const delayedOrders = Number(statusCounts.DELAYED || 0);
+  const cancelledOrders = Number(statusCounts.CANCELLED || 0);
+  let shiftStatus = [];
+  if (shifts.length) {
+    const shiftIds = shifts.map((shift) => shift.id);
+    const branchIds = [...new Set(shifts.map((shift) => shift.branchId))];
+    const earliestOpen = shifts.reduce((earliest, shift) => shift.openedAt < earliest ? shift.openedAt : earliest, shifts[0].openedAt);
+    const [shiftMovements, shiftDebts, shiftOrders] = await Promise.all([
+      prisma.cashMovement.findMany({ where: { shiftId: { in: shiftIds } } }),
+      prisma.debt.findMany({ where: { branchId: { in: branchIds }, createdAt: { gte: earliestOpen } }, select: { branchId: true, amount: true, currency: true, status: true, createdAt: true } }),
+      prisma.order.findMany({ where: { branchId: { in: branchIds }, createdAt: { gte: earliestOpen } }, select: { branchId: true, createdAt: true } }),
+    ]);
+    shiftStatus = buildShiftReports({ shifts, movements: shiftMovements, debts: shiftDebts, orders: shiftOrders });
+  }
   const todaySummary = summarizeMovements(todayMovements);
   const todayPayments = todaySummary.groups.revenueIn;
   const todayOut = todaySummary.groups.balanceOut;

@@ -8,6 +8,7 @@ const rateLimit = require("express-rate-limit");
 const prisma = require("./config/prisma");
 const authMiddleware = require("./middleware/auth.middleware");
 const { notFound, errorMiddleware } = require("./middleware/error.middleware");
+const perfMiddleware = require("./middleware/perf.middleware");
 
 const authRoutes = require("./routes/auth.routes");
 const branchRoutes = require("./routes/branch.routes");
@@ -126,6 +127,7 @@ app.get("/ready", async (_req, res) => {
     if (timeoutId) clearTimeout(timeoutId);
   }
 });
+app.use(perfMiddleware);
 app.use("/api/auth", authRoutes);
 
 app.use(authMiddleware);

@@ -18,6 +18,7 @@ const googleSheets = require("./googleSheets.service");
 const { getPagination } = require("../utils/pagination");
 const { createTimer } = require("../utils/perf");
 const { normalizePaymentType, paymentLabel } = require("../utils/payment");
+const { requireIdempotencyKey } = require("../utils/idempotency");
 const {
   overtimeHoursAfterGrace,
   isOverdueAfterGrace,
@@ -71,6 +72,7 @@ const listOrderSelect = {
   realPickupTime: true,
   note: true,
   cancelReason: true,
+  cancelledAt: true,
   createdAt: true,
   updatedAt: true,
 };
@@ -855,14 +857,23 @@ const sendOrderTelegram = async (user, id) => {
   return result;
 };
 
-const updateOrder = async (user, id, body) => {
-  const result = await prisma.$transaction(async (tx) => {
+const updateOrder = async (user, id, body, { idempotencyKey } = {}) => {
+  const requestKey = requireIdempotencyKey(idempotencyKey);
+  const replay = await prisma.order.findUnique({ where: { editIdempotencyKey: requestKey }, include: includeOrder });
+  if (replay) {
+    getScopedBranchId(user, replay.branchId);
+    if (replay.id !== id) throw new AppError("Idempotency key belongs to another order", 409);
+    return replay;
+  }
+  let result;
+  try {
+    result = await prisma.$transaction(async (tx) => {
     const current = await tx.order.findUnique({ where: { id }, include: includeOrder });
     if (!current) throw new AppError("Order not found", 404);
     getScopedBranchId(user, current.branchId);
     if (!["ACTIVE", "DELAYED", "PICKED_UP"].includes(current.status)) throw new AppError("Only active or picked up orders can be edited", 400);
 
-    const data = {};
+    const data = { editIdempotencyKey: requestKey };
     for (const key of ["clientName", "phone", "passport", "note", "discountReason", "realPaidReason"]) {
       if (body[key] !== undefined) data[key] = body[key] || null;
     }
@@ -1044,8 +1055,17 @@ const updateOrder = async (user, id, body) => {
     }
     if (itemChanged) changes[changeLabels.items] = { old: "oldingi", next: "yangilandi" };
     await audit({ tx, branchId: current.branchId, userId: user.id, entityType: "Order", entityId: id, action: "ORDER_EDIT", oldValue: current, newValue: updated, description: "Order edited" });
-    return { updated, changes };
-  });
+      return { updated, changes };
+    });
+  } catch (error) {
+    const existing = await prisma.order.findUnique({ where: { editIdempotencyKey: requestKey }, include: includeOrder });
+    if (existing) {
+      getScopedBranchId(user, existing.branchId);
+      if (existing.id !== id) throw new AppError("Idempotency key belongs to another order", 409);
+      return existing;
+    }
+    throw error;
+  }
 
   telegram.sendSafely(
     () => telegram.sendOrderEdit({ ...result.updated, updatedBy: user }, result.changes),
@@ -1054,7 +1074,14 @@ const updateOrder = async (user, id, body) => {
   return result.updated;
 };
 
-const pickupOrder = async (user, id, body) => {
+const pickupOrder = async (user, id, body, { idempotencyKey } = {}) => {
+  const requestKey = requireIdempotencyKey(idempotencyKey);
+  const replay = await prisma.order.findUnique({ where: { pickupIdempotencyKey: requestKey }, include: includeOrder });
+  if (replay) {
+    getScopedBranchId(user, replay.branchId);
+    if (replay.id !== id) throw new AppError("Idempotency key belongs to another order", 409);
+    return replay;
+  }
   const timer = createTimer("orders.pickup", {
     hasOvertime: Number(body.overtimeAmount || body.extraPayment || 0) > 0,
     hasDebtPayment: body.debtPaidAmount !== undefined,
@@ -1069,7 +1096,8 @@ const pickupOrder = async (user, id, body) => {
     let debtPayment = null;
     let debtPaidAmount = 0;
 
-    const pickupTime = body.realPickupTime ? new Date(body.realPickupTime) : new Date();
+    // Pickup is a transaction timestamp, not an operator/browser clock value.
+    const pickupTime = new Date();
     const overtimeHours = overtimeHoursAfterGrace(order.plannedCheckOut, pickupTime);
     const overtimeAmount = Number(body.overtimeAmount || body.extraPayment || 0);
     const overtimeCurrency = body.currency || order.currency;
@@ -1091,6 +1119,7 @@ const pickupOrder = async (user, id, body) => {
         overtimeHours,
         overtimeAmount,
         overtimePaymentType: overtimeAmount > 0 ? overtimePaymentType : null,
+        pickupIdempotencyKey: requestKey,
       },
     }));
     let updated = await timer.time("order lookup after transition", () => tx.order.findUnique({ where: { id }, include: includeOrder }));
@@ -1227,6 +1256,13 @@ const pickupOrder = async (user, id, body) => {
     };
   }));
   } catch (error) {
+    const existing = await prisma.order.findUnique({ where: { pickupIdempotencyKey: requestKey }, include: includeOrder });
+    if (existing) {
+      getScopedBranchId(user, existing.branchId);
+      if (existing.id !== id) throw new AppError("Idempotency key belongs to another order", 409);
+      timer.end({ ok: true, outcome: "idempotent_replay" });
+      return existing;
+    }
     timer.end({ ok: false, statusCode: error.statusCode || 500, stage: "pickup" });
     throw error;
   }
@@ -1266,15 +1302,24 @@ const pickupOrder = async (user, id, body) => {
   return result.updated;
 };
 
-const cancelOrder = async (user, id, body) => {
-  const result = await prisma.$transaction(async (tx) => {
+const cancelOrder = async (user, id, body, { idempotencyKey } = {}) => {
+  const requestKey = requireIdempotencyKey(idempotencyKey);
+  const replay = await prisma.order.findUnique({ where: { cancelIdempotencyKey: requestKey }, include: includeOrder });
+  if (replay) {
+    getScopedBranchId(user, replay.branchId);
+    if (replay.id !== id) throw new AppError("Idempotency key belongs to another order", 409);
+    return replay;
+  }
+  let result;
+  try {
+    result = await prisma.$transaction(async (tx) => {
     const order = await tx.order.findUnique({ where: { id }, include: includeOrder });
     if (!order || !["ACTIVE", "DELAYED"].includes(order.status)) throw new AppError("Active order not found", 404);
     getScopedBranchId(user, order.branchId);
     await ensureSingleStatusTransition({
       model: tx.order,
       where: { id, status: { in: ["ACTIVE", "DELAYED"] } },
-      data: { status: "CANCELLED", cancelledById: user.id, cancelReason: body.cancelReason || body.reason || null },
+      data: { status: "CANCELLED", cancelledById: user.id, cancelledAt: new Date(), cancelReason: body.cancelReason || body.reason || null, cancelIdempotencyKey: requestKey },
     });
     const updated = await tx.order.findUnique({ where: { id }, include: includeOrder });
     await tx.locker.updateMany({ where: { currentOrderId: id }, data: { status: "EMPTY", currentOrderId: null } });
@@ -1304,14 +1349,23 @@ const cancelOrder = async (user, id, body) => {
       relatedOrderId: order.id,
     });
     await audit({ tx, branchId: order.branchId, userId: user.id, entityType: "Order", entityId: id, action: "ORDER_CANCEL", oldValue: order, newValue: updated, description: body.cancelReason || "Order cancelled" });
-    return {
-      updated: {
-        ...updated,
-        cancelledAmount: reversals.reduce((total, item) => total + Number(item.amount || 0), 0),
-      },
-      reversals,
-    };
-  });
+      return {
+        updated: {
+          ...updated,
+          cancelledAmount: reversals.reduce((total, item) => total + Number(item.amount || 0), 0),
+        },
+        reversals,
+      };
+    });
+  } catch (error) {
+    const existing = await prisma.order.findUnique({ where: { cancelIdempotencyKey: requestKey }, include: includeOrder });
+    if (existing) {
+      getScopedBranchId(user, existing.branchId);
+      if (existing.id !== id) throw new AppError("Idempotency key belongs to another order", 409);
+      return existing;
+    }
+    throw error;
+  }
   telegram.sendSafely(() => telegram.sendOrderCancel(result.updated), { action: "ORDER_CANCEL", branchId: result.updated.branchId, userId: user.id, entityType: "Order", entityId: id });
   for (const reversal of result.reversals) {
     googleSheets.sendSafely(
@@ -1325,6 +1379,8 @@ const cancelOrder = async (user, id, body) => {
 const markDelayedOrders = async (branchId = undefined) => {
   const now = new Date();
   const threshold = overdueThresholdDate(now);
+  const configuredBatchSize = Number.parseInt(process.env.OVERDUE_JOB_BATCH_SIZE || "", 10);
+  const batchSize = Number.isInteger(configuredBatchSize) ? Math.min(Math.max(configuredBatchSize, 10), 500) : 100;
   const result = await prisma.$transaction(async (tx) => {
     const [{ locked }] = await tx.$queryRaw`
       SELECT pg_try_advisory_xact_lock(hashtext('baggage-room:overdue-job')) AS locked
@@ -1333,6 +1389,8 @@ const markDelayedOrders = async (branchId = undefined) => {
 
     const overdue = await tx.order.findMany({
       where: { ...(branchId ? { branchId } : {}), status: "ACTIVE", plannedCheckOut: { lt: threshold } },
+      orderBy: { plannedCheckOut: "asc" },
+      take: batchSize,
       include: {
         branch: { select: { id: true, name: true } },
         items: { select: { lockerNumber: true, locker: { select: { number: true } } } },

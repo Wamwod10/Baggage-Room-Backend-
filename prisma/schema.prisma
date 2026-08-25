@@ -137,6 +137,7 @@ model Locker {
   status          LockerStatus  @default(EMPTY)
   currentOrderId  String?
   serviceReason   String?
+  actionIdempotencyKey String? @unique
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
   branch          Branch        @relation(fields: [branchId], references: [id])
@@ -172,6 +173,10 @@ model Order {
   id                 String        @id @default(cuid())
   orderNumber        String        @unique
   idempotencyKey     String?       @unique
+  editIdempotencyKey String?       @unique
+  pickupIdempotencyKey String?     @unique
+  cancelIdempotencyKey String?     @unique
+  transferIdempotencyKey String?   @unique
   branchId           String
   clientName         String
   phone              String
@@ -198,6 +203,7 @@ model Order {
   createdById        String
   pickedUpById       String?
   cancelledById      String?
+  cancelledAt        DateTime?
   cancelReason       String?
   createdAt          DateTime      @default(now())
   updatedAt          DateTime      @updatedAt
@@ -248,6 +254,8 @@ model OrderItem {
 
 model Shift {
   id                  String        @id @default(cuid())
+  idempotencyKey      String?       @unique
+  closeIdempotencyKey String?       @unique
   branchId            String
   openedById          String
   closedById          String?
@@ -291,6 +299,7 @@ model Shift {
 
 model Expense {
   id           String      @id @default(cuid())
+  idempotencyKey String?   @unique
   branchId     String
   shiftId      String?
   category     String
@@ -310,6 +319,7 @@ model Expense {
 
 model Inkassa {
   id            String      @id @default(cuid())
+  idempotencyKey String?    @unique
   branchId      String
   shiftId       String?
   receiverName  String
@@ -365,6 +375,7 @@ model Debt {
   status      DebtStatus   @default(OPEN)
   closedAt    DateTime?
   closedById  String?
+  closeIdempotencyKey String? @unique
   createdAt   DateTime    @default(now())
   order       Order       @relation(fields: [orderId], references: [id])
   branch      Branch      @relation(fields: [branchId], references: [id])

@@ -27,7 +27,7 @@ const create = asyncHandler(async (req, res) => success(res, await timed(
     idempotencyKey: req.get("Idempotency-Key"),
   }),
 ), 201));
-const update = asyncHandler(async (req, res) => success(res, await orderService.updateOrder(req.user, req.params.id, req.body)));
+const update = asyncHandler(async (req, res) => success(res, await orderService.updateOrder(req.user, req.params.id, req.body, { idempotencyKey: req.get("Idempotency-Key") })));
 const pickup = asyncHandler(async (req, res) => success(res, await timed(
   "orders.pickup.endpoint",
   {
@@ -36,9 +36,9 @@ const pickup = asyncHandler(async (req, res) => success(res, await timed(
     hasOvertime: Number(req.body?.overtimeAmount || req.body?.extraPayment || 0) > 0,
     hasDebtPayment: req.body?.debtPaidAmount !== undefined,
   },
-  () => orderService.pickupOrder(req.user, req.params.id, req.body),
+  () => orderService.pickupOrder(req.user, req.params.id, req.body, { idempotencyKey: req.get("Idempotency-Key") }),
 )));
-const cancel = asyncHandler(async (req, res) => success(res, await orderService.cancelOrder(req.user, req.params.id, req.body)));
+const cancel = asyncHandler(async (req, res) => success(res, await orderService.cancelOrder(req.user, req.params.id, req.body, { idempotencyKey: req.get("Idempotency-Key") })));
 const sendTelegram = asyncHandler(async (req, res) => success(res, await orderService.sendOrderTelegram(req.user, req.params.id)));
 
 module.exports = { list, get, create, update, pickup, cancel, sendTelegram };

@@ -12,7 +12,7 @@
     "test:sheets:real": "node scripts/googleSheetsRealMappingTest.js",
     "test:sheets:months": "node scripts/googleSheetsMonthSheetCheck.js",
     "test:sheets:inkassa:real": "node scripts/googleSheetsInkassaRealTest.js",
-    "load:test": "node scripts/productionLoadTest.js",
+    "load:test": "node --require dotenv/config scripts/productionLoadTest.js",
     "db:readiness": "node --require dotenv/config scripts/productionDbSnapshot.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
