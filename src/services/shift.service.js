@@ -65,6 +65,47 @@ const currentShift = async (user, query = {}) => {
   return { ...shift, ...report, ordersCount };
 };
 
+
+const currentOperatorStats = async (user, query = {}) => {
+  const branchId = getScopedBranchId(user, query.branchId || user.branchId);
+  if (!branchId) throw new AppError("branchId is required", 400);
+
+  const shift = await prisma.shift.findFirst({
+    where: { branchId, status: "OPEN" },
+    include,
+    orderBy: { openedAt: "desc" },
+  });
+  if (!shift) return null;
+
+  const operatorId = shift.openedById;
+  const from = shift.openedAt;
+  const to = new Date();
+
+  const [createdOrders, pickups, cancellations, closedDebts, transfers, cashOperations] = await Promise.all([
+    prisma.order.count({ where: { branchId, createdById: operatorId, createdAt: { gte: from, lte: to } } }),
+    prisma.order.count({ where: { branchId, pickedUpById: operatorId, realPickupTime: { gte: from, lte: to } } }),
+    prisma.order.count({ where: { branchId, cancelledById: operatorId, cancelledAt: { gte: from, lte: to } } }),
+    prisma.debt.count({ where: { branchId, closedById: operatorId, closedAt: { gte: from, lte: to } } }),
+    prisma.auditLog.count({ where: { branchId, userId: operatorId, action: "LOCKER_TRANSFER", createdAt: { gte: from, lte: to } } }),
+    prisma.cashMovement.count({ where: { branchId, shiftId: shift.id, createdById: operatorId, createdAt: { gte: from, lte: to } } }),
+  ]);
+
+  return {
+    shift: {
+      id: shift.id,
+      branchId: shift.branchId,
+      branchName: shift.branch?.name || null,
+      openedAt: shift.openedAt,
+      acceptedByName: shift.acceptedByName || null,
+      operatorName: shift.acceptedByName || shift.openedBy?.name || shift.openedBy?.login || null,
+      operator: shift.openedBy || null,
+    },
+    viewerIsOperator: user.id === operatorId,
+    stats: { createdOrders, pickups, cancellations, closedDebts, transfers, cashOperations },
+    calculatedAt: to,
+  };
+};
+
 const telegramReasonText = {
   settings_not_found: "Telegram sozlamalari topilmadi",
   missing_credentials: "Bot token yoki chat ID kiritilmagan",
@@ -361,4 +402,4 @@ const closeShift = async (user, id, body, { idempotencyKey } = {}) => {
   return result;
 };
 
-module.exports = { listShifts, currentShift, sendCurrentSalesTelegram, openShift, closeShift, computeShiftReport, normalizeCurrencyMap };
+module.exports = { listShifts, currentShift, currentOperatorStats, sendCurrentSalesTelegram, openShift, closeShift, computeShiftReport, normalizeCurrencyMap };

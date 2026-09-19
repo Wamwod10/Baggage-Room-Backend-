@@ -229,6 +229,9 @@ model Order {
   @@index([branchId, orderNumber])
   @@index([branchId, phone, status, createdAt])
   @@index([branchId, passport, status, createdAt])
+  @@index([branchId, createdById, createdAt])
+  @@index([branchId, pickedUpById, realPickupTime])
+  @@index([branchId, cancelledById, cancelledAt])
 }
 
 model OrderItem {
@@ -362,6 +365,7 @@ model CashMovement {
   @@index([branchId, createdAt])
   @@index([branchId, type, createdAt])
   @@index([shiftId, createdAt])
+  @@index([shiftId, createdById, createdAt])
 }
 
 model Debt {
@@ -385,6 +389,7 @@ model Debt {
   @@index([phone])
   @@index([status])
   @@index([branchId, status, createdAt])
+  @@index([branchId, closedById, closedAt])
 }
 
 model AuditLog {
@@ -405,6 +410,7 @@ model AuditLog {
   @@index([userId])
   @@index([createdAt])
   @@index([branchId, createdAt])
+  @@index([branchId, userId, action, createdAt])
 }
 
 model Notification {
