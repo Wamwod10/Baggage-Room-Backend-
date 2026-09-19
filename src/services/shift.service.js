@@ -87,10 +87,11 @@ const currentOperatorStats = async (user, query = {}) => {
     prisma.order.count({ where: { branchId, cancelledById: operatorId, cancelledAt: { gte: from, lte: to } } }),
     prisma.debt.findMany({ where: { branchId, closedById: operatorId, closedAt: { gte: from, lte: to } }, select: { amount: true, currency: true } }),
     prisma.auditLog.count({ where: { branchId, userId: operatorId, action: "LOCKER_TRANSFER", createdAt: { gte: from, lte: to } } }),
-    prisma.cashMovement.findMany({ where: { branchId, shiftId: shift.id, createdById: operatorId, createdAt: { gte: from, lte: to } }, select: { amount: true, currency: true, direction: true } }),
+    prisma.cashMovement.findMany({ where: { branchId, shiftId: shift.id, createdById: operatorId, createdAt: { gte: from, lte: to } }, select: { amount: true, currency: true, direction: true, type: true, paymentType: true } }),
   ]);
   const cashIn = cashRows.filter((row) => row.direction === "IN");
   const cashOut = cashRows.filter((row) => row.direction === "OUT");
+  const revenue = summarizeMovements(cashRows);
 
   return {
     shift: {
@@ -115,6 +116,13 @@ const currentOperatorStats = async (user, query = {}) => {
       closedDebtsAmountByCurrency: byCurrency(closedDebtRows),
       cashInByCurrency: byCurrency(cashIn),
       cashOutByCurrency: byCurrency(cashOut),
+      revenueByCurrency: revenue.revenueByCurrency,
+      paymentByCurrency: {
+        CASH: revenue.cashByCurrency,
+        TERMINAL: revenue.terminalByCurrency,
+        CLICK: revenue.clickByCurrency,
+        PAYME: revenue.paymeByCurrency,
+      },
     },
     calculatedAt: to,
   };
