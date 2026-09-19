@@ -77,17 +77,16 @@ const currentOperatorStats = async (user, query = {}) => {
   });
   if (!shift) return null;
 
-  const operatorId = user.id;
   const from = shift.openedAt;
   const to = new Date();
 
   const [createdOrderRows, pickupRows, cancellations, closedDebtRows, transfers, cashRows] = await Promise.all([
-    prisma.order.findMany({ where: { branchId, createdById: operatorId, createdAt: { gte: from, lte: to } }, select: { finalAmount: true, currency: true } }),
-    prisma.order.findMany({ where: { branchId, pickedUpById: operatorId, realPickupTime: { gte: from, lte: to } }, select: { overtimeAmount: true, currency: true } }),
-    prisma.order.count({ where: { branchId, cancelledById: operatorId, cancelledAt: { gte: from, lte: to } } }),
-    prisma.debt.findMany({ where: { branchId, closedById: operatorId, closedAt: { gte: from, lte: to } }, select: { amount: true, currency: true } }),
-    prisma.auditLog.count({ where: { branchId, userId: operatorId, action: "LOCKER_TRANSFER", createdAt: { gte: from, lte: to } } }),
-    prisma.cashMovement.findMany({ where: { branchId, shiftId: shift.id, createdById: operatorId, createdAt: { gte: from, lte: to } }, select: { amount: true, currency: true, direction: true, type: true, paymentType: true } }),
+    prisma.order.findMany({ where: { branchId, createdAt: { gte: from, lte: to } }, select: { finalAmount: true, currency: true } }),
+    prisma.order.findMany({ where: { branchId, realPickupTime: { gte: from, lte: to } }, select: { overtimeAmount: true, currency: true } }),
+    prisma.order.count({ where: { branchId, cancelledAt: { gte: from, lte: to } } }),
+    prisma.debt.findMany({ where: { branchId, closedAt: { gte: from, lte: to } }, select: { amount: true, currency: true } }),
+    prisma.auditLog.count({ where: { branchId, action: "LOCKER_TRANSFER", createdAt: { gte: from, lte: to } } }),
+    prisma.cashMovement.findMany({ where: { branchId, shiftId: shift.id, createdAt: { gte: from, lte: to } }, select: { amount: true, currency: true, direction: true, type: true, paymentType: true } }),
   ]);
   const cashIn = cashRows.filter((row) => row.direction === "IN");
   const cashOut = cashRows.filter((row) => row.direction === "OUT");
