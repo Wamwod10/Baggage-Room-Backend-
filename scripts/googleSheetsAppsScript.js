@@ -35,7 +35,7 @@ const SHEET_NAME_PATTERN_BY_BRANCH_CODE = {
   SIA: /(sia|самарканд.*аэропорт|samarqand.*aeroport)/i,
 };
 
-const WRITABLE_ACTIONS = new Set(["NEW_ORDER", "DOPLATA", "DEBT_PAYMENT", "CANCEL_ORDER", "EXPENSE", "INKASSA", "SALARY"]);
+const WRITABLE_ACTIONS = new Set(["NEW_ORDER", "ORDER_EDIT", "DOPLATA", "DEBT_PAYMENT", "CANCEL_ORDER", "EXPENSE", "INKASSA", "SALARY"]);
 const MONTH_CHECK_ACTIONS = new Set(["CHECK_MONTH_SHEET"]);
 const SCRIPT_VERSION = "v9-debt-doplata-payment-2026-07-09";
 const TASHKENT_OFFSET_MINUTES = 5 * 60;
@@ -176,7 +176,7 @@ function doPost(e) {
       const row = buildLegacyRow_(payload);
       if (row.length !== LEGACY_WIDTH) throw new Error("Row must contain exactly 22 columns (A:V)");
       console.log("[GoogleSheets] finalRow " + JSON.stringify({ action, branchCode, row }));
-      const targetRow = findNextOrderRow(sheet);
+      const targetRow = action === "ORDER_EDIT" ? findExistingOrderRow_(sheet, payload) : findNextOrderRow(sheet);
       // C contains only grouped size counts; locker numbers and # are never accepted.
       sheet.getRange(targetRow, COLUMN.PLACE).setNumberFormat("@");
       sheet.getRange(targetRow, 1, 1, LEGACY_WIDTH).setValues([row]);
@@ -200,6 +200,7 @@ function doPost(e) {
         sheetId: sheet.getSheetId(),
         monthSheetName,
         row: targetRow,
+        updated: action === "ORDER_EDIT",
         finalRow: row,
       });
     } finally {
@@ -532,7 +533,7 @@ function legacyDataStartRow_(sheet) {
 
 function buildLegacyRow_(payload) {
   const action = String(payload.action || "").toUpperCase();
-  if (action === "NEW_ORDER") return buildNewOrderRow(payload);
+  if (action === "NEW_ORDER" || action === "ORDER_EDIT") return buildNewOrderRow(payload);
   if (action === "DOPLATA") return buildDoplataRow(payload);
   if (action === "DEBT_PAYMENT") return buildDebtPaymentRow(payload);
   if (action === "CANCEL_ORDER") return buildCancelOrderRow(payload);
@@ -540,6 +541,20 @@ function buildLegacyRow_(payload) {
   if (action === "SALARY") return buildSalaryRow(payload);
   if (action === "INKASSA") return buildInkassaRow(payload);
   throw new Error("Unsupported action: " + action);
+}
+
+function findExistingOrderRow_(sheet, payload) {
+  const orderNumber = String(payload.orderNumber || payload.checkNumber || "").trim();
+  if (!orderNumber) throw new Error("ORDER_EDIT requires orderNumber");
+  const startRow = legacyDataStartRow_(sheet);
+  const maxRows = Math.max(sheet.getMaxRows(), startRow);
+  const values = sheet.getRange(startRow, COLUMN.CHECK, maxRows - startRow + 1, 1).getDisplayValues();
+  for (let index = values.length - 1; index >= 0; index -= 1) {
+    if (String(values[index][0] || "").trim() === orderNumber) {
+      return startRow + index;
+    }
+  }
+  throw new Error("ORDER_EDIT target row not found for orderNumber: " + orderNumber);
 }
 
 function createRow_(payload) {
@@ -718,7 +733,7 @@ function applyMoneyFormat_(sheet, row, payload) {
   let column = null;
   if (action === "EXPENSE" || action === "SALARY") column = COLUMN.EXPENSE;
   if (action === "INKASSA") column = BALANCE_COLUMN_BY_CURRENCY[code] || COLUMN.BALANCE_UZS;
-  if (action === "NEW_ORDER" || action === "DOPLATA" || action === "DEBT_PAYMENT" || action === "CANCEL_ORDER") {
+  if (action === "NEW_ORDER" || action === "ORDER_EDIT" || action === "DOPLATA" || action === "DEBT_PAYMENT" || action === "CANCEL_ORDER") {
     if (!payload.paymentType) throw new Error("paymentType is required for revenue format");
     const paymentType = String(payload.paymentType).toUpperCase();
     if (paymentType === "DEBT") return;
@@ -825,6 +840,7 @@ if (typeof module !== "undefined" && module.exports) {
     monthSheetNameForPayload_,
     moneyNumberFormat_,
     buildLegacyRow_,
+    findExistingOrderRow_,
     buildNewOrderRow,
     buildDoplataRow,
     buildDebtPaymentRow,

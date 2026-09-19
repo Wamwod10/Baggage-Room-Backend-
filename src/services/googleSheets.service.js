@@ -72,7 +72,7 @@ const webhookError = (message, { status = null, body = null, json = null } = {})
   return error;
 };
 const isEnabled = () => ["true", "1", "yes", "on"].includes(String(enabledValue()).toLowerCase()) && Boolean(getWebhookUrl());
-const DELIVERABLE_ACTIONS = new Set(["NEW_ORDER", "DOPLATA", "DEBT_PAYMENT", "CANCEL_ORDER", "EXPENSE", "INKASSA", "SALARY"]);
+const DELIVERABLE_ACTIONS = new Set(["NEW_ORDER", "ORDER_EDIT", "DOPLATA", "DEBT_PAYMENT", "CANCEL_ORDER", "EXPENSE", "INKASSA", "SALARY"]);
 const shouldDeliver = (payload) => DELIVERABLE_ACTIONS.has(String(payload?.action || "").toUpperCase());
 const pendingDeliveryKeys = new Set();
 
@@ -359,7 +359,7 @@ const postWebhook = async (payload) => {
     if (!shouldDeliver(payload)) {
       return {
         skipped: true,
-        reason: `Google Sheets only accepts NEW_ORDER, DOPLATA, DEBT_PAYMENT, CANCEL_ORDER, EXPENSE, INKASSA, SALARY events (received ${payload.action || "UNKNOWN"})`,
+        reason: `Google Sheets only accepts NEW_ORDER, ORDER_EDIT, DOPLATA, DEBT_PAYMENT, CANCEL_ORDER, EXPENSE, INKASSA, SALARY events (received ${payload.action || "UNKNOWN"})`,
       };
     }
     if (!isEnabled()) {
@@ -552,6 +552,17 @@ const newOrderSheetAmount = (order) =>
 
 const sendNewOrder = (order) =>
   postWebhook(orderPayload("NEW_ORDER", order, { amount: newOrderSheetAmount(order) }));
+
+const sendOrderEdit = (order) =>
+  postWebhook(orderPayload("ORDER_EDIT", order, {
+    amount: newOrderSheetAmount(order),
+    idempotencyKey: [
+      "ORDER_EDIT",
+      branchCode(order) || "NO_BRANCH",
+      order?.orderNumber || order?.id || "NO_ORDER",
+      order?.updatedAt instanceof Date ? order.updatedAt.toISOString() : String(order?.updatedAt || Date.now()),
+    ].join(":"),
+  }));
 
 const sendDoplata = (order) =>
   postWebhook(orderPayload("DOPLATA", order, {
@@ -996,6 +1007,7 @@ const sendTestEvent = async (user, body) => {
 
 module.exports = {
   sendNewOrder,
+  sendOrderEdit,
   sendDoplata,
   sendOrderCancel,
   sendPickup,

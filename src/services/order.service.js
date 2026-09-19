@@ -1071,6 +1071,10 @@ const updateOrder = async (user, id, body, { idempotencyKey } = {}) => {
     () => telegram.sendOrderEdit({ ...result.updated, updatedBy: user }, result.changes),
     { action: "ORDER_EDIT", branchId: result.updated.branchId, userId: user.id, entityType: "Order", entityId: `${id}:edit:${result.updated.updatedAt.getTime()}` },
   );
+  googleSheets.sendSafely(
+    () => googleSheets.sendOrderEdit(result.updated),
+    { action: "ORDER_EDIT", branchId: result.updated.branchId, userId: user.id, entityType: "OrderEdit", entityId: `${id}:edit:${result.updated.updatedAt.getTime()}` },
+  );
   return result.updated;
 };
 

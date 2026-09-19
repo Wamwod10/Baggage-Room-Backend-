@@ -77,18 +77,20 @@ const currentOperatorStats = async (user, query = {}) => {
   });
   if (!shift) return null;
 
-  const operatorId = shift.openedById;
+  const operatorId = user.id;
   const from = shift.openedAt;
   const to = new Date();
 
-  const [createdOrders, pickups, cancellations, closedDebts, transfers, cashOperations] = await Promise.all([
-    prisma.order.count({ where: { branchId, createdById: operatorId, createdAt: { gte: from, lte: to } } }),
-    prisma.order.count({ where: { branchId, pickedUpById: operatorId, realPickupTime: { gte: from, lte: to } } }),
+  const [createdOrderRows, pickupRows, cancellations, closedDebtRows, transfers, cashRows] = await Promise.all([
+    prisma.order.findMany({ where: { branchId, createdById: operatorId, createdAt: { gte: from, lte: to } }, select: { finalAmount: true, currency: true } }),
+    prisma.order.findMany({ where: { branchId, pickedUpById: operatorId, realPickupTime: { gte: from, lte: to } }, select: { overtimeAmount: true, currency: true } }),
     prisma.order.count({ where: { branchId, cancelledById: operatorId, cancelledAt: { gte: from, lte: to } } }),
-    prisma.debt.count({ where: { branchId, closedById: operatorId, closedAt: { gte: from, lte: to } } }),
+    prisma.debt.findMany({ where: { branchId, closedById: operatorId, closedAt: { gte: from, lte: to } }, select: { amount: true, currency: true } }),
     prisma.auditLog.count({ where: { branchId, userId: operatorId, action: "LOCKER_TRANSFER", createdAt: { gte: from, lte: to } } }),
-    prisma.cashMovement.count({ where: { branchId, shiftId: shift.id, createdById: operatorId, createdAt: { gte: from, lte: to } } }),
+    prisma.cashMovement.findMany({ where: { branchId, shiftId: shift.id, createdById: operatorId, createdAt: { gte: from, lte: to } }, select: { amount: true, currency: true, direction: true } }),
   ]);
+  const cashIn = cashRows.filter((row) => row.direction === "IN");
+  const cashOut = cashRows.filter((row) => row.direction === "OUT");
 
   return {
     shift: {
@@ -100,8 +102,20 @@ const currentOperatorStats = async (user, query = {}) => {
       operatorName: shift.acceptedByName || shift.openedBy?.name || shift.openedBy?.login || null,
       operator: shift.openedBy || null,
     },
-    viewerIsOperator: user.id === operatorId,
-    stats: { createdOrders, pickups, cancellations, closedDebts, transfers, cashOperations },
+    viewerIsOperator: user.id === shift.openedById,
+    stats: {
+      createdOrders: createdOrderRows.length,
+      pickups: pickupRows.length,
+      cancellations,
+      closedDebts: closedDebtRows.length,
+      transfers,
+      cashOperations: cashRows.length,
+      createdOrdersAmountByCurrency: byCurrency(createdOrderRows, (row) => row.finalAmount),
+      pickupsAmountByCurrency: byCurrency(pickupRows, (row) => row.overtimeAmount),
+      closedDebtsAmountByCurrency: byCurrency(closedDebtRows),
+      cashInByCurrency: byCurrency(cashIn),
+      cashOutByCurrency: byCurrency(cashOut),
+    },
     calculatedAt: to,
   };
 };

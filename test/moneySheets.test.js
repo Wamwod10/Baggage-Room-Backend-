@@ -491,6 +491,38 @@ test("required NEW_ORDER, INKASSA, EXPENSE, SALARY and DOPLATA A:V mappings are 
   assert.equal(doplata[COLUMN.NAME - 1], "Qo'shimcha to'lov");
 });
 
+test("ORDER_EDIT is deliverable and rebuilds the original order row", () => {
+  const payload = sheets._internals.orderPayload("ORDER_EDIT", {
+    id: "edited-order",
+    branch: { code: "TIA", name: "Toshkent aeroport" },
+    orderNumber: "TIA-EDIT-1",
+    clientName: "Edited Client",
+    items: [{ size: "L", count: 2 }],
+    tariffHours: 12,
+    finalAmount: 175000,
+    realPaidAmount: 175000,
+    currency: "UZS",
+    paymentType: "CLICK",
+    createdAt: "2026-07-10T09:00:00+05:00",
+  }, {
+    amount: sheets._internals.newOrderSheetAmount({
+      paymentType: "CLICK",
+      realPaidAmount: 175000,
+      finalAmount: 175000,
+    }),
+    idempotencyKey: "ORDER_EDIT:TIA:TIA-EDIT-1:2026-07-10T10:00:00.000Z",
+  });
+
+  const row = appsScript.buildLegacyRow_(payload);
+
+  assert.equal(sheets._internals.shouldDeliver(payload), true);
+  assert.equal(row[COLUMN.FIO - 1], "Edited Client");
+  assert.equal(row[COLUMN.PLACE - 1], "2-L");
+  assert.equal(row[COLUMN.CHECK - 1], "TIA-EDIT-1");
+  assert.equal(row[COLUMN.CLICK - 1], 175000);
+  assert.equal(row[COLUMN.NAME - 1], "Хранение багажа");
+});
+
 test("localized decimal strings stay decimals instead of becoming 100x larger", () => {
   assert.equal(appsScript.parseNumber_("214,29"), 214.29);
   assert.equal(appsScript.parseNumber_("17,39"), 17.39);
