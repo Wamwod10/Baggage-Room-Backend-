@@ -100,13 +100,33 @@ test("Inkassa and doplata Telegram messages use real admin and safe business ide
   assert.doesNotMatch(`${inkassa}\n${doplata}`, /undefined|null|branchId|order\.id/);
 });
 
-test("overtime grace period is 10 minutes and starts charging after that", () => {
+test("overtime stays free through 15 minutes and charges one hour after that", () => {
   const checkout = new Date("2026-07-09T10:00:00.000Z");
-  assert.equal(OVERTIME_GRACE_MINUTES, 10);
-  assert.equal(isOverdueAfterGrace(checkout, new Date("2026-07-09T10:09:00.000Z")), false);
-  assert.equal(isOverdueAfterGrace(checkout, new Date("2026-07-09T10:10:00.000Z")), false);
-  assert.equal(isOverdueAfterGrace(checkout, new Date("2026-07-09T10:11:00.000Z")), true);
-  assert.equal(overtimeHoursAfterGrace(checkout, new Date("2026-07-09T10:11:00.000Z")), 1);
+  assert.equal(OVERTIME_GRACE_MINUTES, 15);
+  assert.equal(isOverdueAfterGrace(checkout, new Date("2026-07-09T10:15:00.000Z")), false);
+  assert.equal(overtimeHoursAfterGrace(checkout, new Date("2026-07-09T10:15:00.000Z")), 0);
+  assert.equal(isOverdueAfterGrace(checkout, new Date("2026-07-09T10:15:01.000Z")), true);
+  assert.equal(overtimeHoursAfterGrace(checkout, new Date("2026-07-09T10:15:01.000Z")), 1);
+  assert.equal(overtimeHoursAfterGrace(checkout, new Date("2026-07-09T11:15:00.000Z")), 1);
+});
+
+test("overtime amount uses each baggage size one-hour tariff", () => {
+  const amount = orderServiceInternals.calculateOvertimeAmount({
+    order: {
+      currency: "UZS",
+      items: [
+        { size: "M", count: 1, tariffHours: 12, unitPrice: 100000 },
+        { size: "XL", count: 2, tariffHours: 12, unitPrice: 180000 },
+      ],
+    },
+    tariffs: [
+      { size: "M", price1h: 15000, price12h: 100000 },
+      { size: "XL", price1h: 25000, price12h: 180000 },
+    ],
+    overtimeHours: 1,
+  });
+
+  assert.equal(amount, 65000);
 });
 
 test("Telegram admin labels do not use branch names or branch logins as admin names", () => {

@@ -25,6 +25,30 @@ const {
   overdueThresholdDate,
 } = require("../utils/overtime");
 
+const calculateOvertimeAmount = ({ order, tariffs, overtimeHours }) => {
+  const hours = Math.max(0, Number(overtimeHours || 0));
+  if (!hours) return 0;
+
+  const tariffsBySize = new Map((tariffs || []).map((tariff) => [tariff.size, tariff]));
+  return (order.items || []).reduce((total, item) => {
+    const tariff = tariffsBySize.get(item.size);
+    if (!tariff) throw new AppError(`Tariff for size ${item.size} not found`, 400);
+
+    const count = Math.max(1, Number(item.count || 1));
+    let hourlyPrice = Number(tariff.price1h || 0);
+    if (order.currency !== "UZS") {
+      const originalUzsPrice = calculatePrice(tariff, item.tariffHours, {
+        isCustom: order.customHours !== null && order.customHours !== undefined,
+      });
+      hourlyPrice = originalUzsPrice > 0
+        ? Math.round(hourlyPrice * (Number(item.unitPrice || 0) / originalUzsPrice))
+        : 0;
+    }
+
+    return total + hourlyPrice * count * hours;
+  }, 0);
+};
+
 const includeOrder = {
   branch: { select: { id: true, name: true, code: true } },
   createdBy: { select: { id: true, name: true, login: true } },
@@ -1103,8 +1127,11 @@ const pickupOrder = async (user, id, body, { idempotencyKey } = {}) => {
     // Pickup is a transaction timestamp, not an operator/browser clock value.
     const pickupTime = new Date();
     const overtimeHours = overtimeHoursAfterGrace(order.plannedCheckOut, pickupTime);
-    const overtimeAmount = Number(body.overtimeAmount || body.extraPayment || 0);
-    const overtimeCurrency = body.currency || order.currency;
+    const tariffs = await timer.time("overtime tariffs", () => tx.tariff.findMany({
+      where: { branchId: order.branchId, size: { in: [...new Set(order.items.map((item) => item.size))] } },
+    }));
+    const overtimeAmount = calculateOvertimeAmount({ order, tariffs, overtimeHours });
+    const overtimeCurrency = order.currency;
     const overtimePaymentType = normalizePaymentType(body.overtimePaymentType || body.doplataPaymentType || body.paymentType);
     const debtPaymentType = normalizePaymentType(body.debtPaymentType || body.paymentType);
     if (overtimeAmount > 0 && !overtimePaymentType) {
@@ -1439,6 +1466,7 @@ module.exports = {
   sendOrderTelegram,
   _internals: {
     buildEditChanges,
+    calculateOvertimeAmount,
     formatChangeMoney,
     formatChangeValue,
   },

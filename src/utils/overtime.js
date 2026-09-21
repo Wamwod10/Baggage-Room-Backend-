@@ -1,4 +1,4 @@
-const OVERTIME_GRACE_MINUTES = 10;
+const OVERTIME_GRACE_MINUTES = 15;
 const OVERTIME_GRACE_MS = OVERTIME_GRACE_MINUTES * 60 * 1000;
 
 const overtimeMsAfterGrace = (plannedCheckOut, actualTime = new Date()) => {
