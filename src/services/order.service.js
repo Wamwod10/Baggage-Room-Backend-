@@ -50,6 +50,11 @@ const calculateOvertimeAmount = ({ order, tariffs, overtimeHours }) => {
   }, 0);
 };
 
+const resolvePickupOvertimeAmount = (body = {}, calculatedAmount = 0) => {
+  const suppliedAmount = body.overtimeAmount ?? body.extraPayment;
+  return suppliedAmount === undefined ? calculatedAmount : Number(suppliedAmount);
+};
+
 const includeOrder = {
   branch: { select: { id: true, name: true, code: true } },
   createdBy: { select: { id: true, name: true, login: true } },
@@ -1133,7 +1138,8 @@ const pickupOrder = async (user, id, body, { idempotencyKey } = {}) => {
     const tariffs = await timer.time("overtime tariffs", () => tx.tariff.findMany({
       where: { branchId: order.branchId, size: { in: [...new Set(order.items.map((item) => item.size))] } },
     }));
-    const overtimeAmount = calculateOvertimeAmount({ order, tariffs, overtimeHours });
+    const calculatedOvertimeAmount = calculateOvertimeAmount({ order, tariffs, overtimeHours });
+    const overtimeAmount = resolvePickupOvertimeAmount(body, calculatedOvertimeAmount);
     const overtimeCurrency = order.currency;
     const overtimePaymentType = normalizePaymentType(body.overtimePaymentType || body.doplataPaymentType || body.paymentType);
     const debtPaymentType = normalizePaymentType(body.debtPaymentType || body.paymentType);
@@ -1475,6 +1481,7 @@ module.exports = {
   _internals: {
     buildEditChanges,
     calculateOvertimeAmount,
+    resolvePickupOvertimeAmount,
     formatChangeMoney,
     formatChangeValue,
   },
