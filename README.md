@@ -90,6 +90,61 @@ npm start
 
 Set the same environment variables in Render.
 
+## Historical Order Archive
+
+The archive command moves historical order facts into daily branch aggregates and
+then removes the corresponding closed orders from live sales history. Run it only
+after the additive Prisma migration and archive-aware application code have been
+deployed.
+
+1. Create a database-provider snapshot and record its recovery identifier.
+2. Run the local gates against a safe non-production database:
+
+```bash
+npm run prisma:generate
+npm test
+npm run db:readiness
+```
+
+3. Capture a redacted `before.json` containing `analytics`, `salesHistoryTotal`,
+   `activeOrders`, and `lockers`. Include all-time, today, 7-day, 30-day, and
+   per-branch analytics in `analytics`. Store only IDs and state needed for the
+   invariants; never include names, phone numbers, passports, notes, order
+   numbers, tokens, credentials, or other customer PII.
+4. Preview the deterministic oldest 5,000 eligible orders. This is read-only:
+
+```bash
+npm run archive:orders -- --run-key=initial-platform-orders-5000 --limit=5000
+```
+
+Continue only when `selectedCount` is 5,000 and `blockers` is empty. Review the
+date boundaries, status and branch distributions, selection hash, and keep the
+returned confirmation token private.
+
+5. Execute the exact reviewed selection once:
+
+```bash
+npm run archive:orders -- --run-key=initial-platform-orders-5000 --limit=5000 --execute --confirm=<exact-dry-run-token>
+```
+
+Do not retry with a different run key if execution is blocked. Investigate the
+blocker first.
+
+6. Capture the same redacted fields as `after.json`, then verify the result:
+
+```bash
+npm run archive:verify -- --before=before.json --after=after.json --archived-count=5000
+```
+
+The verifier must return `"ok": true`: analytics, active orders, and locker state
+must be unchanged, while the live sales-history total must be exactly 5,000 lower.
+Monitor `/health`, `/ready`, analytics latency, application errors, and database
+errors after execution.
+
+If verification fails, stop writes and restore the recorded provider snapshot.
+Redeploy the previously known-good application version, rerun the same redacted
+checks, and retain the failed run's redacted logs for diagnosis.
+
 ## Default Seed Logins
 
 Password for all default users defaults to:

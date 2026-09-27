@@ -14,6 +14,7 @@
     "test:sheets:inkassa:real": "node scripts/googleSheetsInkassaRealTest.js",
     "load:test": "node --require dotenv/config scripts/productionLoadTest.js",
     "archive:orders": "node --require dotenv/config scripts/archiveOldOrders.js",
+    "archive:verify": "node --require dotenv/config scripts/verifyAnalyticsArchive.js",
     "db:readiness": "node --require dotenv/config scripts/productionDbSnapshot.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
