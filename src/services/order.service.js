@@ -17,6 +17,7 @@ const telegram = require("./telegram.service");
 const googleSheets = require("./googleSheets.service");
 const { getPagination } = require("../utils/pagination");
 const { createTimer } = require("../utils/perf");
+const { markAnalyticsMutation } = require("./analyticsCache");
 const { normalizePaymentType, paymentLabel } = require("../utils/payment");
 const { requireIdempotencyKey } = require("../utils/idempotency");
 const {
@@ -863,6 +864,7 @@ const createOrder = async (user, body, { idempotencyKey } = {}) => {
 
   // Telegram is an external best-effort side effect. It must not keep the
   // order response open for up to the provider timeout.
+  markAnalyticsMutation(created);
   void sendNewOrderTelegram(created, { userId: user.id });
   googleSheets.sendSafely(() => googleSheets.sendNewOrder(created), { action: "NEW_ORDER", branchId, userId: user.id, entityType: "Order", entityId: created.id });
   timer.end({ ok: true, outcome: "created", warnings: warnings.length });
@@ -1091,6 +1093,7 @@ const updateOrder = async (user, id, body, { idempotencyKey } = {}) => {
     throw error;
   }
 
+  markAnalyticsMutation(result.updated);
   telegram.sendSafely(
     () => telegram.sendOrderEdit({ ...result.updated, updatedBy: user }, result.changes),
     { action: "ORDER_EDIT", branchId: result.updated.branchId, userId: user.id, entityType: "Order", entityId: `${id}:edit:${result.updated.updatedAt.getTime()}` },
@@ -1297,6 +1300,7 @@ const pickupOrder = async (user, id, body, { idempotencyKey } = {}) => {
     timer.end({ ok: false, statusCode: error.statusCode || 500, stage: "pickup" });
     throw error;
   }
+  markAnalyticsMutation(result.updated);
   if (result.overtimeTelegram) {
     telegram.sendSafely(
       () => telegram.sendOvertimePayment({ ...result.updated, ...result.overtimeTelegram }),
@@ -1397,6 +1401,7 @@ const cancelOrder = async (user, id, body, { idempotencyKey } = {}) => {
     }
     throw error;
   }
+  markAnalyticsMutation(result.updated);
   telegram.sendSafely(() => telegram.sendOrderCancel(result.updated), { action: "ORDER_CANCEL", branchId: result.updated.branchId, userId: user.id, entityType: "Order", entityId: id });
   for (const reversal of result.reversals) {
     googleSheets.sendSafely(
@@ -1451,6 +1456,9 @@ const markDelayedOrders = async (branchId = undefined) => {
       () => telegram.sendDelayedBaggage(order),
       { action: "DELAYED_BAGGAGE", branchId: order.branchId, entityType: "Order", entityId: order.id },
     );
+  }
+  for (const affectedBranchId of new Set(result.delayedOrders.map((order) => order.branchId))) {
+    markAnalyticsMutation({ branchId: affectedBranchId });
   }
   return result.delayedOrders.length;
 };

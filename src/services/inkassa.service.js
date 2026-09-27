@@ -8,6 +8,7 @@ const telegram = require("./telegram.service");
 const googleSheets = require("./googleSheets.service");
 const { computeShiftReport } = require("./shift.service");
 const { requireIdempotencyKey, isUniqueConflictFor } = require("../utils/idempotency");
+const { markAnalyticsMutation } = require("./analyticsCache");
 
 const includeInkassa = {
   branch: { select: { id: true, name: true, code: true } },
@@ -66,6 +67,7 @@ const createInkassa = async (user, body, { idempotencyKey } = {}) => {
     ...inkassa,
     adminName: inkassa.shift?.acceptedByName || null,
   };
+  markAnalyticsMutation(payload, { fallbackBranchId: branchId });
   telegram.sendSafely(() => telegram.sendInkassa(payload), { action: "INKASSA", branchId, userId: user.id, entityType: "Inkassa", entityId: inkassa.id });
   googleSheets.sendSafely(() => googleSheets.sendInkassa(payload), { action: "INKASSA", branchId, userId: user.id, entityType: "Inkassa", entityId: inkassa.id });
   return payload;

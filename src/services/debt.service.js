@@ -8,6 +8,7 @@ const telegram = require("./telegram.service");
 const googleSheets = require("./googleSheets.service");
 const { normalizePaymentType } = require("../utils/payment");
 const { requireIdempotencyKey } = require("../utils/idempotency");
+const { markAnalyticsMutation } = require("./analyticsCache");
 
 const includeDebt = {
   order: { select: { id: true, orderNumber: true, status: true, passport: true, checkIn: true, plannedCheckOut: true, realPickupTime: true } },
@@ -101,6 +102,7 @@ const closeDebt = async (user, id, body, { idempotencyKey } = {}) => {
     throw error;
   });
   if (result.idempotentReplay) return result;
+  markAnalyticsMutation(result);
   telegram.sendSafely(
     () => telegram.sendDebtClosed({ ...result, closedBy: result.closedBy || user, paidAt: result.closedAt }),
     { action: "DEBT_CLOSED", branchId: result.branchId, userId: user.id, entityType: "Debt", entityId: id },

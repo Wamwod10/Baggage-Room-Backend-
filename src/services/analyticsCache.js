@@ -49,6 +49,11 @@ const analyticsCache = createAnalyticsCache();
 const getCachedAnalytics = (key) => analyticsCache.get(key);
 const setCachedAnalytics = (key, value, branchId) => analyticsCache.set(key, value, branchId);
 const invalidateAnalyticsCache = (branchId) => analyticsCache.invalidate(branchId);
+const markAnalyticsMutation = (result, { fallbackBranchId, replayed = false } = {}) => {
+  if (!result || replayed) return;
+  const branchId = result.branchId || result.branch?.id || fallbackBranchId;
+  invalidateAnalyticsCache(branchId);
+};
 
 module.exports = {
   buildAnalyticsCacheKey,
@@ -56,4 +61,5 @@ module.exports = {
   getCachedAnalytics,
   setCachedAnalytics,
   invalidateAnalyticsCache,
+  markAnalyticsMutation,
 };

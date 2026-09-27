@@ -9,6 +9,7 @@ const googleSheets = require("./googleSheets.service");
 const { createCashMovement } = require("./cashMovement.service");
 const { summarizeMovements, cashBalanceByCurrency } = require("./cashAccounting.service");
 const { requireIdempotencyKey, isUniqueConflictFor } = require("../utils/idempotency");
+const { markAnalyticsMutation } = require("./analyticsCache");
 
 const include = {
   branch: { select: { id: true, name: true, code: true } },
@@ -205,6 +206,7 @@ const openShift = async (user, body, { idempotencyKey } = {}) => {
   }
   await audit({ branchId, userId: user.id, entityType: "Shift", entityId: shift.id, action: "SHIFT_OPEN", newValue: shift, description: "Shift opened" });
   const result = { ...shift, openingCashByCurrency, acceptedCashByCurrency };
+  markAnalyticsMutation(result, { fallbackBranchId: branchId });
   telegram.sendSafely(() => telegram.sendShiftOpen(result), { action: "SHIFT_OPEN", branchId, userId: user.id, entityType: "Shift", entityId: shift.id });
   return result;
 };
@@ -410,6 +412,7 @@ const closeShift = async (user, id, body, { idempotencyKey } = {}) => {
     throw error;
   });
   if (result.idempotentReplay) return result;
+  markAnalyticsMutation(result);
   telegram.sendSafely(() => telegram.sendShiftClose(result), { action: "SHIFT_CLOSE", branchId: result.branchId, userId: user.id, entityType: "Shift", entityId: id });
   if (result.salaryReceiver && Number(result.salaryAmount || 0) > 0) {
     googleSheets.sendSafely(

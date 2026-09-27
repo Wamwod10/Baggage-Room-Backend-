@@ -7,3 +7,4 @@ require("./orderAnalyticsRepository.test");
 require("./analyticsCache.test");
 require("./analyticsArchiveIntegration.test");
 require("./orderArchive.test");
+require("./analyticsInvalidation.test");

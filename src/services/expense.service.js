@@ -7,6 +7,7 @@ const { findOpenShift, createCashMovement } = require("./cashMovement.service");
 const telegram = require("./telegram.service");
 const googleSheets = require("./googleSheets.service");
 const { requireIdempotencyKey, isUniqueConflictFor } = require("../utils/idempotency");
+const { markAnalyticsMutation } = require("./analyticsCache");
 
 const includeExpense = {
   branch: { select: { id: true, name: true, code: true } },
@@ -60,13 +61,14 @@ const createExpense = async (user, body, { idempotencyKey } = {}) => {
     ...expense,
     adminName: expense.shift?.acceptedByName || null,
   };
+  markAnalyticsMutation(payload, { fallbackBranchId: branchId });
   telegram.sendSafely(() => telegram.sendExpense(payload), { action: "EXPENSE", branchId, userId: user.id, entityType: "Expense", entityId: expense.id });
   googleSheets.sendSafely(() => googleSheets.sendExpense(payload), { action: "EXPENSE", branchId, userId: user.id, entityType: "Expense", entityId: expense.id });
   return payload;
 };
 
 const deleteExpense = async (user, id) => {
-  await prisma.$transaction(async (tx) => {
+  const deleted = await prisma.$transaction(async (tx) => {
     const expense = await tx.expense.findUnique({ where: { id } });
     if (!expense) throw new AppError("Expense not found", 404);
     getScopedBranchId(user, expense.branchId);
@@ -81,7 +83,9 @@ const deleteExpense = async (user, id) => {
       oldValue: expense,
       description: "Expense deleted",
     });
+    return expense;
   });
+  markAnalyticsMutation(deleted);
   return { id };
 };
 
