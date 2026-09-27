@@ -1,9 +1,16 @@
 const prisma = require("../config/prisma");
 const { branchWhere, getScopedBranchId } = require("../utils/scope");
-const { dateRangeWhere, formatTashkentDateKey, getTashkentParts, startOfToday } = require("../utils/date");
+const { dateRangeWhere, formatTashkentDateKey, startOfToday } = require("../utils/date");
 const { sum, byKeySum, byCurrency, subtractCurrencyMaps } = require("../utils/money");
 const { normalizeCurrencyMap } = require("./shift.service");
 const { summarizeMovements, sumCurrencyMaps, cashBalanceByCurrency } = require("./cashAccounting.service");
+const { loadCombinedOrderFacts } = require("../repositories/orderAnalytics.repository");
+const { createTimer } = require("../utils/perf");
+const {
+  buildAnalyticsCacheKey,
+  getCachedAnalytics,
+  setCachedAnalytics,
+} = require("./analyticsCache");
 
 const asNumber = (value) => Number(value || 0);
 const dayKey = (date) => formatTashkentDateKey(date);
@@ -18,6 +25,7 @@ const countBy = (items, keySelector) =>
   }, {});
 
 const percent = (part, total) => (total > 0 ? Math.round((part / total) * 100) : 0);
+const currencies = ["UZS", "USD", "RUB", "EUR", "KZT", "TJS"];
 const paymentCurrencyBreakdown = (movements = []) =>
   ["CASH", "TERMINAL", "CLICK", "PAYME", "DEBT"].reduce((result, paymentType) => {
     const aliases = paymentType === "TERMINAL" ? ["TERMINAL", "CARD", "TRANSFER"] : [paymentType];
@@ -120,9 +128,15 @@ const buildShiftReports = ({ shifts, movements, debts, orders, now = new Date() 
   });
 };
 
-const buildBranchSummary = ({ branches, orders, lockers, movements }) =>
+const buildBranchSummary = ({ branches, orders = [], branchOrderStats = null, lockers, movements }) =>
   branches.map((branch) => {
     const branchOrders = orders.filter((order) => order.branchId === branch.id);
+    const orderStats = branchOrderStats?.[branch.id] || {
+      orders: branchOrders.length,
+      active: branchOrders.filter((order) => ["ACTIVE", "DELAYED"].includes(order.status)).length,
+      delayed: branchOrders.filter((order) => order.status === "DELAYED").length,
+      cancelled: branchOrders.filter((order) => order.status === "CANCELLED").length,
+    };
     const branchLockers = lockers.filter((locker) => locker.branchId === branch.id);
     const branchSummary = summarizeMovements(movements.filter((movement) => movement.branchId === branch.id));
     const revenue = sum(branchSummary.groups.revenueIn);
@@ -134,11 +148,11 @@ const buildBranchSummary = ({ branches, orders, lockers, movements }) =>
       name: branch.name,
       code: branch.code,
       lockers: branchLockers.length,
-      orders: branchOrders.length,
-      totalOrders: branchOrders.length,
-      activeOrders: branchOrders.filter((order) => ["ACTIVE", "DELAYED"].includes(order.status)).length,
-      delayedOrders: branchOrders.filter((order) => order.status === "DELAYED").length,
-      cancelledOrders: branchOrders.filter((order) => order.status === "CANCELLED").length,
+      orders: orderStats.orders,
+      totalOrders: orderStats.orders,
+      activeOrders: orderStats.active,
+      delayedOrders: orderStats.delayed,
+      cancelledOrders: orderStats.cancelled,
       emptyLockers: branchLockers.filter((locker) => locker.status === "EMPTY").length,
       busyLockers: branchLockers.filter((locker) => locker.status === "BUSY").length,
       revenue,
@@ -147,38 +161,110 @@ const buildBranchSummary = ({ branches, orders, lockers, movements }) =>
     };
   });
 
-const dashboard = async (user, query) => {
+const buildOrderAnalyticsFromFacts = ({ rows = [], total = {} } = {}, branches = []) => {
+  const statusCounts = total.statusCounts || {};
+  const ordersByDay = {};
+  const peakHours = {};
+  const branchOrderStats = Object.fromEntries(branches.map((branch) => [branch.id, {
+    orders: 0,
+    active: 0,
+    delayed: 0,
+    cancelled: 0,
+  }]));
+
+  for (const row of rows) {
+    ordersByDay[row.day] = (ordersByDay[row.day] || 0) + asNumber(row.totalOrders);
+    for (const [hour, count] of Object.entries(row.hourCounts || {})) {
+      peakHours[hour] = (peakHours[hour] || 0) + asNumber(count);
+    }
+    const current = branchOrderStats[row.branchId] || { orders: 0, active: 0, delayed: 0, cancelled: 0 };
+    current.orders += asNumber(row.totalOrders);
+    current.active += asNumber(row.statusCounts?.ACTIVE) + asNumber(row.statusCounts?.DELAYED);
+    current.delayed += asNumber(row.statusCounts?.DELAYED);
+    current.cancelled += asNumber(row.statusCounts?.CANCELLED);
+    branchOrderStats[row.branchId] = current;
+  }
+
+  const debtByCurrency = Object.fromEntries(currencies.map((currency) => [currency, 0]));
+  let openDebt = 0;
+  let closedDebt = 0;
+  for (const [status, byCurrencyStats] of Object.entries(total.debtStats || {})) {
+    for (const [currency, stats] of Object.entries(byCurrencyStats || {})) {
+      const amount = asNumber(stats?.amount);
+      if (status === "OPEN") {
+        openDebt += amount;
+        debtByCurrency[currency] = asNumber(debtByCurrency[currency]) + amount;
+      }
+      if (status === "CLOSED") closedDebt += amount;
+    }
+  }
+
+  return {
+    orderStats: {
+      totalOrders: asNumber(total.totalOrders),
+      activeOrders: asNumber(statusCounts.ACTIVE) + asNumber(statusCounts.DELAYED),
+      delayedOrders: asNumber(statusCounts.DELAYED),
+      cancelledOrders: asNumber(statusCounts.CANCELLED),
+      pickedUpOrders: asNumber(statusCounts.PICKED_UP),
+    },
+    ordersByDay,
+    peakHours,
+    branchOrderStats,
+    baggageSizeAnalytics: Object.entries(total.sizeStats || {}).map(([size, stats]) => ({
+      size,
+      orders: asNumber(stats?.orders),
+      count: asNumber(stats?.count),
+      amount: asNumber(stats?.amount),
+    })),
+    debtAnalytics: { open: openDebt, closed: closedDebt },
+    debtByCurrency,
+  };
+};
+
+const mergeOrderAnalyticsIntoReport = (report, orderAnalytics) => ({
+  ...report,
+  orderStats: orderAnalytics.orderStats,
+  ordersByDay: orderAnalytics.ordersByDay,
+  peakHours: orderAnalytics.peakHours,
+  baggageSizeAnalytics: orderAnalytics.baggageSizeAnalytics,
+  debtAnalytics: orderAnalytics.debtAnalytics,
+});
+
+const dashboardUncached = async (user, query) => {
+  const timer = createTimer("analytics.dashboard");
   const scopedBranchId = getScopedBranchId(user, query.branchId);
   const scope = scopedBranchId ? { branchId: scopedBranchId } : {};
   const branchScope = scopedBranchId ? { id: scopedBranchId } : {};
   const today = startOfToday();
+  const todayKey = dayKey(today);
   const [
     todayMovements,
-    orderStatusCounts,
+    allOrderFacts,
     openDebts,
     lockers,
     shifts,
     branches,
-    todayOrders,
+    todayOrderFacts,
   ] = await Promise.all([
     prisma.cashMovement.findMany({
       where: { ...scope, createdAt: { gte: today } },
       select: { branchId: true, type: true, direction: true, amount: true, currency: true, paymentType: true, createdAt: true },
     }),
-    prisma.order.groupBy({ by: ["status"], where: scope, _count: { _all: true } }),
+    loadCombinedOrderFacts({ branchId: scopedBranchId }, prisma, timer),
     prisma.debt.findMany({ where: { ...scope, status: "OPEN" }, select: { amount: true, currency: true } }),
     prisma.locker.findMany({ where: scope, select: { branchId: true, status: true } }),
     prisma.shift.findMany({ where: { ...scope, status: "OPEN" }, include: { branch: { select: { id: true, name: true } } } }),
     prisma.branch.findMany({ where: branchScope, orderBy: { name: "asc" } }),
-    prisma.order.findMany({ where: { ...scope, createdAt: { gte: today } }, select: { id: true, branchId: true, status: true } }),
+    loadCombinedOrderFacts({ branchId: scopedBranchId, dateFrom: todayKey, dateTo: todayKey }, prisma),
   ]);
 
-  const statusCounts = Object.fromEntries(orderStatusCounts.map((item) => [item.status, item._count._all]));
-  const activeOrders = Number(statusCounts.ACTIVE || 0) + Number(statusCounts.DELAYED || 0);
-  const totalOrders = Object.values(statusCounts).reduce((total, count) => total + Number(count || 0), 0);
-  const todayClients = todayOrders.length;
-  const delayedOrders = Number(statusCounts.DELAYED || 0);
-  const cancelledOrders = Number(statusCounts.CANCELLED || 0);
+  const allOrderAnalytics = buildOrderAnalyticsFromFacts(allOrderFacts, branches);
+  const todayOrderAnalytics = buildOrderAnalyticsFromFacts(todayOrderFacts, branches);
+  const activeOrders = allOrderAnalytics.orderStats.activeOrders;
+  const totalOrders = allOrderAnalytics.orderStats.totalOrders;
+  const todayClients = todayOrderAnalytics.orderStats.totalOrders;
+  const delayedOrders = allOrderAnalytics.orderStats.delayedOrders;
+  const cancelledOrders = allOrderAnalytics.orderStats.cancelledOrders;
   let shiftStatus = [];
   if (shifts.length) {
     const shiftIds = shifts.map((shift) => shift.id);
@@ -208,7 +294,7 @@ const dashboard = async (user, query) => {
   const cashMovementOut = byCurrency(todayOut).UZS;
   const cashOnHand = cashOnHandByCurrency.UZS;
 
-  return {
+  const result = {
     todayRevenue,
     totalRevenue: todayRevenue,
     revenue: todayRevenue,
@@ -239,16 +325,19 @@ const dashboard = async (user, query) => {
     debtByCurrency,
     cashOnHandByCurrency,
     netProfitByCurrency,
-    branchSummary: buildBranchSummary({ branches, orders: todayOrders, lockers, movements: todayMovements }),
+    branchSummary: buildBranchSummary({ branches, branchOrderStats: todayOrderAnalytics.branchOrderStats, lockers, movements: todayMovements }),
     shiftStatus,
   };
+  timer.end({ rows: allOrderFacts.rows.length });
+  return result;
 };
 
-const reports = async (user, query) => {
+const reportsUncached = async (user, query) => {
+  const timer = createTimer("analytics.reports");
   const scope = branchWhere(user, query.branchId);
   const range = dateRangeWhere(query.dateFrom, query.dateTo);
   const shiftRange = dateRangeWhere(query.dateFrom, query.dateTo, "openedAt");
-  const [movements, orders, lockers, debts, auditLogs, shifts, expenses, inkassa, branches] = await Promise.all([
+  const [movements, orderFacts, lockers, debts, auditLogs, shifts, expenses, inkassa, branches] = await Promise.all([
     prisma.cashMovement.findMany({
       where: { ...scope, ...range },
       select: {
@@ -265,16 +354,7 @@ const reports = async (user, query) => {
         createdBy: { select: { id: true, name: true, login: true } },
       },
     }),
-    prisma.order.findMany({
-      where: { ...scope, ...range },
-      select: {
-        id: true,
-        branchId: true,
-        status: true,
-        createdAt: true,
-        items: { select: { size: true, count: true, finalPrice: true } },
-      },
-    }),
+    loadCombinedOrderFacts({ branchId: scope.branchId, dateFrom: query.dateFrom, dateTo: query.dateTo }, prisma, timer),
     prisma.locker.findMany({ where: scope, select: { id: true, branchId: true, status: true } }),
     prisma.debt.findMany({ where: { ...scope, ...range }, select: { branchId: true, amount: true, currency: true, status: true, createdAt: true } }),
     Promise.resolve([]),
@@ -300,6 +380,7 @@ const reports = async (user, query) => {
     prisma.inkassa.findMany({ where: { ...scope, ...range }, select: { id: true, branchId: true, amount: true, currency: true, createdAt: true } }),
     prisma.branch.findMany({ where: scope.branchId ? { id: scope.branchId } : {}, select: { id: true, name: true, code: true }, orderBy: { name: "asc" } }),
   ]);
+  const orderAnalytics = buildOrderAnalyticsFromFacts(orderFacts, branches);
 
   const reportNow = new Date();
   const shiftIds = shifts.map((shift) => shift.id);
@@ -312,7 +393,7 @@ const reports = async (user, query) => {
       shifts,
       movements: movements.filter((movement) => shiftIdSet.has(movement.shiftId)),
       debts,
-      orders,
+      orders: [],
       now: reportNow,
     });
   }
@@ -325,7 +406,7 @@ const reports = async (user, query) => {
   const revenueByCurrency = movementSummary.revenueByCurrency;
   const expensesByCurrency = byCurrency(expenseMovements.length ? expenseMovements : expenses);
   const inkassaByCurrency = byCurrency(inkassaMovements.length ? inkassaMovements : inkassa);
-  const debtByCurrency = byCurrency(debts.filter((item) => item.status === "OPEN"));
+  const debtByCurrency = orderAnalytics.debtByCurrency;
   const cashOnHandByCurrency = shiftsWithReports.length
     ? sumCurrencyMaps(shiftsWithReports.map((shift) => shift.cashBalanceByCurrency))
     : subtractCurrencyMaps(revenueByCurrency, expensesByCurrency, inkassaByCurrency);
@@ -333,12 +414,12 @@ const reports = async (user, query) => {
   const totalRevenue = revenueByCurrency.UZS;
   const totalExpenses = expensesByCurrency.UZS;
   const totalInkassa = inkassaByCurrency.UZS;
-  const totalOrders = orders.length;
+  const totalOrders = orderAnalytics.orderStats.totalOrders;
 
   const revenueByDay = {};
   const expensesByDay = {};
   const inkassaByDay = {};
-  const ordersByDay = {};
+  const ordersByDay = orderAnalytics.ordersByDay;
   for (const item of inMovements) {
     const day = dayKey(item.createdAt);
     revenueByDay[day] = (revenueByDay[day] || 0) + item.amount;
@@ -351,50 +432,30 @@ const reports = async (user, query) => {
     const day = dayKey(item.createdAt);
     inkassaByDay[day] = (inkassaByDay[day] || 0) + item.amount;
   }
-  for (const order of orders) {
-    const day = dayKey(order.createdAt);
-    ordersByDay[day] = (ordersByDay[day] || 0) + 1;
-  }
-
-  const peakHours = {};
-  for (const order of orders) {
-    const hour = getTashkentParts(order.createdAt).hour;
-    peakHours[hour] = (peakHours[hour] || 0) + 1;
-  }
+  const peakHours = orderAnalytics.peakHours;
 
   const branchComparison = branches.map((branch) => {
-    const branchOrders = orders.filter((order) => order.branchId === branch.id);
+    const branchOrders = orderAnalytics.branchOrderStats[branch.id] || { orders: 0, active: 0, delayed: 0, cancelled: 0 };
     const branchRevenue = sum(inMovements.filter((item) => item.branchId === branch.id));
     const branchExpenses = sum(expenseMovements.filter((item) => item.branchId === branch.id));
     const branchInkassa = sum(inkassaMovements.filter((item) => item.branchId === branch.id));
-    const delayed = branchOrders.filter((order) => order.status === "DELAYED").length;
-    const cancelled = branchOrders.filter((order) => order.status === "CANCELLED").length;
+    const delayed = branchOrders.delayed;
+    const cancelled = branchOrders.cancelled;
 
     return {
       branch: branch.name,
       revenue: branchRevenue,
       profit: branchRevenue - branchExpenses - branchInkassa,
       cashOnHand: branchRevenue - branchExpenses - branchInkassa,
-      orders: branchOrders.length,
-      active: branchOrders.filter((order) => ["ACTIVE", "DELAYED"].includes(order.status)).length,
+      orders: branchOrders.orders,
+      active: branchOrders.active,
       delayed,
       cancelled,
       score: Math.max(0, 100 - delayed * 5 - cancelled * 10),
     };
   });
 
-  const sizeAnalytics = Object.values(
-    orders.reduce((acc, order) => {
-      for (const item of order.items || []) {
-        const key = item.size || "UNKNOWN";
-        if (!acc[key]) acc[key] = { size: key, orders: 0, count: 0, amount: 0 };
-        acc[key].orders += 1;
-        acc[key].count += Number(item.count || 1);
-        acc[key].amount += asNumber(item.finalPrice);
-      }
-      return acc;
-    }, {}),
-  );
+  const sizeAnalytics = orderAnalytics.baggageSizeAnalytics;
 
   const adminPerformanceMap = {};
   for (const movement of inMovements) {
@@ -416,14 +477,8 @@ const reports = async (user, query) => {
     .slice()
     .sort((a, b) => asNumber(b.totalRevenue) - asNumber(a.totalRevenue))[0];
 
-  return {
-    orderStats: {
-      totalOrders,
-      activeOrders: orders.filter((order) => ["ACTIVE", "DELAYED"].includes(order.status)).length,
-      delayedOrders: orders.filter((order) => order.status === "DELAYED").length,
-      cancelledOrders: orders.filter((order) => order.status === "CANCELLED").length,
-      pickedUpOrders: orders.filter((order) => order.status === "PICKED_UP").length,
-    },
+  const result = {
+    orderStats: orderAnalytics.orderStats,
     financeAnalytics: {
       revenue: totalRevenue,
       totalExpenses,
@@ -466,7 +521,7 @@ const reports = async (user, query) => {
       acc[key] = (acc[key] || 0) + 1;
       return acc;
     }, {}),
-    debtAnalytics: { open: sum(debts.filter((d) => d.status === "OPEN")), closed: sum(debts.filter((d) => d.status === "CLOSED")) },
+    debtAnalytics: orderAnalytics.debtAnalytics,
     expenseCategories: Object.values(expenses.reduce((acc, expense) => {
       const key = expense.category || "Other";
       if (!acc[key]) acc[key] = { category: key, amount: 0, count: 0 };
@@ -511,6 +566,34 @@ const reports = async (user, query) => {
     peakHours,
     adminActivity: auditLogs,
   };
+  timer.end({ rows: orderFacts.rows.length });
+  return mergeOrderAnalyticsIntoReport(result, orderAnalytics);
 };
 
-module.exports = { dashboard, reports };
+const cachedAnalytics = async (type, user, query, loader) => {
+  const branchId = getScopedBranchId(user, query.branchId);
+  const key = buildAnalyticsCacheKey({
+    type,
+    role: user.role,
+    branchId,
+    dateFrom: query.dateFrom,
+    dateTo: query.dateTo,
+  });
+  const cached = getCachedAnalytics(key);
+  if (cached !== undefined) return cached;
+  const value = await loader();
+  setCachedAnalytics(key, value, branchId);
+  return value;
+};
+
+const dashboard = (user, query = {}) => cachedAnalytics("dashboard", user, query, () => dashboardUncached(user, query));
+const reports = (user, query = {}) => cachedAnalytics("reports", user, query, () => reportsUncached(user, query));
+
+module.exports = {
+  dashboard,
+  reports,
+  _internals: {
+    buildOrderAnalyticsFromFacts,
+    mergeOrderAnalyticsIntoReport,
+  },
+};

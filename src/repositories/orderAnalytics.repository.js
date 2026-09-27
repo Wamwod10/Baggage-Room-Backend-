@@ -119,24 +119,26 @@ const loadArchivedOrderFacts = async (scope = {}, client = prisma) => {
   );
 };
 
-const loadCombinedOrderFacts = async (scope = {}, client = prisma) => {
+const loadCombinedOrderFacts = async (scope = {}, client = prisma, timer = { time: (_name, fn) => fn() }) => {
   const [liveRows, archivedRows] = await Promise.all([
-    loadLiveOrderFacts(scope, client),
-    loadArchivedOrderFacts(scope, client),
+    timer.time("live-order-facts", () => loadLiveOrderFacts(scope, client)),
+    timer.time("archive-order-facts", () => loadArchivedOrderFacts(scope, client)),
   ]);
-  const combined = new Map();
-  for (const row of [...liveRows, ...archivedRows]) {
-    const key = `${row.branchId}|${row.day}`;
-    const previous = combined.get(key);
-    combined.set(key, {
-      branchId: row.branchId,
-      day: row.day,
-      ...mergeOrderFacts(previous, row),
-    });
-  }
-  const rows = [...combined.values()].sort((left, right) =>
-    left.day.localeCompare(right.day) || left.branchId.localeCompare(right.branchId));
-  return { rows, total: mergeOrderFacts(...rows) };
+  return timer.time("analytics-merge", async () => {
+    const combined = new Map();
+    for (const row of [...liveRows, ...archivedRows]) {
+      const key = `${row.branchId}|${row.day}`;
+      const previous = combined.get(key);
+      combined.set(key, {
+        branchId: row.branchId,
+        day: row.day,
+        ...mergeOrderFacts(previous, row),
+      });
+    }
+    const rows = [...combined.values()].sort((left, right) =>
+      left.day.localeCompare(right.day) || left.branchId.localeCompare(right.branchId));
+    return { rows, total: mergeOrderFacts(...rows) };
+  });
 };
 
 module.exports = {
