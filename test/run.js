@@ -6,3 +6,4 @@ require("./orderAnalyticsFacts.test");
 require("./orderAnalyticsRepository.test");
 require("./analyticsCache.test");
 require("./analyticsArchiveIntegration.test");
+require("./orderArchive.test");
