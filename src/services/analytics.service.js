@@ -5,6 +5,7 @@ const { sum, byKeySum, byCurrency, subtractCurrencyMaps } = require("../utils/mo
 const { normalizeCurrencyMap } = require("./shift.service");
 const { summarizeMovements, sumCurrencyMaps, cashBalanceByCurrency } = require("./cashAccounting.service");
 const { loadCombinedOrderFacts } = require("../repositories/orderAnalytics.repository");
+const { loadMovementFacts } = require("../repositories/cashMovementAnalytics.repository");
 const { createTimer } = require("../utils/perf");
 const {
   buildAnalyticsCacheKey,
@@ -17,10 +18,10 @@ const dayKey = (date) => formatTashkentDateKey(date);
 const branchName = (item) => item.branch?.name || item.branchId || "Unknown";
 const userName = (user) => user?.name || user?.login || "Unknown";
 
-const countBy = (items, keySelector) =>
+const countBy = (items, keySelector, weightSelector = () => 1) =>
   items.reduce((acc, item) => {
     const key = keySelector(item) || "UNKNOWN";
-    acc[key] = (acc[key] || 0) + 1;
+    acc[key] = (acc[key] || 0) + Number(weightSelector(item) || 0);
     return acc;
   }, {});
 
@@ -337,23 +338,8 @@ const reportsUncached = async (user, query) => {
   const scope = branchWhere(user, query.branchId);
   const range = dateRangeWhere(query.dateFrom, query.dateTo);
   const shiftRange = dateRangeWhere(query.dateFrom, query.dateTo, "openedAt");
-  const [movements, orderFacts, lockers, debts, auditLogs, shifts, expenses, inkassa, branches] = await Promise.all([
-    prisma.cashMovement.findMany({
-      where: { ...scope, ...range },
-      select: {
-        branchId: true,
-        shiftId: true,
-        type: true,
-        direction: true,
-        amount: true,
-        currency: true,
-        paymentType: true,
-        note: true,
-        createdAt: true,
-        branch: { select: { id: true, name: true } },
-        createdBy: { select: { id: true, name: true, login: true } },
-      },
-    }),
+  const [movementFacts, orderFacts, lockers, debts, auditLogs, shifts, expenses, inkassa, branches, users] = await Promise.all([
+    loadMovementFacts({ branchId: scope.branchId, dateFrom: query.dateFrom, dateTo: query.dateTo }, prisma),
     loadCombinedOrderFacts({ branchId: scope.branchId, dateFrom: query.dateFrom, dateTo: query.dateTo }, prisma, timer),
     prisma.locker.findMany({ where: scope, select: { id: true, branchId: true, status: true } }),
     prisma.debt.findMany({ where: { ...scope, ...range }, select: { branchId: true, amount: true, currency: true, status: true, createdAt: true } }),
@@ -379,8 +365,18 @@ const reportsUncached = async (user, query) => {
     prisma.expense.findMany({ where: { ...scope, ...range }, select: { id: true, branchId: true, category: true, amount: true, currency: true, createdAt: true } }),
     prisma.inkassa.findMany({ where: { ...scope, ...range }, select: { id: true, branchId: true, amount: true, currency: true, createdAt: true } }),
     prisma.branch.findMany({ where: scope.branchId ? { id: scope.branchId } : {}, select: { id: true, name: true, code: true }, orderBy: { name: "asc" } }),
+    prisma.user.findMany({ select: { id: true, name: true, login: true } }),
   ]);
   const orderAnalytics = buildOrderAnalyticsFromFacts(orderFacts, branches);
+  const branchById = new Map(branches.map((branch) => [branch.id, branch]));
+  const userById = new Map(users.map((item) => [item.id, item]));
+  const movements = movementFacts.map((movement) => ({
+    ...movement,
+    note: movement.isSalary ? "Oylik:" : null,
+    createdAt: new Date(`${movement.day}T00:00:00+05:00`),
+    branch: branchById.get(movement.branchId),
+    createdBy: userById.get(movement.createdById),
+  }));
 
   const reportNow = new Date();
   const shiftIds = shifts.map((shift) => shift.id);
@@ -461,7 +457,7 @@ const reportsUncached = async (user, query) => {
   for (const movement of inMovements) {
     const key = userName(movement.createdBy);
     if (!adminPerformanceMap[key]) adminPerformanceMap[key] = { admin: key, orders: 0, revenue: 0, profit: 0, shifts: 0 };
-    if (["ORDER_PAYMENT", "DEBT_CLOSE"].includes(movement.type)) adminPerformanceMap[key].orders += 1;
+    if (["ORDER_PAYMENT", "DEBT_CLOSE"].includes(movement.type)) adminPerformanceMap[key].orders += asNumber(movement.count || 1);
     adminPerformanceMap[key].revenue += asNumber(movement.amount);
     adminPerformanceMap[key].profit += asNumber(movement.amount);
   }
@@ -515,7 +511,7 @@ const reportsUncached = async (user, query) => {
     netProfitByCurrency,
     paymentAnalytics: byKeySum(inMovements.filter((item) => item.currency === "UZS"), "paymentType"),
     paymentAnalyticsByCurrency: paymentCurrencyBreakdown(inMovements),
-    paymentOrderCounts: countBy(inMovements, (item) => item.paymentType),
+    paymentOrderCounts: countBy(inMovements, (item) => item.paymentType, (item) => item.count || 1),
     lockerUsage: lockers.reduce((acc, locker) => {
       const key = locker.status;
       acc[key] = (acc[key] || 0) + 1;
