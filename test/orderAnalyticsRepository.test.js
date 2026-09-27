@@ -107,6 +107,24 @@ test("loadCombinedOrderFacts keeps branch and date scope out of other buckets", 
   assert.equal(result.total.totalOrders, 2);
 });
 
+test("live aggregation converts UTC storage to Tashkent before date and hour bucketing", async () => {
+  const queries = [];
+  const client = {
+    $queryRaw: async (query) => {
+      queries.push(query.strings.join("?"));
+      return [];
+    },
+    orderAnalyticsArchive: { findMany: async () => [] },
+  };
+
+  await loadCombinedOrderFacts({ dateFrom: "2026-09-27", dateTo: "2026-09-27" }, client);
+
+  assert.equal(queries.length, 3);
+  for (const sql of queries) {
+    assert.match(sql, /"createdAt" AT TIME ZONE 'UTC' AT TIME ZONE 'Asia\/Tashkent'/);
+  }
+});
+
 test("generated Prisma metadata exposes the archive models and uniqueness", () => {
   const archive = Prisma.dmmf.datamodel.models.find((model) => model.name === "OrderAnalyticsArchive");
   const run = Prisma.dmmf.datamodel.models.find((model) => model.name === "OrderArchiveRun");

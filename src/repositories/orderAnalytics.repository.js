@@ -15,8 +15,8 @@ const archiveDate = (value) => value ? new Date(`${value}T00:00:00.000Z`) : unde
 
 const scopeSql = ({ branchId, dateFrom, dateTo } = {}) => Prisma.sql`
   AND (${branchId || null}::text IS NULL OR o."branchId" = ${branchId || null})
-  AND (${dateFrom || null}::date IS NULL OR (o."createdAt" AT TIME ZONE 'Asia/Tashkent')::date >= ${dateFrom || null}::date)
-  AND (${dateTo || null}::date IS NULL OR (o."createdAt" AT TIME ZONE 'Asia/Tashkent')::date <= ${dateTo || null}::date)
+  AND (${dateFrom || null}::date IS NULL OR (o."createdAt" AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Tashkent')::date >= ${dateFrom || null}::date)
+  AND (${dateTo || null}::date IS NULL OR (o."createdAt" AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Tashkent')::date <= ${dateTo || null}::date)
 `;
 
 const bucketFor = (buckets, branchId, dayValue) => {
@@ -31,9 +31,9 @@ const loadLiveOrderFacts = async (scope = {}, client = prisma) => {
   const [orderRows, sizeRows, debtRows] = await Promise.all([
     client.$queryRaw(Prisma.sql`
       SELECT o."branchId",
-             to_char((o."createdAt" AT TIME ZONE 'Asia/Tashkent')::date, 'YYYY-MM-DD') AS "day",
+             to_char((o."createdAt" AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Tashkent')::date, 'YYYY-MM-DD') AS "day",
              o."status"::text AS "status",
-             EXTRACT(HOUR FROM o."createdAt" AT TIME ZONE 'Asia/Tashkent')::int AS "hour",
+             EXTRACT(HOUR FROM o."createdAt" AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Tashkent')::int AS "hour",
              COUNT(*)::int AS "total"
       FROM "Order" o
       WHERE TRUE ${predicates}
@@ -41,7 +41,7 @@ const loadLiveOrderFacts = async (scope = {}, client = prisma) => {
     `),
     client.$queryRaw(Prisma.sql`
       SELECT o."branchId",
-             to_char((o."createdAt" AT TIME ZONE 'Asia/Tashkent')::date, 'YYYY-MM-DD') AS "day",
+             to_char((o."createdAt" AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Tashkent')::date, 'YYYY-MM-DD') AS "day",
              i."size"::text AS "size",
              COUNT(*)::int AS "orders",
              COALESCE(SUM(i."count"), 0)::int AS "count",
@@ -53,7 +53,7 @@ const loadLiveOrderFacts = async (scope = {}, client = prisma) => {
     `),
     client.$queryRaw(Prisma.sql`
       SELECT o."branchId",
-             to_char((o."createdAt" AT TIME ZONE 'Asia/Tashkent')::date, 'YYYY-MM-DD') AS "day",
+             to_char((o."createdAt" AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Tashkent')::date, 'YYYY-MM-DD') AS "day",
              d."status"::text AS "status",
              d."currency"::text AS "currency",
              COUNT(*)::int AS "count",
