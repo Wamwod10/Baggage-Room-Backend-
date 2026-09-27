@@ -102,6 +102,7 @@ model Branch {
   auditLogs        AuditLog[]
   notifications    Notification[]
   telegramSetting  TelegramSetting?
+  orderAnalyticsArchives OrderAnalyticsArchive[]
 }
 
 model User {
@@ -454,4 +455,34 @@ model TelegramSetting {
   createdAt                DateTime  @default(now())
   updatedAt                DateTime  @updatedAt
   branch                   Branch    @relation(fields: [branchId], references: [id])
+}
+
+model OrderAnalyticsArchive {
+  id           String   @id @default(cuid())
+  branchId     String
+  day          DateTime @db.Date
+  totalOrders  Int      @default(0)
+  statusCounts Json     @default("{}")
+  hourCounts   Json     @default("{}")
+  sizeStats    Json     @default("{}")
+  debtStats    Json     @default("{}")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  branch       Branch   @relation(fields: [branchId], references: [id])
+
+  @@unique([branchId, day])
+  @@index([day])
+}
+
+model OrderArchiveRun {
+  key                 String   @id
+  selectionHash       String
+  selectedCount       Int
+  firstCreatedAt      DateTime
+  lastCreatedAt       DateTime
+  liveCountBefore     Int
+  liveCountAfter      Int
+  combinedCountBefore Int
+  combinedCountAfter  Int
+  executedAt          DateTime @default(now())
 }
