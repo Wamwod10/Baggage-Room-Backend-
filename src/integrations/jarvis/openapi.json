@@ -1,0 +1,2369 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Baggage Room Jarvis Read-only API",
+    "version": "1.0.0",
+    "description": "Server-to-server integration. GET only. Keys in headers only; unknown filters rejected. All timestamps include UTC Z. Monetary record values are integers in existing stored units, aggregate money uses exact integer strings. No currency conversion. Read-only transactions protect business tables. Financial timestamp tracking begins at migration rollout."
+  },
+  "servers": [
+    {
+      "url": "/api/integrations/jarvis/v1",
+      "description": "Relative to the deployed backend origin"
+    }
+  ],
+  "security": [
+    {
+      "JarvisApiKey": []
+    }
+  ],
+  "paths": {
+    "/branches": {
+      "get": {
+        "operationId": "jarvisBranchList",
+        "summary": "Branches; date filters select branch createdAt.",
+        "parameters": [
+          {
+            "name": "branchCode",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,64}$"
+            },
+            "description": "Existing Branch.code; no invented five-branch mapping."
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Inclusive creation/event lower bound. YYYY-MM-DD in Asia/Tashkent, or ISO 8601 timestamp with explicit offset."
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Inclusive upper bound; date-only includes the entire Tashkent day. For cash-balances selects as-of instant."
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 1,
+              "minimum": 1,
+              "maximum": 1000000
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "minimum": 1,
+              "maximum": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated read-only result",
+            "headers": {
+              "X-Request-ID": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BranchResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid or unsupported filters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid, expired or revoked key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown resource",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Only GET allowed; Allow: GET",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-IP limit exceeded; Retry-After",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Disabled integration or data unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orders": {
+      "get": {
+        "operationId": "jarvisOrderList",
+        "summary": "Live orders only; nominal/recorded amounts are not ledger revenue. Archived order details are unavailable.",
+        "parameters": [
+          {
+            "name": "branchCode",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,64}$"
+            },
+            "description": "Existing Branch.code; no invented five-branch mapping."
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Inclusive creation/event lower bound. YYYY-MM-DD in Asia/Tashkent, or ISO 8601 timestamp with explicit offset."
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Inclusive upper bound; date-only includes the entire Tashkent day. For cash-balances selects as-of instant."
+          },
+          {
+            "name": "currency",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/Currency"
+            }
+          },
+          {
+            "name": "paymentType",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/PaymentType"
+            },
+            "description": "Exact stored payment type; CARD, TERMINAL and TRANSFER remain separate. Expense/inkassa accept only CASH."
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 1,
+              "minimum": 1,
+              "maximum": 1000000
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "minimum": 1,
+              "maximum": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated read-only result",
+            "headers": {
+              "X-Request-ID": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid or unsupported filters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid, expired or revoked key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown resource",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Only GET allowed; Allow: GET",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-IP limit exceeded; Retry-After",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Disabled integration or data unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/transactions": {
+      "get": {
+        "operationId": "jarvisTransactionList",
+        "summary": "Actual CashMovement entries, including non-revenue movements. Null paymentType is preserved.",
+        "parameters": [
+          {
+            "name": "branchCode",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,64}$"
+            },
+            "description": "Existing Branch.code; no invented five-branch mapping."
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Inclusive creation/event lower bound. YYYY-MM-DD in Asia/Tashkent, or ISO 8601 timestamp with explicit offset."
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Inclusive upper bound; date-only includes the entire Tashkent day. For cash-balances selects as-of instant."
+          },
+          {
+            "name": "currency",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/Currency"
+            }
+          },
+          {
+            "name": "paymentType",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/PaymentType"
+            },
+            "description": "Exact stored payment type; CARD, TERMINAL and TRANSFER remain separate. Expense/inkassa accept only CASH."
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 1,
+              "minimum": 1,
+              "maximum": 1000000
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "minimum": 1,
+              "maximum": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated read-only result",
+            "headers": {
+              "X-Request-ID": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransactionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid or unsupported filters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid, expired or revoked key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown resource",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Only GET allowed; Allow: GET",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-IP limit exceeded; Retry-After",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Disabled integration or data unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sales": {
+      "get": {
+        "operationId": "jarvisSaleList",
+        "summary": "Actual gross receipts minus refunds grouped by Tashkent day, branch, currency, exact payment type before pagination; unpaid debt excluded.",
+        "description": "No mandatory date range or hidden truncation: omitted from/to reads the complete current ledger. Pagination applies after aggregation; follow pagination.totalPages for the full report. Per backend process/client, at most 2 sales reports execute and 16 wait FIFO without holding pool connections. Waiting is limited to 5 seconds; queue saturation/expiry returns 503 DATA_UNAVAILABLE. Retry the same page with exponential backoff and jitter. SQL statement timeout remains 8 seconds, transaction timeout 10 seconds. Each page has its own repeatable-read snapshot; reconcile historical periods again after ledger edits. Limits are per process, not a shared replica-wide gateway limit.",
+        "parameters": [
+          {
+            "name": "branchCode",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,64}$"
+            },
+            "description": "Existing Branch.code; no invented five-branch mapping."
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Inclusive creation/event lower bound. YYYY-MM-DD in Asia/Tashkent, or ISO 8601 timestamp with explicit offset."
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Inclusive upper bound; date-only includes the entire Tashkent day. For cash-balances selects as-of instant."
+          },
+          {
+            "name": "currency",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/Currency"
+            }
+          },
+          {
+            "name": "paymentType",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/PaymentType"
+            },
+            "description": "Exact stored payment type; CARD, TERMINAL and TRANSFER remain separate. Expense/inkassa accept only CASH."
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 1,
+              "minimum": 1,
+              "maximum": 1000000
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "minimum": 1,
+              "maximum": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated read-only result",
+            "headers": {
+              "X-Request-ID": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SaleResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid or unsupported filters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid, expired or revoked key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown resource",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Only GET allowed; Allow: GET",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-IP limit exceeded; Retry-After",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Disabled integration or data unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cash-balances": {
+      "get": {
+        "operationId": "jarvisCashBalanceList",
+        "summary": "Reconstructed current-ledger snapshot as-of to. Latest shift opening+accepted baseline once plus cash ledger since opening. Historical pre-edit state is unavailable.",
+        "parameters": [
+          {
+            "name": "branchCode",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,64}$"
+            },
+            "description": "Existing Branch.code; no invented five-branch mapping."
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Inclusive upper bound; date-only includes the entire Tashkent day. For cash-balances selects as-of instant."
+          },
+          {
+            "name": "currency",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/Currency"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 1,
+              "minimum": 1,
+              "maximum": 1000000
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "minimum": 1,
+              "maximum": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated read-only result",
+            "headers": {
+              "X-Request-ID": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CashBalanceResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid or unsupported filters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid, expired or revoked key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown resource",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Only GET allowed; Allow: GET",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-IP limit exceeded; Retry-After",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Disabled integration or data unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/shifts": {
+      "get": {
+        "operationId": "jarvisShiftList",
+        "summary": "Shift metadata and declared cash maps. Dates filter openedAt; currency and paymentType are unsupported.",
+        "parameters": [
+          {
+            "name": "branchCode",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,64}$"
+            },
+            "description": "Existing Branch.code; no invented five-branch mapping."
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Inclusive creation/event lower bound. YYYY-MM-DD in Asia/Tashkent, or ISO 8601 timestamp with explicit offset."
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Inclusive upper bound; date-only includes the entire Tashkent day. For cash-balances selects as-of instant."
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 1,
+              "minimum": 1,
+              "maximum": 1000000
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "minimum": 1,
+              "maximum": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated read-only result",
+            "headers": {
+              "X-Request-ID": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShiftResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid or unsupported filters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid, expired or revoked key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown resource",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Only GET allowed; Allow: GET",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-IP limit exceeded; Retry-After",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Disabled integration or data unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/expenses": {
+      "get": {
+        "operationId": "jarvisExpenseList",
+        "summary": "Expense records including salary; no payee/reason/category free text.",
+        "parameters": [
+          {
+            "name": "branchCode",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,64}$"
+            },
+            "description": "Existing Branch.code; no invented five-branch mapping."
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Inclusive creation/event lower bound. YYYY-MM-DD in Asia/Tashkent, or ISO 8601 timestamp with explicit offset."
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Inclusive upper bound; date-only includes the entire Tashkent day. For cash-balances selects as-of instant."
+          },
+          {
+            "name": "currency",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/Currency"
+            }
+          },
+          {
+            "name": "paymentType",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "CASH"
+              ]
+            },
+            "description": "Exact stored payment type; CARD, TERMINAL and TRANSFER remain separate. Expense/inkassa accept only CASH."
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 1,
+              "minimum": 1,
+              "maximum": 1000000
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "minimum": 1,
+              "maximum": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated read-only result",
+            "headers": {
+              "X-Request-ID": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExpenseResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid or unsupported filters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid, expired or revoked key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown resource",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Only GET allowed; Allow: GET",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-IP limit exceeded; Retry-After",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Disabled integration or data unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/inkassa": {
+      "get": {
+        "operationId": "jarvisInkassaList",
+        "summary": "Collection records without receiver names or notes.",
+        "parameters": [
+          {
+            "name": "branchCode",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,64}$"
+            },
+            "description": "Existing Branch.code; no invented five-branch mapping."
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Inclusive creation/event lower bound. YYYY-MM-DD in Asia/Tashkent, or ISO 8601 timestamp with explicit offset."
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Inclusive upper bound; date-only includes the entire Tashkent day. For cash-balances selects as-of instant."
+          },
+          {
+            "name": "currency",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/Currency"
+            }
+          },
+          {
+            "name": "paymentType",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "CASH"
+              ]
+            },
+            "description": "Exact stored payment type; CARD, TERMINAL and TRANSFER remain separate. Expense/inkassa accept only CASH."
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 1,
+              "minimum": 1,
+              "maximum": 1000000
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "minimum": 1,
+              "maximum": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated read-only result",
+            "headers": {
+              "X-Request-ID": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InkassaResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid or unsupported filters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid, expired or revoked key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown resource",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Only GET allowed; Allow: GET",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-IP limit exceeded; Retry-After",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Disabled integration or data unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "operationId": "jarvisOpenApi",
+        "summary": "Authenticated OpenAPI document",
+        "responses": {
+          "200": {
+            "description": "OpenAPI 3.0.3 document",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid or unsupported filters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid, expired or revoked key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown resource",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Only GET allowed; Allow: GET",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-IP limit exceeded; Retry-After",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Disabled integration or data unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "JarvisApiKey": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-API-Key"
+      }
+    },
+    "schemas": {
+      "Currency": {
+        "type": "string",
+        "enum": [
+          "UZS",
+          "USD",
+          "RUB",
+          "EUR",
+          "KZT",
+          "TJS"
+        ]
+      },
+      "PaymentType": {
+        "type": "string",
+        "enum": [
+          "CASH",
+          "CARD",
+          "TERMINAL",
+          "CLICK",
+          "PAYME",
+          "TRANSFER",
+          "DEBT"
+        ]
+      },
+      "Pagination": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "page",
+          "limit",
+          "total",
+          "totalPages"
+        ],
+        "properties": {
+          "page": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "totalPages": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "Branch": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "branchCode",
+          "createdAt",
+          "updatedAt",
+          "name",
+          "isActive"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "branchCode": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "name": {
+            "type": "string"
+          },
+          "isActive": {
+            "type": "boolean"
+          }
+        }
+      },
+      "Order": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "branchCode",
+          "createdAt",
+          "updatedAt",
+          "orderNumber",
+          "status",
+          "currency",
+          "paymentType",
+          "calculatedAmount",
+          "discountAmount",
+          "finalAmount",
+          "recordedPaidAmount",
+          "overtimeAmount",
+          "overtimePaymentType",
+          "checkIn",
+          "plannedCheckOut",
+          "realPickupTime",
+          "cancelledAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "branchCode": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "orderNumber": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ACTIVE",
+              "PICKED_UP",
+              "CANCELLED",
+              "DELAYED"
+            ]
+          },
+          "currency": {
+            "$ref": "#/components/schemas/Currency"
+          },
+          "paymentType": {
+            "$ref": "#/components/schemas/PaymentType"
+          },
+          "calculatedAmount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "discountAmount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "finalAmount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "recordedPaidAmount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "overtimeAmount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "overtimePaymentType": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "CASH",
+              "CARD",
+              "TERMINAL",
+              "CLICK",
+              "PAYME",
+              "TRANSFER",
+              "DEBT",
+              null
+            ]
+          },
+          "checkIn": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "plannedCheckOut": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "realPickupTime": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "cancelledAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        }
+      },
+      "Transaction": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "branchCode",
+          "createdAt",
+          "updatedAt",
+          "transactionId",
+          "transactionType",
+          "direction",
+          "amount",
+          "signedAmount",
+          "currency",
+          "paymentType",
+          "orderId",
+          "shiftId",
+          "isRevenue"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "branchCode": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "transactionId": {
+            "type": "string"
+          },
+          "transactionType": {
+            "type": "string",
+            "enum": [
+              "ORDER_PAYMENT",
+              "DEBT_CLOSE",
+              "EXPENSE",
+              "INKASSA",
+              "MANUAL_CORRECTION"
+            ]
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "IN",
+              "OUT"
+            ]
+          },
+          "amount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "signedAmount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "currency": {
+            "$ref": "#/components/schemas/Currency"
+          },
+          "paymentType": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "CASH",
+              "CARD",
+              "TERMINAL",
+              "CLICK",
+              "PAYME",
+              "TRANSFER",
+              "DEBT",
+              null
+            ]
+          },
+          "orderId": {
+            "type": "string",
+            "nullable": true
+          },
+          "shiftId": {
+            "type": "string",
+            "nullable": true
+          },
+          "isRevenue": {
+            "type": "boolean"
+          }
+        }
+      },
+      "Sale": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "branchCode",
+          "createdAt",
+          "updatedAt",
+          "day",
+          "currency",
+          "paymentType",
+          "grossReceipts",
+          "refunds",
+          "netReceipts",
+          "transactionCount"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "branchCode": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "day": {
+            "type": "string",
+            "format": "date"
+          },
+          "currency": {
+            "$ref": "#/components/schemas/Currency"
+          },
+          "paymentType": {
+            "$ref": "#/components/schemas/PaymentType"
+          },
+          "grossReceipts": {
+            "type": "string",
+            "pattern": "^-?[0-9]+$",
+            "description": "Exact integer in stored currency units; use decimal/BigInt, never float."
+          },
+          "refunds": {
+            "type": "string",
+            "pattern": "^-?[0-9]+$",
+            "description": "Exact integer in stored currency units; use decimal/BigInt, never float."
+          },
+          "netReceipts": {
+            "type": "string",
+            "pattern": "^-?[0-9]+$",
+            "description": "Exact integer in stored currency units; use decimal/BigInt, never float."
+          },
+          "transactionCount": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "CashBalance": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "branchCode",
+          "createdAt",
+          "updatedAt",
+          "currency",
+          "shiftId",
+          "asOf",
+          "baselineSource",
+          "openingCash",
+          "acceptedCash",
+          "movementNet",
+          "balance"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "branchCode": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "currency": {
+            "$ref": "#/components/schemas/Currency"
+          },
+          "shiftId": {
+            "type": "string",
+            "nullable": true
+          },
+          "asOf": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "baselineSource": {
+            "type": "string",
+            "enum": [
+              "LATEST_SHIFT",
+              "ZERO_PLUS_LEDGER"
+            ]
+          },
+          "openingCash": {
+            "type": "string",
+            "pattern": "^-?[0-9]+$",
+            "description": "Exact integer in stored currency units; use decimal/BigInt, never float."
+          },
+          "acceptedCash": {
+            "type": "string",
+            "pattern": "^-?[0-9]+$",
+            "description": "Exact integer in stored currency units; use decimal/BigInt, never float."
+          },
+          "movementNet": {
+            "type": "string",
+            "pattern": "^-?[0-9]+$",
+            "description": "Exact integer in stored currency units; use decimal/BigInt, never float."
+          },
+          "balance": {
+            "type": "string",
+            "pattern": "^-?[0-9]+$",
+            "description": "Exact integer in stored currency units; use decimal/BigInt, never float."
+          }
+        }
+      },
+      "Shift": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "branchCode",
+          "createdAt",
+          "updatedAt",
+          "status",
+          "openedAt",
+          "closedAt",
+          "openingCashByCurrency",
+          "acceptedCashByCurrency",
+          "closingCashByCurrency",
+          "differenceByCurrency"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "branchCode": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "OPEN",
+              "CLOSED"
+            ]
+          },
+          "openedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "closedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "openingCashByCurrency": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "UZS",
+              "USD",
+              "RUB",
+              "EUR",
+              "KZT",
+              "TJS"
+            ],
+            "properties": {
+              "UZS": {
+                "type": "integer"
+              },
+              "USD": {
+                "type": "integer"
+              },
+              "RUB": {
+                "type": "integer"
+              },
+              "EUR": {
+                "type": "integer"
+              },
+              "KZT": {
+                "type": "integer"
+              },
+              "TJS": {
+                "type": "integer"
+              }
+            }
+          },
+          "acceptedCashByCurrency": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "UZS",
+              "USD",
+              "RUB",
+              "EUR",
+              "KZT",
+              "TJS"
+            ],
+            "properties": {
+              "UZS": {
+                "type": "integer"
+              },
+              "USD": {
+                "type": "integer"
+              },
+              "RUB": {
+                "type": "integer"
+              },
+              "EUR": {
+                "type": "integer"
+              },
+              "KZT": {
+                "type": "integer"
+              },
+              "TJS": {
+                "type": "integer"
+              }
+            }
+          },
+          "closingCashByCurrency": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "UZS",
+              "USD",
+              "RUB",
+              "EUR",
+              "KZT",
+              "TJS"
+            ],
+            "properties": {
+              "UZS": {
+                "type": "integer"
+              },
+              "USD": {
+                "type": "integer"
+              },
+              "RUB": {
+                "type": "integer"
+              },
+              "EUR": {
+                "type": "integer"
+              },
+              "KZT": {
+                "type": "integer"
+              },
+              "TJS": {
+                "type": "integer"
+              }
+            },
+            "nullable": true
+          },
+          "differenceByCurrency": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "UZS",
+              "USD",
+              "RUB",
+              "EUR",
+              "KZT",
+              "TJS"
+            ],
+            "properties": {
+              "UZS": {
+                "type": "integer"
+              },
+              "USD": {
+                "type": "integer"
+              },
+              "RUB": {
+                "type": "integer"
+              },
+              "EUR": {
+                "type": "integer"
+              },
+              "KZT": {
+                "type": "integer"
+              },
+              "TJS": {
+                "type": "integer"
+              }
+            }
+          }
+        }
+      },
+      "Expense": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "branchCode",
+          "createdAt",
+          "updatedAt",
+          "shiftId",
+          "amount",
+          "currency",
+          "paymentType",
+          "isSalary"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "branchCode": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "shiftId": {
+            "type": "string",
+            "nullable": true
+          },
+          "amount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "currency": {
+            "$ref": "#/components/schemas/Currency"
+          },
+          "paymentType": {
+            "type": "string",
+            "enum": [
+              "CASH"
+            ]
+          },
+          "isSalary": {
+            "type": "boolean"
+          }
+        }
+      },
+      "Inkassa": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "branchCode",
+          "createdAt",
+          "updatedAt",
+          "shiftId",
+          "amount",
+          "currency",
+          "paymentType"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "branchCode": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "shiftId": {
+            "type": "string",
+            "nullable": true
+          },
+          "amount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "currency": {
+            "$ref": "#/components/schemas/Currency"
+          },
+          "paymentType": {
+            "type": "string",
+            "enum": [
+              "CASH"
+            ]
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "success",
+          "error",
+          "requestId"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              false
+            ]
+          },
+          "error": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "code",
+              "message"
+            ],
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              }
+            }
+          },
+          "requestId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "BranchResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "success",
+          "data",
+          "pagination",
+          "timezone",
+          "requestId"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Branch"
+            }
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/Pagination"
+          },
+          "timezone": {
+            "type": "string",
+            "enum": [
+              "Asia/Tashkent"
+            ]
+          },
+          "requestId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "OrderResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "success",
+          "data",
+          "pagination",
+          "timezone",
+          "requestId",
+          "coverage"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Order"
+            }
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/Pagination"
+          },
+          "timezone": {
+            "type": "string",
+            "enum": [
+              "Asia/Tashkent"
+            ]
+          },
+          "requestId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "coverage": {
+            "type": "string",
+            "enum": [
+              "LIVE_ORDERS_ONLY"
+            ]
+          }
+        }
+      },
+      "TransactionResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "success",
+          "data",
+          "pagination",
+          "timezone",
+          "requestId"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Transaction"
+            }
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/Pagination"
+          },
+          "timezone": {
+            "type": "string",
+            "enum": [
+              "Asia/Tashkent"
+            ]
+          },
+          "requestId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "SaleResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "success",
+          "data",
+          "pagination",
+          "timezone",
+          "requestId"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Sale"
+            }
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/Pagination"
+          },
+          "timezone": {
+            "type": "string",
+            "enum": [
+              "Asia/Tashkent"
+            ]
+          },
+          "requestId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "CashBalanceResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "success",
+          "data",
+          "pagination",
+          "timezone",
+          "requestId",
+          "asOf",
+          "reconstruction"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CashBalance"
+            }
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/Pagination"
+          },
+          "timezone": {
+            "type": "string",
+            "enum": [
+              "Asia/Tashkent"
+            ]
+          },
+          "requestId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "asOf": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "reconstruction": {
+            "type": "string",
+            "enum": [
+              "CURRENT_LEDGER_WITH_LATEST_SHIFT_BASELINE"
+            ]
+          }
+        }
+      },
+      "ShiftResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "success",
+          "data",
+          "pagination",
+          "timezone",
+          "requestId"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Shift"
+            }
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/Pagination"
+          },
+          "timezone": {
+            "type": "string",
+            "enum": [
+              "Asia/Tashkent"
+            ]
+          },
+          "requestId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "ExpenseResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "success",
+          "data",
+          "pagination",
+          "timezone",
+          "requestId"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Expense"
+            }
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/Pagination"
+          },
+          "timezone": {
+            "type": "string",
+            "enum": [
+              "Asia/Tashkent"
+            ]
+          },
+          "requestId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "InkassaResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "success",
+          "data",
+          "pagination",
+          "timezone",
+          "requestId"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Inkassa"
+            }
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/Pagination"
+          },
+          "timezone": {
+            "type": "string",
+            "enum": [
+              "Asia/Tashkent"
+            ]
+          },
+          "requestId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      }
+    }
+  }
+}

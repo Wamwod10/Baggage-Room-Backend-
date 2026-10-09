@@ -1,2 +1,7 @@
 node_modules/
 .worktrees/
+
+# Local secrets
+.env
+.env.*
+!.env.example

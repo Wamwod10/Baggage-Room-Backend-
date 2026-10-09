@@ -28,6 +28,7 @@ const exportRoutes = require("./routes/export.routes");
 const auditRoutes = require("./routes/audit.routes");
 const systemRoutes = require("./routes/system.routes");
 const googleSheetsRoutes = require("./routes/googleSheets.routes");
+const { createJarvisRouter } = require("./integrations/jarvis/router");
 
 const app = express();
 const perfLoggingEnabled = /^(1|true|yes)$/i.test(String(process.env.PERF_LOG || ""));
@@ -57,6 +58,9 @@ const isLocalDevelopmentOrigin = (origin = "") =>
 
 app.set("trust proxy", 1);
 app.use(helmet());
+// Isolated server-to-server API: its own audit/rate limit, no JWT or raw-URL logs.
+// Mount before CORS so even OPTIONS and HEAD are rejected as read-only violations.
+app.use("/api/integrations/jarvis/v1", createJarvisRouter({ client: prisma }));
 app.use(
   cors({
     origin(origin, callback) {

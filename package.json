@@ -9,6 +9,8 @@
     "start": "node src/server.js",
     "build": "prisma generate",
     "test": "node --require dotenv/config test/run.js",
+    "test:jarvis": "node test/jarvisRun.js",
+    "test:jarvis:db": "node test/jarvisDb.test.js",
     "test:sheets:real": "node scripts/googleSheetsRealMappingTest.js",
     "test:sheets:months": "node scripts/googleSheetsMonthSheetCheck.js",
     "test:sheets:inkassa:real": "node scripts/googleSheetsInkassaRealTest.js",

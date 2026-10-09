@@ -288,6 +288,8 @@ model Shift {
   openedAt            DateTime      @default(now())
   closedAt            DateTime?
   status              ShiftStatus   @default(OPEN)
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @default(now()) @updatedAt
   branch              Branch        @relation(fields: [branchId], references: [id])
   openedBy            User          @relation("ShiftOpenedBy", fields: [openedById], references: [id])
   closedBy            User?         @relation("ShiftClosedBy", fields: [closedById], references: [id])
@@ -312,6 +314,7 @@ model Expense {
   currency     Currency    @default(UZS)
   createdById  String
   createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @default(now()) @updatedAt
   branch       Branch      @relation(fields: [branchId], references: [id])
   shift        Shift?      @relation(fields: [shiftId], references: [id])
   createdBy    User        @relation(fields: [createdById], references: [id])
@@ -332,6 +335,7 @@ model Inkassa {
   note          String?
   createdById   String
   createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @default(now()) @updatedAt
   branch        Branch      @relation(fields: [branchId], references: [id])
   shift         Shift?      @relation(fields: [shiftId], references: [id])
   createdBy     User        @relation(fields: [createdById], references: [id])
@@ -354,6 +358,7 @@ model CashMovement {
   note         String?
   createdById  String
   createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @default(now()) @updatedAt
   branch       Branch            @relation(fields: [branchId], references: [id])
   shift        Shift?            @relation(fields: [shiftId], references: [id])
   order        Order?            @relation(fields: [orderId], references: [id])
