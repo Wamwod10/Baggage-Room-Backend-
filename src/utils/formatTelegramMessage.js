@@ -97,7 +97,7 @@ const orderMessage = (order = {}) => {
     "",
     line("🆔 Buyurtma", orderNumber(order)),
     line("📅 Sana", formatDate(order.createdAt || order.checkIn)),
-  ].join("\n");
+  ].join("\n") + (order.priceApprovedByName ? `\nChegirma tasdiqlovchisi: ${order.priceApprovedByName}\nSabab: ${order.discountReason || '-'}` : '');
 };
 
 const shiftOpenedMessage = (shift = {}) => [

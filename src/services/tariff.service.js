@@ -17,6 +17,11 @@ const MULTI_ORDER_LOCKER_BRANCH_CODES = XL_BRANCH_CODES;
 
 const calculatePrice = (tariff, hours, options = {}) => {
   const h = Number(hours);
+  if (!Number.isFinite(h) || h <= 0) throw new AppError('Invalid storage duration', 400);
+  if (h > 72 && options.dailyRate !== undefined) {
+    if (!Number.isSafeInteger(options.dailyRate) || options.dailyRate <= 0) throw new AppError('Daily tariff requires configuration', 409);
+    return Math.ceil(h / 24) * options.dailyRate;
+  }
   if (options.isCustom) return Number(tariff.price1h || 0) * Math.max(1, Math.ceil(h || 1));
   if (h <= 1) return tariff.price1h;
   if (h <= 12) return tariff.price12h;
@@ -24,6 +29,19 @@ const calculatePrice = (tariff, hours, options = {}) => {
   if (h <= 48) return tariff.price48h;
   if (h <= 72) return tariff.price72h;
   return Math.round(Number(tariff.price72h || 0) + (h - 72) * (Number(tariff.after72hPrice || 0) / 24));
+};
+
+const dailyRatesForBranch = (code) => {
+  const defaults = ['TSV', 'TJV', 'SVK'].includes(code)
+    ? { S: 30000, M: 40000, L: 50000, XL: 80000 }
+    : ['TIA', 'SIA'].includes(code) ? { S: 100000, M: 120000, L: 180000 } : null;
+  if (!defaults) throw new AppError('Unknown branch pricing', 409);
+  const configured = process.env.LONG_TERM_RATES_JSON ? JSON.parse(process.env.LONG_TERM_RATES_JSON) : {};
+  const rates = configured[code] || defaults;
+  for (const size of sizesForBranch({ code })) {
+    if (!Number.isSafeInteger(rates[size]) || rates[size] <= 0) throw new AppError('Invalid configured daily tariff', 409);
+  }
+  return rates;
 };
 
 const sizesForBranch = (branch) => [
@@ -75,6 +93,7 @@ const updateTariff = async (user, id, data) => {
 
 module.exports = {
   calculatePrice,
+  dailyRatesForBranch,
   listTariffs,
   updateTariff,
   sizesForBranch,

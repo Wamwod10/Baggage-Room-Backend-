@@ -1416,6 +1416,18 @@
           "cancelledAt"
         ],
         "properties": {
+          "baggageItems": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["size", "count"],
+              "properties": {
+                "size": { "type": "string", "enum": ["S", "M", "L", "XL"] },
+                "count": { "type": "integer", "minimum": 1 }
+              }
+            }
+          },
           "id": {
             "type": "string"
           },
@@ -1591,6 +1603,11 @@
           },
           "isRevenue": {
             "type": "boolean"
+          },
+          "financialKind": {
+            "type": "string",
+            "nullable": true,
+            "enum": ["REFUND", "PAYMENT_CORRECTION", null]
           }
         }
       },

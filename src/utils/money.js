@@ -51,15 +51,21 @@ const subtractCurrencyMaps = (base = {}, ...subtractors) =>
 
 const convertUzsToCurrencyMinor = (amountUZS, currency = "UZS", exchangeRate = 1) => {
   const code = currency || "UZS";
-  if (code === "UZS") return Math.round(Number(amountUZS || 0));
-
-  const rate = Number(exchangeRate || 0);
-  if (!Number.isFinite(rate) || rate <= 0) {
+  const amount = Number(amountUZS || 0);
+  if (!Number.isSafeInteger(amount) || amount < 0) throw new TypeError('UZS amount must be nonnegative integer minor units');
+  if (code === "UZS") return amount;
+  const rateText = String(exchangeRate);
+  if (!/^\d+(\.\d{1,12})?$/.test(rateText) || Number(rateText) <= 0) {
     throw new TypeError(`Exchange rate for ${code} is required`);
   }
-
-  const digits = currencyFractionDigits[code] ?? 2;
-  return Math.round((Number(amountUZS || 0) / rate) * 10 ** digits);
+  const digits = currencyFractionDigits[code];
+  if (digits === undefined) throw new TypeError('Unsupported currency');
+  const [whole, fraction = ''] = rateText.split('.');
+  const denominator = BigInt(whole + fraction);
+  const numerator = BigInt(amount) * 10n ** BigInt(digits + fraction.length);
+  const result = Number((numerator + denominator / 2n) / denominator);
+  if (!Number.isSafeInteger(result)) throw new TypeError('Currency conversion exceeds safe integer amount');
+  return result;
 };
 
 const parseCurrency = (value, currency = "UZS") => {

@@ -5,6 +5,7 @@ const { branchWhere, getScopedBranchId } = require("../utils/scope");
 const { generateOrderNumber } = require("../utils/generateOrderId");
 const {
   calculatePrice,
+  dailyRatesForBranch,
   sizesForBranch,
   MULTI_ORDER_LOCKER_BRANCH_CODES,
 } = require("./tariff.service");
@@ -20,13 +21,24 @@ const { createTimer } = require("../utils/perf");
 const { markAnalyticsMutation } = require("./analyticsCache");
 const { normalizePaymentType, paymentLabel } = require("../utils/payment");
 const { requireIdempotencyKey } = require("../utils/idempotency");
+const { assertMinorAmount, assertPricePermission, validateBaggage, assertPickupPaid, lockOrder } = require('./financialControls');
 const {
   overtimeHoursAfterGrace,
   isOverdueAfterGrace,
   overdueThresholdDate,
 } = require("../utils/overtime");
 
-const calculateOvertimeAmount = ({ order, tariffs, overtimeHours }) => {
+const calculateOvertimeAmount = ({ order, tariffs, overtimeHours, actualTime = new Date() }) => {
+  if (order.pricingSnapshot) {
+    const elapsedHours = (new Date(actualTime) - new Date(order.checkIn)) / 3600000;
+    if (elapsedHours > 72) {
+      const total = order.items.reduce((sum, item) => sum + convertUzsToCurrencyMinor(
+        calculatePrice(order.pricingSnapshot.tariffs[item.size], elapsedHours, { dailyRate: order.pricingSnapshot.dailyRates[item.size] }),
+        order.currency, order.pricingSnapshot.exchangeRate,
+      ) * item.count, 0);
+      return Math.max(0, total - order.discountAmount - order.finalAmount);
+    }
+  }
   const hours = Math.max(0, Number(overtimeHours || 0));
   if (!hours) return 0;
 
@@ -70,6 +82,7 @@ const includeOrder = {
       currency: true,
       paymentType: true,
       note: true,
+      financialKind: true,
       createdAt: true,
     },
     orderBy: { createdAt: "asc" },
@@ -677,6 +690,7 @@ const createOrder = async (user, body, { idempotencyKey } = {}) => {
     }
 
     const tariffs = await timer.time("tariffs", () => tx.tariff.findMany({ where: { branchId } }));
+    const dailyRates = dailyRatesForBranch(branch.code);
     const tariffsBySize = Object.fromEntries(tariffs.map((tariff) => [tariff.size, tariff]));
     const allowedSizes = new Set(sizesForBranch(branch));
     const isCustomTariff = body.customHours !== undefined && body.customHours !== null;
@@ -722,15 +736,18 @@ const createOrder = async (user, body, { idempotencyKey } = {}) => {
         ]);
       }
       const itemTariffHours = Number(item.tariffHours || tariffHours);
+      if (itemTariffHours !== tariffHours) throw new AppError('Item duration must match order duration', 400);
+      if (item.currency && item.currency !== currency) throw new AppError('Item currency must match order currency', 400);
       if (!Number.isFinite(itemTariffHours) || itemTariffHours <= 0) {
         throw new AppError("tariffHours must be a positive number", 400, [
           { field: "items.tariffHours", lockerId: item.lockerId, message: "tariffHours must be a positive number" },
         ]);
       }
-      const count = Number.isFinite(Number(item.count)) ? Math.max(1, Number(item.count)) : 1;
-      const unitPriceUZS = calculatePrice(tariff, itemTariffHours, { isCustom: isCustomTariff });
+      const count = item.count === undefined ? 1 : Number(item.count);
+      validateBaggage([{ size, count }], branch.code);
+      const unitPriceUZS = calculatePrice(tariff, itemTariffHours, { isCustom: isCustomTariff, dailyRate: dailyRates[size] });
       const unitPrice = convertUzsToCurrencyMinor(unitPriceUZS, currency, exchangeRate);
-      const originalPrice = unitPrice * count;
+      const originalPrice = assertMinorAmount(unitPrice * count);
       const discountAmount = Number(item.discountAmount || 0);
       return {
         locker,
@@ -752,10 +769,14 @@ const createOrder = async (user, body, { idempotencyKey } = {}) => {
     const calculatedAmount = itemRows.reduce((total, item) => total + item.data.originalPrice, 0);
     const itemDiscount = itemRows.reduce((total, item) => total + item.data.discountAmount, 0);
     const discountAmount = Number(body.discountAmount || 0) + itemDiscount;
+    assertMinorAmount(discountAmount);
+    if (discountAmount > calculatedAmount) throw new AppError('Discount exceeds price', 400);
+    if (discountAmount > 0) assertPricePermission(user, body.discountReason);
     const finalAmount = Math.max(0, calculatedAmount - discountAmount);
     const realPaidAmount = paymentType === "DEBT" ? Number(body.realPaidAmount || 0) : Number(body.realPaidAmount ?? finalAmount);
     const checkIn = body.checkIn ? new Date(body.checkIn) : new Date();
     const plannedCheckOut = body.plannedCheckOut ? new Date(body.plannedCheckOut) : addHours(checkIn, tariffHours);
+    if (plannedCheckOut.getTime() !== addHours(checkIn, tariffHours).getTime()) throw new AppError('Checkout must match the selected tariff duration', 400);
     const orderNumber = await timer.time("order number generation", () => generateOrderNumber(tx, branch.code));
 
     const order = await timer.time("order create", () => tx.order.create({
@@ -768,6 +789,9 @@ const createOrder = async (user, body, { idempotencyKey } = {}) => {
         passport: body.passport || null,
         tariffHours,
         customHours: body.customHours || null,
+        pricingSnapshot: { version: 1, dailyRates, tariffs: Object.fromEntries(tariffs.map(({ size, price1h, price12h, price24h, price48h, price72h, after72hPrice }) => [size, { price1h, price12h, price24h, price48h, price72h, after72hPrice }])), exchangeRate },
+        priceApprovedById: discountAmount > 0 ? user.id : null,
+        priceApprovedByName: discountAmount > 0 ? user.name : null,
         currency,
         paymentType,
         calculatedAmount,
@@ -813,7 +837,7 @@ const createOrder = async (user, body, { idempotencyKey } = {}) => {
       throw new AppError("paidPaymentType is required for partial debt payment", 400);
     }
     if (realPaidAmount > 0) {
-      await timer.time("cash movement", () => createCashMovement({
+      const initialReceipt = await timer.time("cash movement", () => createCashMovement({
         tx,
         branchId,
         shiftId: shift?.id || null,
@@ -826,6 +850,14 @@ const createOrder = async (user, body, { idempotencyKey } = {}) => {
         note: `Order ${order.orderNumber}`,
         createdById: user.id,
       }));
+      if (paymentType === 'DEBT') {
+        const payload = googleSheets._internals.orderPayload('DEBT_PAYMENT', order, {
+          idempotencyKey: `DEBT_INITIAL_PAYMENT:${initialReceipt.id}`, createdAt: initialReceipt.createdAt.toISOString(),
+          amount: realPaidAmount, currency, paymentType: paidPaymentType,
+          operationName: `Qarz dastlabki to‘lov ${initialReceipt.id}`, deliveryIdentity: true,
+        });
+        await tx.financialOutbox.create({ data: { deliveryKey: `PAYMENT_SHEETS:${initialReceipt.id}`, action: 'PAYMENT_SHEETS', payload } });
+      }
     } else {
       await timer.time("cash movement", async () => null);
     }
@@ -899,10 +931,26 @@ const updateOrder = async (user, id, body, { idempotencyKey } = {}) => {
   let result;
   try {
     result = await prisma.$transaction(async (tx) => {
+    await lockOrder(tx, id);
     const current = await tx.order.findUnique({ where: { id }, include: includeOrder });
     if (!current) throw new AppError("Order not found", 404);
     getScopedBranchId(user, current.branchId);
     if (!["ACTIVE", "DELAYED", "PICKED_UP"].includes(current.status)) throw new AppError("Only active or picked up orders can be edited", 400);
+    if (body.discountReason !== undefined && body.discountReason !== current.discountReason && current.discountAmount > 0) {
+      assertPricePermission(user, body.discountReason);
+    }
+    const financialChanged = ['finalAmount', 'realPaidAmount', 'currency', 'paymentType', 'overtimeAmount', 'overtimePaymentType']
+      .some((key) => body[key] !== undefined && body[key] !== current[key]);
+    if (financialChanged) {
+      const forbidden = ['realPaidAmount', 'currency', 'paymentType', 'overtimeAmount', 'overtimePaymentType']
+        .some((key) => body[key] !== undefined && body[key] !== current[key]);
+      if (forbidden) throw new AppError('Financial changes require an approved financial operation', 403);
+      assertPricePermission(user, body.priceChangeReason || body.discountReason);
+    }
+    if (body.doplataPaymentType !== undefined && normalizePaymentType(body.doplataPaymentType) !== current.overtimePaymentType
+      || body.overtimeCurrency !== undefined && body.overtimeCurrency !== current.currency) {
+      throw new AppError('Payment correction requires approval', 403);
+    }
 
     const data = { editIdempotencyKey: requestKey };
     for (const key of ["clientName", "phone", "passport", "note", "discountReason", "realPaidReason"]) {
@@ -911,6 +959,9 @@ const updateOrder = async (user, id, body, { idempotencyKey } = {}) => {
     if (body.checkOut !== undefined || body.plannedCheckOut !== undefined) {
       const plannedCheckOut = new Date(body.plannedCheckOut || body.checkOut);
       if (Number.isNaN(plannedCheckOut.getTime())) throw new AppError("Invalid checkOut", 400);
+      if (Math.abs(plannedCheckOut - current.plannedCheckOut) >= 60000) {
+        assertPricePermission(user, body.priceChangeReason);
+      }
       data.plannedCheckOut = plannedCheckOut;
       if (["ACTIVE", "DELAYED"].includes(current.status)) {
         data.status = isOverdueAfterGrace(plannedCheckOut) ? "DELAYED" : "ACTIVE";
@@ -923,6 +974,13 @@ const updateOrder = async (user, id, body, { idempotencyKey } = {}) => {
     }
     if (body.currency !== undefined) data.currency = body.currency;
     if (body.finalAmount !== undefined) data.finalAmount = Number(body.finalAmount);
+    if (body.finalAmount !== undefined && body.finalAmount !== current.finalAmount) {
+      assertMinorAmount(body.finalAmount);
+      data.discountAmount = Math.max(0, current.calculatedAmount - body.finalAmount);
+      data.discountReason = body.priceChangeReason || body.discountReason;
+      data.priceApprovedById = user.id;
+      data.priceApprovedByName = user.name;
+    }
     if (body.realPaidAmount !== undefined) data.realPaidAmount = Number(body.realPaidAmount);
     if (body.overtimeAmount !== undefined) data.overtimeAmount = Number(body.overtimeAmount);
     if (body.overtimePaymentType !== undefined || body.doplataPaymentType !== undefined) {
@@ -934,7 +992,6 @@ const updateOrder = async (user, id, body, { idempotencyKey } = {}) => {
     }
 
     const nextPaymentType = data.paymentType || current.paymentType;
-    if (nextPaymentType === "DEBT" && body.realPaidAmount === undefined) data.realPaidAmount = 0;
     const nextFinalAmount = data.finalAmount ?? current.finalAmount;
     const nextRealPaidAmount = data.realPaidAmount ?? current.realPaidAmount;
     data.paymentDifference = Number(nextRealPaidAmount || 0) - Number(nextFinalAmount || 0);
@@ -942,13 +999,40 @@ const updateOrder = async (user, id, body, { idempotencyKey } = {}) => {
     let itemChanged = false;
     if (Array.isArray(body.items)) {
       const currentItemsById = new Map(current.items.map((item) => [item.id, item]));
+      const usedIds = new Set();
       for (const item of body.items) {
+        if (item.id && usedIds.has(item.id)) throw new AppError('Duplicate baggage item', 400);
+        usedIds.add(item.id);
+        if (!item.id) {
+          if (item.remove || !item.lockerId || !item.size || !item.count) throw new AppError('New baggage requires locker, size and count', 400);
+          validateBaggage([item], current.branch.code);
+          const locker = await tx.locker.findUnique({ where: { id: item.lockerId } });
+          if (!locker || locker.branchId !== current.branchId || locker.status === 'SERVICE') throw new AppError('Locker unavailable', 409);
+          if (!MULTI_ORDER_LOCKER_BRANCH_CODES.has(current.branch.code) && locker.currentOrderId !== id) {
+            const claimed = await tx.locker.updateMany({ where: { id: locker.id, status: 'EMPTY', currentOrderId: null }, data: { status: 'BUSY', currentOrderId: id } });
+            if (claimed.count !== 1) throw new AppError('Locker unavailable', 409);
+          }
+          await tx.orderItem.create({ data: { orderId: id, lockerId: locker.id, lockerNumber: locker.number,
+            size: item.size, count: item.count, tariffHours: current.tariffHours, unitPrice: 0, originalPrice: 0,
+            finalPrice: 0, currency: current.currency } });
+          itemChanged = true;
+          continue;
+        }
         const currentItem = currentItemsById.get(item.id);
-        if (!currentItem) continue;
+        if (!currentItem) throw new AppError('Baggage item does not belong to this order', 400);
+        if (item.remove) {
+          await tx.orderItem.delete({ where: { id: item.id } });
+          itemChanged = true;
+          continue;
+        }
+        if (item.size !== undefined || item.count !== undefined) {
+          const nextSize = item.size ?? currentItem.size;
+          const nextCount = item.count ?? currentItem.count;
+          validateBaggage([{ size: nextSize, count: nextCount }], current.branch.code);
+        }
         const itemData = {};
-        if (item.size !== undefined) itemData.size = item.size;
-        if (item.count !== undefined) itemData.count = Number(item.count);
-        if (data.currency) itemData.currency = data.currency;
+        if (item.size !== undefined && item.size !== currentItem.size) itemData.size = item.size;
+        if (item.count !== undefined && Number(item.count) !== currentItem.count) itemData.count = Number(item.count);
         if (item.lockerId && item.lockerId !== currentItem.lockerId) {
           const locker = await tx.locker.findUnique({ where: { id: item.lockerId } });
           if (!locker || locker.branchId !== current.branchId) throw new AppError("Locker not found in this branch", 400);
@@ -958,15 +1042,48 @@ const updateOrder = async (user, id, body, { idempotencyKey } = {}) => {
             data: { status: current.status === "DELAYED" ? "DELAYED" : "BUSY", currentOrderId: id },
           });
           if (claimedLocker.count !== 1) throw new AppError("New locker was taken by another operator", 409);
-          await tx.locker.update({ where: { id: currentItem.lockerId }, data: { status: "EMPTY", currentOrderId: null } });
+          // Release unused source lockers after all item changes are applied.
           itemData.lockerId = locker.id;
           itemData.lockerNumber = locker.number;
-          itemData.size = itemData.size || locker.size;
+          // Baggage size is independent of the destination locker size.
+          itemData.size = itemData.size || currentItem.size;
         }
         if (Object.keys(itemData).length) {
           await tx.orderItem.update({ where: { id: currentItem.id }, data: itemData });
           itemChanged = true;
         }
+      }
+      if (itemChanged) {
+        if (current.status === 'PICKED_UP') throw new AppError('Completed baggage cannot be repriced', 403);
+        const nextItems = await tx.orderItem.findMany({ where: { orderId: id } });
+        validateBaggage(nextItems, current.branch.code);
+        const tariffs = await tx.tariff.findMany({ where: { branchId: current.branchId } });
+        let calculatedAmount = 0;
+        for (const row of nextItems) {
+          const previous = currentItemsById.get(row.id);
+          let unitPrice = previous?.size === row.size ? previous.unitPrice : undefined;
+          if (previous?.size === row.size && !unitPrice && previous.originalPrice > 0) {
+            if (previous.originalPrice % previous.count !== 0) throw new AppError('Historical unit price cannot be inferred safely', 409);
+            unitPrice = previous.originalPrice / previous.count;
+          }
+          if (unitPrice === undefined) {
+            const tariff = current.pricingSnapshot?.tariffs[row.size] || tariffs.find((t) => t.size === row.size);
+            if (!tariff) throw new AppError('Tariff not found', 409);
+            if (!current.pricingSnapshot && current.currency !== 'UZS') throw new AppError('Legacy foreign-currency repricing requires a verified exchange rate', 409);
+            unitPrice = convertUzsToCurrencyMinor(calculatePrice(tariff, row.tariffHours, {
+              isCustom: current.customHours !== null, dailyRate: current.pricingSnapshot?.dailyRates[row.size],
+            }), current.currency, current.pricingSnapshot?.exchangeRate || 1);
+          }
+          const originalPrice = assertMinorAmount(unitPrice * row.count);
+          calculatedAmount = assertMinorAmount(calculatedAmount + originalPrice);
+          await tx.orderItem.update({ where: { id: row.id }, data: { unitPrice, originalPrice, finalPrice: Math.max(0, originalPrice - row.discountAmount) } });
+        }
+        if (current.discountAmount > calculatedAmount) throw new AppError('Baggage change would exceed approved discount', 409);
+        data.calculatedAmount = calculatedAmount;
+        if (body.finalAmount === undefined || body.finalAmount === current.finalAmount) data.finalAmount = calculatedAmount - current.discountAmount;
+        else data.discountAmount = Math.max(0, calculatedAmount - data.finalAmount);
+        data.paymentDifference = current.realPaidAmount - data.finalAmount;
+        await tx.locker.updateMany({ where: { currentOrderId: id, id: { notIn: [...new Set(nextItems.map((row) => row.lockerId))] } }, data: { status: 'EMPTY', currentOrderId: null } });
       }
     }
 
@@ -979,7 +1096,7 @@ const updateOrder = async (user, id, body, { idempotencyKey } = {}) => {
     }
     const updatedBase = await tx.order.findUnique({ where: { id }, include: includeOrder });
     const nextDebtAmount = Math.max(0, Number(updatedBase.finalAmount || 0) - Number(updatedBase.realPaidAmount || 0));
-    if (updatedBase.paymentType === "DEBT" && nextDebtAmount > 0) {
+    if (updatedBase.finalAmount !== current.finalAmount && updatedBase.paymentType === "DEBT" && nextDebtAmount > 0) {
       await tx.debt.upsert({
         where: { orderId: id },
         create: {
@@ -1000,14 +1117,14 @@ const updateOrder = async (user, id, body, { idempotencyKey } = {}) => {
           currency: updatedBase.currency,
         },
       });
-    } else if (current.debt) {
+    } else if (updatedBase.finalAmount !== current.finalAmount && current.debt?.status === 'OPEN' && nextDebtAmount === 0) {
       await tx.debt.update({
         where: { id: current.debt.id },
         data: { status: "CLOSED", amount: 0, closedAt: new Date(), closedById: user.id },
       });
     }
 
-    const paymentFieldsChanged = ["paymentType", "currency", "finalAmount", "realPaidAmount"].some((key) => body[key] !== undefined);
+    const paymentFieldsChanged = false; // Price approval does not change money already received.
     if (paymentFieldsChanged) {
       if (current.status === "PICKED_UP") {
         const existing = await tx.cashMovement.findMany({
@@ -1040,7 +1157,7 @@ const updateOrder = async (user, id, body, { idempotencyKey } = {}) => {
       }
     }
 
-    const overtimeFieldsChanged = ["overtimeAmount", "overtimePaymentType", "doplataPaymentType", "overtimeCurrency"].some((key) => body[key] !== undefined);
+    const overtimeFieldsChanged = false; // Financial edits use approval operations, never rewrite historical receipts.
     if (overtimeFieldsChanged) {
       const overtimeCurrency = body.overtimeCurrency || updatedBase.currency;
       const overtimePaymentType = data.overtimePaymentType ?? updatedBase.overtimePaymentType;
@@ -1125,9 +1242,12 @@ const pickupOrder = async (user, id, body, { idempotencyKey } = {}) => {
   let result;
   try {
   result = await timer.time("transaction total", () => prisma.$transaction(async (tx) => {
+    await lockOrder(tx, id);
     const order = await timer.time("order lookup", () => tx.order.findUnique({ where: { id }, include: includeOrder }));
     if (!order || !["ACTIVE", "DELAYED"].includes(order.status)) throw new AppError("Active order not found", 404);
     await timer.time("branch lookup", async () => getScopedBranchId(user, order.branchId));
+    assertPickupPaid(order);
+    if (body.currency && body.currency !== order.currency) throw new AppError('Payment currency must match order currency', 400);
     let closedDebt = null;
     let debtPayment = null;
     let debtPaidAmount = 0;
@@ -1138,11 +1258,20 @@ const pickupOrder = async (user, id, body, { idempotencyKey } = {}) => {
     const tariffs = await timer.time("overtime tariffs", () => tx.tariff.findMany({
       where: { branchId: order.branchId, size: { in: [...new Set(order.items.map((item) => item.size))] } },
     }));
-    const calculatedOvertimeAmount = calculateOvertimeAmount({ order, tariffs, overtimeHours });
+    const calculatedOvertimeAmount = calculateOvertimeAmount({ order, tariffs, overtimeHours, actualTime: pickupTime });
+    if (body.quotedOvertimeAmount !== undefined && body.quotedOvertimeAmount !== calculatedOvertimeAmount) {
+      throw new AppError('Narx yangilandi. Pickup oynasini qayta ochib, to‘lovni tekshiring.', 409);
+    }
     const overtimeAmount = resolvePickupOvertimeAmount(body, calculatedOvertimeAmount);
+    assertMinorAmount(overtimeAmount);
+    if (overtimeAmount !== calculatedOvertimeAmount) assertPricePermission(user, body.priceChangeReason);
     const overtimeCurrency = order.currency;
     const overtimePaymentType = normalizePaymentType(body.overtimePaymentType || body.doplataPaymentType || body.paymentType);
     const debtPaymentType = normalizePaymentType(body.debtPaymentType || body.paymentType);
+    if (debtPaymentType === 'DEBT' && Number(body.debtPaidAmount || 0) > 0) throw new AppError('Debt cannot be paid using DEBT', 400);
+    if (overtimePaymentType === 'DEBT' && !(order.paymentType === 'DEBT' && order.debt?.status === 'OPEN')) {
+      assertPricePermission(user, body.priceChangeReason);
+    }
     if (overtimeAmount > 0 && !overtimePaymentType) {
       throw new AppError("overtimePaymentType is required", 400);
     }
@@ -1354,9 +1483,11 @@ const cancelOrder = async (user, id, body, { idempotencyKey } = {}) => {
   let result;
   try {
     result = await prisma.$transaction(async (tx) => {
+    await lockOrder(tx, id);
     const order = await tx.order.findUnique({ where: { id }, include: includeOrder });
     if (!order || !["ACTIVE", "DELAYED"].includes(order.status)) throw new AppError("Active order not found", 404);
     getScopedBranchId(user, order.branchId);
+    if (order.debt?.status === 'OPEN') assertPricePermission(user, body.cancelReason || body.reason);
     await ensureSingleStatusTransition({
       model: tx.order,
       where: { id, status: { in: ["ACTIVE", "DELAYED"] } },
@@ -1370,16 +1501,8 @@ const cancelOrder = async (user, id, body, { idempotencyKey } = {}) => {
         data: { status: "CLOSED", amount: 0, closedAt: new Date(), closedById: user.id },
       });
     }
-    const paidMovements = await tx.cashMovement.findMany({
-      where: { orderId: id, type: { in: ["ORDER_PAYMENT", "DEBT_CLOSE"] } },
-    });
-    const reversals = await reverseRevenueMovements({
-      tx,
-      order,
-      movements: paidMovements,
-      userId: user.id,
-      notePrefix: "Cancel reversal",
-    });
+    // Cancellation does not prove money was returned. Refunds require approval and a recorded payout.
+    const reversals = [];
     await createNotification({
       tx,
       branchId: order.branchId,

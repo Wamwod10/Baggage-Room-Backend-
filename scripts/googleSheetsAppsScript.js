@@ -35,7 +35,7 @@ const SHEET_NAME_PATTERN_BY_BRANCH_CODE = {
   SIA: /(sia|самарканд.*аэропорт|samarqand.*aeroport)/i,
 };
 
-const WRITABLE_ACTIONS = new Set(["NEW_ORDER", "ORDER_EDIT", "DOPLATA", "DEBT_PAYMENT", "CANCEL_ORDER", "EXPENSE", "INKASSA", "SALARY"]);
+const WRITABLE_ACTIONS = new Set(["NEW_ORDER", "ORDER_EDIT", "DOPLATA", "DEBT_PAYMENT", "CANCEL_ORDER", "EXPENSE", "INKASSA", "SALARY", "FINANCIAL_OPERATION"]);
 const MONTH_CHECK_ACTIONS = new Set(["CHECK_MONTH_SHEET"]);
 const SCRIPT_VERSION = "v9-debt-doplata-payment-2026-07-09";
 const TASHKENT_OFFSET_MINUTES = 5 * 60;
@@ -107,6 +107,23 @@ const ACTION_STYLE = {
   INKASSA: { background: "#fce4d6", fontColor: "#000000" },
 };
 
+// Pure capability/self-test. It does not open spreadsheets, acquire locks or write rows.
+function financeCapabilities_() {
+  const payload = { action: 'FINANCIAL_OPERATION', financialKind: 'PAYMENT_CORRECTION',
+    currency: 'UZS', paymentType: 'CASH', newPaymentType: 'TERMINAL', sheetAmount: 100,
+    amountUnit: 'MAJOR', createdAt: '2026-01-01T00:00:00Z' };
+  const correction = buildLegacyRow_(payload);
+  const refund = buildLegacyRow_(Object.assign({}, payload, { financialKind: 'REFUND' }));
+  return { ok: true, financeContract: 'financial-operation-v1', columns: LEGACY_WIDTH,
+    financialOperation: WRITABLE_ACTIONS.has('FINANCIAL_OPERATION'),
+    persistentIdempotency: typeof findPersistentDeliveryRow_ === 'function',
+    selfTestPassed: correction.length === 22 && correction[5] === -100 && correction[13] === 100
+      && refund.length === 22 && refund[5] === -100 };
+}
+function doGet(e) {
+  if (e && e.parameter && e.parameter.action === 'FINANCE_CAPABILITIES') return json_(financeCapabilities_());
+  return json_({ ok: false, error: 'Unsupported read-only action' });
+}
 function doPost(e) {
   let branchCode = "";
   let spreadsheet = null;
@@ -156,7 +173,7 @@ function doPost(e) {
       ensureColumns_(sheet, LEGACY_WIDTH);
 
       const idempotencyKey = String(payload.idempotencyKey || buildIdempotencyKey_(payload));
-      const duplicateRow = getCachedDeliveryRow_(idempotencyKey);
+      const duplicateRow = getCachedDeliveryRow_(idempotencyKey) || findPersistentDeliveryRow_(sheet, payload);
       if (duplicateRow) {
         return json_({
           success: true,
@@ -446,6 +463,19 @@ function getCachedDeliveryRow_(idempotencyKey) {
   return Number.isInteger(row) && row > 0 ? row : null;
 }
 
+function findPersistentDeliveryRow_(sheet, payload) {
+  if (!payload.financialKind && !payload.deliveryIdentity) return null;
+  if (!payload.operationName || !payload.orderNumber) throw new Error('Persistent receipt identity is required');
+  const last = sheet.getLastRow();
+  if (!last) return null;
+  // The operation ID lives in the existing V label, atomically written with the money columns.
+  const rows = sheet.getRange(1, COLUMN.CHECK, last, LEGACY_WIDTH - COLUMN.CHECK + 1).getValues();
+  for (let index = 0; index < rows.length; index++) {
+    if (String(rows[index][0]) === String(payload.orderNumber) && rows[index][LEGACY_WIDTH - COLUMN.CHECK] === payload.operationName) return index + 1;
+  }
+  return null;
+}
+
 function cacheDeliveryRow_(idempotencyKey, row) {
   if (!idempotencyKey || typeof CacheService === "undefined") return;
   CacheService.getScriptCache().put(idempotencyCacheKey_(idempotencyKey), String(row), 21600);
@@ -532,6 +562,7 @@ function legacyDataStartRow_(sheet) {
 }
 
 function buildLegacyRow_(payload) {
+  if (payload.action === 'FINANCIAL_OPERATION') return buildFinancialOperationRow(payload);
   const action = String(payload.action || "").toUpperCase();
   if (action === "NEW_ORDER" || action === "ORDER_EDIT") return buildNewOrderRow(payload);
   if (action === "DOPLATA") return buildDoplataRow(payload);
@@ -541,6 +572,25 @@ function buildLegacyRow_(payload) {
   if (action === "SALARY") return buildSalaryRow(payload);
   if (action === "INKASSA") return buildInkassaRow(payload);
   throw new Error("Unsupported action: " + action);
+}
+
+function buildFinancialOperationRow(payload) {
+  const row = createRow_(payload);
+  row[COLUMN.FIO - 1] = payload.clientName || '';
+  row[COLUMN.PLACE - 1] = formatSizeCounts_(payload);
+  row[COLUMN.CHECK - 1] = payload.orderNumber || '';
+  row[COLUMN.PERIOD - 1] = payload.financialKind;
+  row[COLUMN.NAME - 1] = payload.operationName || payload.financialKind;
+  const amount = amountAbs_(payload.sheetAmount);
+  writeRevenue_(row, payload, -amount);
+  if (payload.financialKind === 'PAYMENT_CORRECTION') {
+    const incoming = createRow_(payload);
+    writeRevenue_(incoming, Object.assign({}, payload, { paymentType: payload.newPaymentType }), amount);
+    for (let index = COLUMN.CASH_UZS - 1; index < COLUMN.TERMINAL; index++) {
+      if (incoming[index] !== '' && typeof incoming[index] === 'number') row[index] = (Number(row[index]) || 0) + incoming[index];
+    }
+  } else if (payload.financialKind !== 'REFUND') throw new Error('Invalid financial operation');
+  return row;
 }
 
 function findExistingOrderRow_(sheet, payload) {
@@ -840,6 +890,8 @@ if (typeof module !== "undefined" && module.exports) {
     monthSheetNameForPayload_,
     moneyNumberFormat_,
     buildLegacyRow_,
+    financeCapabilities_,
+    findPersistentDeliveryRow_,
     findExistingOrderRow_,
     buildNewOrderRow,
     buildDoplataRow,

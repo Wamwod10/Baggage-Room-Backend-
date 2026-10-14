@@ -9,6 +9,7 @@ const googleSheets = require("./googleSheets.service");
 const { normalizePaymentType } = require("../utils/payment");
 const { requireIdempotencyKey } = require("../utils/idempotency");
 const { markAnalyticsMutation } = require("./analyticsCache");
+const { lockOrder } = require('./financialControls');
 
 const includeDebt = {
   order: { select: { id: true, orderNumber: true, status: true, passport: true, checkIn: true, plannedCheckOut: true, realPickupTime: true } },
@@ -47,12 +48,17 @@ const closeDebt = async (user, id, body, { idempotencyKey } = {}) => {
     return { ...replay, idempotentReplay: true };
   }
   const result = await prisma.$transaction(async (tx) => {
+    const linked = await tx.debt.findUnique({ where: { id }, select: { orderId: true } });
+    if (!linked) throw new AppError('Debt not found', 404);
+    await lockOrder(tx, linked.orderId);
     const debt = await tx.debt.findUnique({ where: { id }, include: { order: true } });
     if (!debt) throw new AppError("Debt not found", 404);
     if (debt.status === "CLOSED") throw new AppError("Debt is already closed", 400);
     getScopedBranchId(user, debt.branchId);
     const paidAmount = body.amount ?? debt.amount;
     const paymentType = normalizePaymentType(body.paymentType);
+    if (paymentType === 'DEBT') throw new AppError('Debt cannot be paid using DEBT', 400);
+    if (body.currency && body.currency !== debt.currency) throw new AppError('Payment currency must match debt currency', 400);
     if (paidAmount <= 0) throw new AppError("Debt payment amount must be positive", 400);
     if (paidAmount !== debt.amount) throw new AppError("Debt close amount must equal open debt amount", 400);
     if (!paymentType) throw new AppError("paymentType is required", 400);

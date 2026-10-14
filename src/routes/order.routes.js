@@ -12,6 +12,21 @@ const orderItem = z.object({
   discountAmount: amount.optional(),
   currency: currency.optional(),
 });
+router.get('/financial-capabilities', (req, res) => {
+  let canAdjustPrice = false;
+  try { require('../services/financialControls').assertPricePermission(req.user, 'Capability check'); canAdjustPrice = true; } catch { /* Fail closed. */ }
+  return require('../utils/response').success(res, { canAdjustPrice });
+});
+router.post('/quote', validate(z.object({ body: z.object({
+  branchId: z.string().min(1), hours: z.number().positive(), isCustom: z.boolean().optional(), currency,
+  exchangeRate: z.number().positive().optional(), items: z.array(z.object({ size: lockerSize, count: z.number().int().positive() })).min(1),
+}) })), require('../utils/response').asyncHandler(async (req, res) => require('../utils/response').success(res,
+  await require('../services/pricing.service').quote(req.user, req.body))));
+router.get('/:id/pickup-quote', require('../utils/response').asyncHandler(async (req, res) => require('../utils/response').success(res,
+  await require('../services/pricing.service').pickupQuote(req.user, req.params.id))));
+router.post('/:id/payments', validate(z.object({ body: z.object({ amount, currency, paymentType }) })),
+  require('../utils/response').asyncHandler(async (req, res) => require('../utils/response').success(res,
+    await require('../services/orderPayment.service').pay(req.user, req.params.id, req.body, req.get('Idempotency-Key')))));
 
 router.get(
   "/",
@@ -91,6 +106,7 @@ router.patch(
       passport: z.string().optional(),
       note: z.string().optional(),
       discountReason: z.string().optional(),
+      priceChangeReason: z.string().trim().min(1).optional(),
       realPaidReason: z.string().optional(),
       checkOut: z.string().datetime().optional(),
       plannedCheckOut: z.string().datetime().optional(),
@@ -103,7 +119,8 @@ router.patch(
       doplataPaymentType: paymentType.optional(),
       overtimeCurrency: currency.optional(),
       items: z.array(z.object({
-        id: z.string().min(1),
+        id: z.string().min(1).optional(),
+        remove: z.boolean().optional(),
         lockerId: z.string().min(1).optional(),
         size: lockerSize.optional(),
         count: z.coerce.number().int().positive().optional(),
@@ -121,6 +138,8 @@ router.post(
         overtimeAmount: amount.optional(),
         extraPayment: amount.optional(),
         debtPaidAmount: amount.optional(),
+        priceChangeReason: z.string().trim().min(1).optional(),
+        quotedOvertimeAmount: amount.optional(),
         paymentType: paymentType.optional(),
         overtimePaymentType: paymentType.optional(),
         doplataPaymentType: paymentType.optional(),

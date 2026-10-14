@@ -8,6 +8,7 @@ const logger = require("./utils/logger");
 const configuredPort = Number.parseInt(process.env.PORT || "", 10);
 const port = Number.isInteger(configuredPort) && configuredPort > 0 ? configuredPort : 5000;
 const overdueJob = startOverdueBaggageJob();
+const financeJob = require('./jobs/financialOutbox.job').startFinancialOutboxJob();
 
 const server = app.listen(port, () => {
   logger.info("Baggage Room API running", { port });
@@ -18,6 +19,7 @@ const shutdown = async () => {
   if (shutdownPromise) return shutdownPromise;
   shutdownPromise = (async () => {
     overdueJob?.stop?.();
+    financeJob.stop();
     const closePromise = new Promise((resolve) => {
       if (!server.listening) return resolve();
       server.close(resolve);

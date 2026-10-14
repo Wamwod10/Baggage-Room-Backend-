@@ -1,0 +1,40 @@
+const { AppError } = require('../utils/response');
+const { REVENUE_TYPES } = require('./cashAccounting.service');
+
+const assertMinorAmount = (value) => {
+  if (!Number.isSafeInteger(value) || value < 0 || value > 2147483647) {
+    throw new AppError('Invalid money amount in minor units', 400);
+  }
+  return value;
+};
+const assertPricePermission = (user, reason, configuredIds = process.env.PRICE_APPROVER_USER_IDS || '') => {
+  const ids = configuredIds.split(',').map((id) => id.trim()).filter(Boolean);
+  const logins = (process.env.PRICE_APPROVER_LOGINS || '').split(',').map((login) => login.trim()).filter(Boolean);
+  if (!ids.includes(user.id) && !logins.includes(user.login)) throw new AppError('Sizda narx yoki chegirmani tasdiqlash huquqi yo‘q', 403);
+  if (!String(reason || '').trim()) throw new AppError('Narx o‘zgarishi uchun sabab majburiy', 400);
+};
+const validateBaggage = (items, branchCode) => {
+  if (!Array.isArray(items) || !items.length) throw new AppError('At least one baggage item is required', 400);
+  const sizes = ['S', 'M', 'L', ...(['TSV', 'TJV', 'SVK'].includes(branchCode) ? ['XL'] : [])];
+  return items.reduce((sum, item) => {
+    if (!sizes.includes(item.size) || !Number.isSafeInteger(item.count) || item.count <= 0) {
+      throw new AppError('Invalid baggage size or count for this branch', 400);
+    }
+    return assertMinorAmount(sum + item.count);
+  }, 0);
+};
+const paidForOrder = (order) => (order.cashMovements || [])
+  .filter((m) => REVENUE_TYPES.includes(m.type) && m.currency === order.currency && m.paymentType && m.paymentType !== 'DEBT')
+  .reduce((sum, m) => sum + m.amount * (m.direction === 'OUT' ? -1 : 1), 0);
+const assertPickupPaid = (order) => {
+  const paid = paidForOrder(order);
+  const formalDebt = order.paymentType === 'DEBT' && order.debt?.status === 'OPEN'
+    && order.debt.currency === order.currency && order.debt.amount >= Math.max(0, order.finalAmount - paid);
+  if (!formalDebt && paid < order.finalAmount) {
+    throw new AppError('Buyurtmani yopish uchun to‘lovni to‘liq amalga oshiring yoki qarz tartibida rasmiylashtiring.', 409);
+  }
+};
+// Serialize order/payment/debt mutations on the same row, including pickup.
+const lockOrder = (tx, id) => tx.$queryRaw`SELECT "id" FROM "Order" WHERE "id" = ${id} FOR UPDATE`;
+
+module.exports = { assertMinorAmount, assertPricePermission, validateBaggage, paidForOrder, assertPickupPaid, lockOrder };

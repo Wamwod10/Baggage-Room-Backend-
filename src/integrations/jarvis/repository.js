@@ -5,8 +5,8 @@ const { CURRENCIES } = require('./query');
 const common = { id: true, createdAt: true, updatedAt: true, branch: { select: { code: true } } };
 const resources = {
   branches: { model: 'branch', dateField: 'createdAt', select: { id: true, code: true, name: true, isActive: true, createdAt: true, updatedAt: true } },
-  orders: { model: 'order', dateField: 'createdAt', select: { ...common, orderNumber: true, status: true, currency: true, paymentType: true, calculatedAmount: true, discountAmount: true, finalAmount: true, realPaidAmount: true, overtimeAmount: true, overtimePaymentType: true, checkIn: true, plannedCheckOut: true, realPickupTime: true, cancelledAt: true } },
-  transactions: { model: 'cashMovement', dateField: 'createdAt', select: { ...common, type: true, direction: true, amount: true, currency: true, paymentType: true, orderId: true, shiftId: true } },
+  orders: { model: 'order', dateField: 'createdAt', select: { ...common, orderNumber: true, status: true, currency: true, paymentType: true, calculatedAmount: true, discountAmount: true, finalAmount: true, realPaidAmount: true, overtimeAmount: true, overtimePaymentType: true, checkIn: true, plannedCheckOut: true, realPickupTime: true, cancelledAt: true, items: { select: { size: true, count: true } } } },
+  transactions: { model: 'cashMovement', dateField: 'createdAt', select: { ...common, type: true, direction: true, amount: true, currency: true, paymentType: true, orderId: true, shiftId: true, financialKind: true } },
   shifts: { model: 'shift', dateField: 'openedAt', select: { ...common, status: true, openedAt: true, closedAt: true, openingCash: true, acceptedCash: true, closingCash: true, openingCashByCurrency: true, acceptedCashByCurrency: true, closingCashByCurrency: true, differenceByCurrency: true } },
   expenses: { model: 'expense', dateField: 'createdAt', select: { ...common, amount: true, currency: true, category: true, shiftId: true } },
   inkassa: { model: 'inkassa', dateField: 'createdAt', select: { ...common, amount: true, currency: true, shiftId: true } },
@@ -56,8 +56,9 @@ function salesCte(f) {
     SELECT m."branchId",
       (m."createdAt" AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Tashkent')::date AS day,
       m."currency", m."paymentType",
-      SUM(CASE WHEN m."direction" = 'IN' THEN m."amount"::bigint ELSE 0 END)::text AS "grossReceipts",
-      SUM(CASE WHEN m."direction" = 'OUT' THEN m."amount"::bigint ELSE 0 END)::text AS refunds,
+      SUM(CASE WHEN m."financialKind" = 'PAYMENT_CORRECTION' AND m."direction" = 'OUT' THEN -m."amount"::bigint
+        WHEN m."direction" = 'IN' THEN m."amount"::bigint ELSE 0 END)::text AS "grossReceipts",
+      SUM(CASE WHEN m."direction" = 'OUT' AND m."financialKind" IS DISTINCT FROM 'PAYMENT_CORRECTION' THEN m."amount"::bigint ELSE 0 END)::text AS refunds,
       SUM(CASE WHEN m."direction" = 'IN' THEN m."amount"::bigint ELSE -m."amount"::bigint END)::text AS "netReceipts",
       COUNT(*)::bigint AS "transactionCount", MIN(m."createdAt") AS "createdAt", MAX(m."updatedAt") AS "updatedAt"
     FROM "CashMovement" m JOIN "Branch" b ON b.id = m."branchId"

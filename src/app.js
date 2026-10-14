@@ -133,8 +133,15 @@ app.get("/ready", async (_req, res) => {
 });
 app.use(perfMiddleware);
 app.use("/api/auth", authRoutes);
+app.post('/api/telegram/finance-webhook', require('./utils/response').asyncHandler(async (req, res) => {
+  const finance = require('./services/financialApproval.service');
+  if (!finance.verifyWebhookSecret(req.get('X-Telegram-Bot-Api-Secret-Token'))) return res.sendStatus(403);
+  await finance.handleCallback(req.body);
+  return res.json({ ok: true });
+}));
 
 app.use(authMiddleware);
+app.use('/api/financial-requests', require('./routes/financialApproval.routes'));
 app.use("/api/branches", branchRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/lockers", lockerRoutes);

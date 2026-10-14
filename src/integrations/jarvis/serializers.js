@@ -12,12 +12,14 @@ function serializeRecord(endpoint, row) {
       recordedPaidAmount: row.realPaidAmount, overtimeAmount: row.overtimeAmount,
       overtimePaymentType: row.overtimePaymentType, checkIn: iso(row.checkIn), plannedCheckOut: iso(row.plannedCheckOut),
       realPickupTime: iso(row.realPickupTime), cancelledAt: iso(row.cancelledAt),
+      baggageItems: (row.items || []).map(({ size, count }) => ({ size, count })),
     };
     case 'transactions': return {
       ...record, transactionId: row.id, transactionType: row.type, direction: row.direction,
       amount: row.amount, signedAmount: row.direction === 'OUT' ? -row.amount : row.amount,
       currency: row.currency, paymentType: row.paymentType ?? null, orderId: row.orderId ?? null, shiftId: row.shiftId ?? null,
       isRevenue: ['ORDER_PAYMENT', 'DEBT_CLOSE'].includes(row.type) && row.paymentType != null && row.paymentType !== 'DEBT',
+      financialKind: row.financialKind ?? null,
     };
     case 'shifts': return {
       ...record, status: row.status, openedAt: iso(row.openedAt), closedAt: iso(row.closedAt),

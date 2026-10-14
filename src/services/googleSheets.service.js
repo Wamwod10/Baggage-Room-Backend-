@@ -72,7 +72,7 @@ const webhookError = (message, { status = null, body = null, json = null } = {})
   return error;
 };
 const isEnabled = () => ["true", "1", "yes", "on"].includes(String(enabledValue()).toLowerCase()) && Boolean(getWebhookUrl());
-const DELIVERABLE_ACTIONS = new Set(["NEW_ORDER", "ORDER_EDIT", "DOPLATA", "DEBT_PAYMENT", "CANCEL_ORDER", "EXPENSE", "INKASSA", "SALARY"]);
+const DELIVERABLE_ACTIONS = new Set(["NEW_ORDER", "ORDER_EDIT", "DOPLATA", "DEBT_PAYMENT", "CANCEL_ORDER", "EXPENSE", "INKASSA", "SALARY", "FINANCIAL_OPERATION"]);
 const shouldDeliver = (payload) => DELIVERABLE_ACTIONS.has(String(payload?.action || "").toUpperCase());
 const pendingDeliveryKeys = new Set();
 
@@ -315,7 +315,8 @@ const orderPayload = (action, order, overrides = {}) => {
     createdAt: toIso(order?.createdAt || new Date()),
     ...overrides,
   };
-  const isCancel = String(action || "").toUpperCase() === "CANCEL_ORDER";
+  const isCancel = String(action || "").toUpperCase() === "CANCEL_ORDER"
+    || (action === 'FINANCIAL_OPERATION' && payload.financialKind === 'REFUND');
   const normalizedAmount = isCancel && payload.amount !== null && payload.amount !== undefined && payload.amount !== ""
     ? -Math.abs(sheetAmount(payload.amount, payload.currency))
     : sheetAmount(payload.amount, payload.currency);
@@ -553,9 +554,16 @@ const newOrderSheetAmount = (order) =>
 const sendNewOrder = (order) =>
   postWebhook(orderPayload("NEW_ORDER", order, { amount: newOrderSheetAmount(order) }));
 
-const sendOrderEdit = (order) =>
-  postWebhook(orderPayload("ORDER_EDIT", order, {
-    amount: newOrderSheetAmount(order),
+const sendOrderEdit = (order) => {
+  // Later receipts, refunds and corrections have independent rows. Do not count them twice.
+  const primary = (order.cashMovements || []).find((m) => m.type === 'ORDER_PAYMENT' && m.direction === 'IN'
+    && !m.financialKind && String(m.note || '').startsWith('Order '));
+  if (!primary && !order.pricingSnapshot && Number(order.realPaidAmount || 0) > 0) {
+    throw new Error('Historical initial receipt requires manual reconciliation');
+  }
+  return postWebhook(orderPayload("ORDER_EDIT", order, {
+    amount: primary?.amount || 0,
+    paymentType: order.paymentType === 'DEBT' ? 'DEBT' : primary?.paymentType || order.paymentType,
     idempotencyKey: [
       "ORDER_EDIT",
       branchCode(order) || "NO_BRANCH",
@@ -563,6 +571,7 @@ const sendOrderEdit = (order) =>
       order?.updatedAt instanceof Date ? order.updatedAt.toISOString() : String(order?.updatedAt || Date.now()),
     ].join(":"),
   }));
+};
 
 const sendDoplata = (order) =>
   postWebhook(orderPayload("DOPLATA", order, {

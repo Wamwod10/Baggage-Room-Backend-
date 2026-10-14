@@ -185,6 +185,9 @@ model Order {
   status             OrderStatus   @default(ACTIVE)
   tariffHours        Int
   customHours        Int?
+  pricingSnapshot    Json?
+  priceApprovedById  String?
+  priceApprovedByName String?
   currency           Currency      @default(UZS)
   paymentType        PaymentType
   calculatedAmount   Int           @default(0)
@@ -347,6 +350,7 @@ model Inkassa {
 
 model CashMovement {
   id           String            @id @default(cuid())
+  idempotencyKey String? @unique
   branchId     String
   shiftId      String?
   orderId      String?
@@ -356,6 +360,7 @@ model CashMovement {
   currency     Currency          @default(UZS)
   paymentType  PaymentType?
   note         String?
+  financialKind String?
   createdById  String
   createdAt    DateTime          @default(now())
   updatedAt    DateTime          @default(now()) @updatedAt
@@ -372,6 +377,49 @@ model CashMovement {
   @@index([branchId, type, createdAt])
   @@index([shiftId, createdAt])
   @@index([shiftId, createdById, createdAt])
+}
+
+model FinancialRequest {
+  id               String @id @default(cuid())
+  idempotencyKey   String @unique
+  orderId          String
+  branchId         String
+  requestedById    String
+  kind             String
+  status           String @default("PENDING")
+  movementId       String
+  amount           Int
+  currency         Currency
+  oldPaymentType   PaymentType
+  newPaymentType   PaymentType?
+  reason           String
+  context          Json
+  decidedById      String?
+  telegramUserId   String?
+  decidedAt        DateTime?
+  payoutById       String?
+  paidAt           DateTime?
+  payoutReference  String?
+  payoutPaymentType PaymentType?
+  payoutIdempotencyKey String? @unique
+  messageId        Int?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  @@index([orderId, status])
+}
+
+model FinancialOutbox {
+  id           String @id @default(cuid())
+  deliveryKey  String @unique
+  requestId    String?
+  action       String
+  payload      Json?
+  attempts     Int @default(0)
+  availableAt  DateTime @default(now())
+  deliveredAt  DateTime?
+  lastError    String?
+  createdAt    DateTime @default(now())
+  @@index([deliveredAt, availableAt])
 }
 
 model Debt {
