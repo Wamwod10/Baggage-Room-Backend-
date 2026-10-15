@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { convertMinor, planEdit: rawPlanEdit, recordEdit, convertForPickup } = require('../src/services/orderFinancialEdit.service');
+const { convertMinor, planEdit: rawPlanEdit, recordEdit, convertForPickup, debtBalance } = require('../src/services/orderFinancialEdit.service');
 const user = { id: 'manager', login: 'manager' };
 const planEdit = (...args) => {
   const previous = process.env.PRICE_APPROVER_USER_IDS;
@@ -94,6 +94,8 @@ test('legacy rate snapshot keeps legacy overtime pricing after conversion', () =
   assert.equal(service._internals.calculateOvertimeAmount({ order:{currency:'USD',pricingSnapshot:{version:0,exchangeRate:12000},items:[{size:'S',count:1,unitPrice:100,tariffHours:1}],checkIn:new Date(0)}, tariffs:[{size:'S',price1h:12000}],overtimeHours:1,actualTime:new Date(100*3600000) }),100);
 });
 test('manual paid amount changes rebuild receipts and reconcile discount without changing permissions', () => {
+  assert.equal(debtBalance({ finalAmount:100,realPaidAmount:50,debt:{status:'OPEN',amount:50} },
+    { data:{finalAmount:1,realPaidAmount:0},convert:(amount)=>convertMinor(amount,'UZS','USD',1,12500) }),1);
   const lower = planEdit(order,{realPaidAmount:30000,priceChangeReason:'Correct amount'},user);
   assert.equal(lower.data.realPaidAmount,30000);assert.equal(lower.data.finalAmount,30000);
   assert.equal(lower.data.discountAmount,90000);assert.equal(lower.movements[0].amount,30000);

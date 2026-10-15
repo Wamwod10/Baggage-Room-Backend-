@@ -1122,10 +1122,11 @@ const updateOrder = async (user, id, body, { idempotencyKey } = {}) => {
     }
     const updatedBase = await tx.order.findUnique({ where: { id }, include: includeOrder });
     if (financialPlan) await financialEdit.recordEdit(tx, current, updatedBase, financialPlan, user, requestKey, body.priceChangeReason);
-    const nextDebtAmount = Math.max(0, Number(updatedBase.finalAmount || 0) - Number(updatedBase.realPaidAmount || 0));
+    const nextDebtAmount = financialPlan && current.debt?.status === 'OPEN' ? financialEdit.debtBalance(current, financialPlan)
+      : Math.max(0, Number(updatedBase.finalAmount || 0) - Number(updatedBase.realPaidAmount || 0));
     const financialCurrencyChanged = financialPlan && updatedBase.currency !== current.currency;
     if (financialCurrencyChanged && current.debt) await tx.debt.update({ where: { id: current.debt.id }, data: {
-      amount: financialPlan.convert(current.debt.amount), currency: updatedBase.currency,
+      amount: financialEdit.debtBalance(current, financialPlan), currency: updatedBase.currency,
     } });
     const debtBalanceChanged = updatedBase.finalAmount !== current.finalAmount || updatedBase.realPaidAmount !== current.realPaidAmount;
     if (!financialCurrencyChanged && debtBalanceChanged && updatedBase.paymentType === "DEBT" && nextDebtAmount > 0) {

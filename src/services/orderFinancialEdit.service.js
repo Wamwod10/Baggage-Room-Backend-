@@ -98,6 +98,13 @@ const recordEdit = async (tx, order, updated, plan, user, key, reason) => {
   }
 };
 
+const debtBalance = (order, plan) => {
+  const debt = order.debt;
+  const previousBase = Math.max(0, order.finalAmount - order.realPaidAmount);
+  if (debt?.status === 'OPEN' && debt.amount >= previousBase) return assertMinorAmount(
+    Math.max(0, plan.data.finalAmount - plan.data.realPaidAmount) + plan.convert(debt.amount - previousBase));
+  return plan.convert(debt?.amount || 0);
+};
 const convertForPickup = async (tx, order, body, user, key) => {
   if (!body.currency || body.currency === order.currency) return order;
   const plan = planEdit(order, { currency: body.currency, exchangeRate: body.exchangeRate,
@@ -114,7 +121,7 @@ const convertForPickup = async (tx, order, body, user, key) => {
   await tx.order.update({ where: { id: order.id }, data: { ...plan.data, priceApprovedById: user.id, priceApprovedByName: user.name } });
   let debt = order.debt;
   if (debt) {
-    const data = { amount: plan.convert(debt.amount), currency: plan.data.currency };
+    const data = { amount: debtBalance(order, plan), currency: plan.data.currency };
     await tx.debt.update({ where: { id: debt.id }, data });
     debt = { ...debt, ...data };
   }
@@ -125,4 +132,4 @@ const convertForPickup = async (tx, order, body, user, key) => {
     action: 'ORDER_CURRENCY_CORRECTION', oldValue: JSON.parse(JSON.stringify(order)), newValue: JSON.parse(JSON.stringify(updated)), description: body.priceChangeReason } });
   return updated;
 };
-module.exports = { convertMinor, planEdit, recordEdit, convertForPickup };
+module.exports = { convertMinor, planEdit, recordEdit, convertForPickup, debtBalance };
