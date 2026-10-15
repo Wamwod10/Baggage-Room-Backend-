@@ -21,7 +21,7 @@ const { createTimer } = require("../utils/perf");
 const { markAnalyticsMutation } = require("./analyticsCache");
 const { normalizePaymentType, paymentLabel } = require("../utils/payment");
 const { requireIdempotencyKey } = require("../utils/idempotency");
-const { assertMinorAmount, assertPricePermission, validateBaggage, assertPickupPaid, withRecordedDiscount, lockOrder } = require('./financialControls');
+const { assertMinorAmount, assertPricePermission, validateBaggage, assertPickupPaid, assertPickupTotal, withRecordedDiscount, lockOrder } = require('./financialControls');
 const {
   overtimeHoursAfterGrace,
   isOverdueAfterGrace,
@@ -1283,6 +1283,7 @@ const pickupOrder = async (user, id, body, { idempotencyKey } = {}) => {
     const overtimeCurrency = order.currency;
     const overtimePaymentType = normalizePaymentType(body.overtimePaymentType || body.doplataPaymentType || body.paymentType);
     const debtPaymentType = normalizePaymentType(body.debtPaymentType || body.paymentType);
+    assertPickupTotal(order, body, overtimeAmount, overtimePaymentType);
     if (debtPaymentType === 'DEBT' && Number(body.debtPaidAmount || 0) > 0) throw new AppError('Debt cannot be paid using DEBT', 400);
     if (overtimePaymentType === 'DEBT' && !(order.paymentType === 'DEBT' && order.debt?.status === 'OPEN')) {
       assertPricePermission(user, body.priceChangeReason);

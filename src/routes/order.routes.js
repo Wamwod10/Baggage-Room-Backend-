@@ -135,6 +135,7 @@ router.post(
     idParam.extend({
       body: z.object({
         realPickupTime: z.string().datetime().optional(),
+        realPaidAmount: amount.optional(),
         overtimeAmount: amount.optional(),
         extraPayment: amount.optional(),
         debtPaidAmount: amount.optional(),

@@ -47,7 +47,14 @@ const assertPickupPaid = (order) => {
     throw new AppError('Buyurtmani yopish uchun to‘lovni to‘liq amalga oshiring yoki qarz tartibida rasmiylashtiring.', 409);
   }
 };
+const assertPickupTotal = (order, body, overtimeAmount, overtimePaymentType) => {
+  if (body.realPaidAmount === undefined) return;
+  assertMinorAmount(body.realPaidAmount);
+  const total = paidForOrder(order) + Number(body.debtPaidAmount || 0)
+    + (overtimePaymentType === 'DEBT' ? 0 : overtimeAmount);
+  if (body.realPaidAmount !== total) throw new AppError('Real olingan summa qayd etilgan to‘lovlarga mos emas. Avvalgi to‘lovni kamaytirish uchun pul qaytarish so‘rovidan foydalaning.', 400);
+};
 // Serialize order/payment/debt mutations on the same row, including pickup.
 const lockOrder = (tx, id) => tx.$queryRaw`SELECT "id" FROM "Order" WHERE "id" = ${id} FOR UPDATE`;
 
-module.exports = { assertMinorAmount, assertPricePermission, validateBaggage, paidForOrder, withRecordedDiscount, assertPickupPaid, lockOrder };
+module.exports = { assertMinorAmount, assertPricePermission, validateBaggage, paidForOrder, withRecordedDiscount, assertPickupPaid, assertPickupTotal, lockOrder };
