@@ -11,3 +11,5 @@ require("./orderArchive.test");
 require("./analyticsInvalidation.test");
 require("./verifyAnalyticsArchive.test");
 require("./pickupPayment.test");
+require('./financialControls.test');
+require('./orderFinancialEdit.test');

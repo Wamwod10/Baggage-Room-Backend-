@@ -21,6 +21,7 @@ const { createTimer } = require("../utils/perf");
 const { markAnalyticsMutation } = require("./analyticsCache");
 const { normalizePaymentType, paymentLabel } = require("../utils/payment");
 const { requireIdempotencyKey } = require("../utils/idempotency");
+const financialEdit = require('./orderFinancialEdit.service');
 const { assertMinorAmount, assertPricePermission, validateBaggage, assertPickupPaid, assertPickupTotal, withRecordedDiscount, lockOrder } = require('./financialControls');
 const {
   overtimeHoursAfterGrace,
@@ -29,7 +30,7 @@ const {
 } = require("../utils/overtime");
 
 const calculateOvertimeAmount = ({ order, tariffs, overtimeHours, actualTime = new Date() }) => {
-  if (order.pricingSnapshot) {
+  if (order.pricingSnapshot && order.pricingSnapshot.version !== 0) {
     const elapsedHours = (new Date(actualTime) - new Date(order.checkIn)) / 3600000;
     if (elapsedHours > 72) {
       const total = order.items.reduce((sum, item) => sum + convertUzsToCurrencyMinor(
@@ -103,6 +104,7 @@ const listOrderSelect = {
   currency: true,
   paymentType: true,
   calculatedAmount: true,
+  pricingSnapshot: true,
   discountAmount: true,
   finalAmount: true,
   realPaidAmount: true,
@@ -942,6 +944,11 @@ const updateOrder = async (user, id, body, { idempotencyKey } = {}) => {
     if (!current) throw new AppError("Order not found", 404);
     getScopedBranchId(user, current.branchId);
     if (!["ACTIVE", "DELAYED", "PICKED_UP"].includes(current.status)) throw new AppError("Only active or picked up orders can be edited", 400);
+    const financialPlan = financialEdit.planEdit(current, body, user);
+    if (financialPlan) {
+      const requests = await tx.financialRequest.findMany({ where: { orderId: id, status: { not: 'REJECTED' } } });
+      if (requests.length) throw new AppError('Avval mavjud moliyaviy so‘rovlarni yarashtiring; to‘lov/valyuta tahriri bloklangan', 409);
+    }
     if (body.discountReason !== undefined && body.discountReason !== current.discountReason && current.discountAmount > 0) {
       assertPricePermission(user, body.discountReason);
     }
@@ -950,11 +957,12 @@ const updateOrder = async (user, id, body, { idempotencyKey } = {}) => {
     if (financialChanged) {
       const forbidden = ['realPaidAmount', 'currency', 'paymentType', 'overtimeAmount', 'overtimePaymentType']
         .some((key) => body[key] !== undefined && body[key] !== current[key]);
-      if (forbidden) throw new AppError('Financial changes require an approved financial operation', 403);
+      if (forbidden && !financialPlan) throw new AppError('Financial changes require an approved financial operation', 403);
+      if (financialPlan && current.overtimeAmount > 0 && body.overtimePaymentType !== undefined && body.overtimePaymentType !== current.overtimePaymentType) throw new AppError('Qo‘shimcha to‘lov turini alohida tasdiqlash orqali o‘zgartiring', 403);
       assertPricePermission(user, body.priceChangeReason || body.discountReason);
     }
-    if (body.doplataPaymentType !== undefined && normalizePaymentType(body.doplataPaymentType) !== current.overtimePaymentType
-      || body.overtimeCurrency !== undefined && body.overtimeCurrency !== current.currency) {
+    if (current.overtimeAmount > 0 && body.doplataPaymentType !== undefined && normalizePaymentType(body.doplataPaymentType) !== current.overtimePaymentType
+      || !financialPlan && body.overtimeCurrency !== undefined && body.overtimeCurrency !== current.currency) {
       throw new AppError('Payment correction requires approval', 403);
     }
 
@@ -1073,11 +1081,11 @@ const updateOrder = async (user, id, body, { idempotencyKey } = {}) => {
             unitPrice = previous.originalPrice / previous.count;
           }
           if (unitPrice === undefined) {
-            const tariff = current.pricingSnapshot?.tariffs[row.size] || tariffs.find((t) => t.size === row.size);
+            const tariff = current.pricingSnapshot?.tariffs?.[row.size] || tariffs.find((t) => t.size === row.size);
             if (!tariff) throw new AppError('Tariff not found', 409);
             if (!current.pricingSnapshot && current.currency !== 'UZS') throw new AppError('Legacy foreign-currency repricing requires a verified exchange rate', 409);
             unitPrice = convertUzsToCurrencyMinor(calculatePrice(tariff, row.tariffHours, {
-              isCustom: current.customHours !== null, dailyRate: current.pricingSnapshot?.dailyRates[row.size],
+              isCustom: current.customHours !== null, dailyRate: current.pricingSnapshot?.dailyRates?.[row.size],
             }), current.currency, current.pricingSnapshot?.exchangeRate || 1);
           }
           const originalPrice = assertMinorAmount(unitPrice * row.count);
@@ -1093,6 +1101,18 @@ const updateOrder = async (user, id, body, { idempotencyKey } = {}) => {
       }
     }
 
+    if (financialPlan) {
+      if (itemChanged) throw new AppError('Bagaj va valyuta/to‘lov tahririni alohida saqlang', 400);
+      Object.assign(data, financialPlan.data);
+      data.priceApprovedById = user.id;
+      data.priceApprovedByName = user.name;
+      if (data.currency !== current.currency) {
+        for (const item of current.items) await tx.orderItem.update({ where: { id: item.id }, data: {
+          currency: data.currency, unitPrice: financialPlan.convert(item.unitPrice), originalPrice: financialPlan.convert(item.originalPrice),
+          discountAmount: financialPlan.convert(item.discountAmount), finalPrice: financialPlan.convert(item.finalPrice),
+        } });
+      }
+    }
     const updatedBaseWrite = await tx.order.updateMany({
       where: { id, updatedAt: current.updatedAt },
       data,
@@ -1101,8 +1121,13 @@ const updateOrder = async (user, id, body, { idempotencyKey } = {}) => {
       throw new AppError("Order was changed by another operator. Reload and try again.", 409);
     }
     const updatedBase = await tx.order.findUnique({ where: { id }, include: includeOrder });
+    if (financialPlan) await financialEdit.recordEdit(tx, current, updatedBase, financialPlan, user, requestKey, body.priceChangeReason);
     const nextDebtAmount = Math.max(0, Number(updatedBase.finalAmount || 0) - Number(updatedBase.realPaidAmount || 0));
-    if (updatedBase.finalAmount !== current.finalAmount && updatedBase.paymentType === "DEBT" && nextDebtAmount > 0) {
+    const financialCurrencyChanged = financialPlan && updatedBase.currency !== current.currency;
+    if (financialCurrencyChanged && current.debt) await tx.debt.update({ where: { id: current.debt.id }, data: {
+      amount: financialPlan.convert(current.debt.amount), currency: updatedBase.currency,
+    } });
+    if (!financialCurrencyChanged && updatedBase.finalAmount !== current.finalAmount && updatedBase.paymentType === "DEBT" && nextDebtAmount > 0) {
       await tx.debt.upsert({
         where: { orderId: id },
         create: {
@@ -1123,7 +1148,7 @@ const updateOrder = async (user, id, body, { idempotencyKey } = {}) => {
           currency: updatedBase.currency,
         },
       });
-    } else if (updatedBase.finalAmount !== current.finalAmount && current.debt?.status === 'OPEN' && nextDebtAmount === 0) {
+    } else if (!financialCurrencyChanged && updatedBase.finalAmount !== current.finalAmount && current.debt?.status === 'OPEN' && nextDebtAmount === 0) {
       await tx.debt.update({
         where: { id: current.debt.id },
         data: { status: "CLOSED", amount: 0, closedAt: new Date(), closedById: user.id },
@@ -1208,8 +1233,8 @@ const updateOrder = async (user, id, body, { idempotencyKey } = {}) => {
       };
     }
     if (itemChanged) changes[changeLabels.items] = { old: "oldingi", next: "yangilandi" };
-    await audit({ tx, branchId: current.branchId, userId: user.id, entityType: "Order", entityId: id, action: "ORDER_EDIT", oldValue: current, newValue: updated, description: "Order edited" });
-      return { updated, changes };
+    await audit({ tx, branchId: current.branchId, userId: user.id, entityType: "Order", entityId: id, action: "ORDER_EDIT", oldValue: current, newValue: updated, description: financialPlan ? `Payment/currency corrected: ${body.priceChangeReason}` : "Order edited" });
+      return { updated, changes, financialEdited: Boolean(financialPlan) };
     });
   } catch (error) {
     const existing = await prisma.order.findUnique({ where: { editIdempotencyKey: requestKey }, include: includeOrder });
@@ -1226,7 +1251,7 @@ const updateOrder = async (user, id, body, { idempotencyKey } = {}) => {
     () => telegram.sendOrderEdit({ ...result.updated, updatedBy: user }, result.changes),
     { action: "ORDER_EDIT", branchId: result.updated.branchId, userId: user.id, entityType: "Order", entityId: `${id}:edit:${result.updated.updatedAt.getTime()}` },
   );
-  googleSheets.sendSafely(
+  if (!result.financialEdited) googleSheets.sendSafely(
     () => googleSheets.sendOrderEdit(result.updated),
     { action: "ORDER_EDIT", branchId: result.updated.branchId, userId: user.id, entityType: "OrderEdit", entityId: `${id}:edit:${result.updated.updatedAt.getTime()}` },
   );

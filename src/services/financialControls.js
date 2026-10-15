@@ -10,7 +10,7 @@ const assertMinorAmount = (value) => {
 const assertPricePermission = (user, reason, configuredIds = process.env.PRICE_APPROVER_USER_IDS || '') => {
   const ids = configuredIds.split(',').map((id) => id.trim()).filter(Boolean);
   const logins = (process.env.PRICE_APPROVER_LOGINS || '').split(',').map((login) => login.trim()).filter(Boolean);
-  if (!ids.includes(user.id) && !logins.includes(user.login)) throw new AppError('Sizda narx yoki chegirmani tasdiqlash huquqi yo‘q', 403);
+  if (user.role !== 'SUPER_ADMIN' && !ids.includes(user.id) && !logins.includes(user.login)) throw new AppError('Sizda narx yoki chegirmani tasdiqlash huquqi yo‘q', 403);
   if (!String(reason || '').trim()) throw new AppError('Narx o‘zgarishi uchun sabab majburiy', 400);
 };
 const validateBaggage = (items, branchCode) => {

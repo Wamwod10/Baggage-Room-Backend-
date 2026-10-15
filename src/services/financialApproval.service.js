@@ -80,6 +80,8 @@ const createRequest = async (user, orderId, body, key) => {
       return replay;
     }
     const movement = await tx.cashMovement.findUnique({ where: { id: body.movementId } });
+    const editReversals = await tx.cashMovement.findMany({ where: { orderId, financialKind: 'EDIT_CORRECTION' } });
+    if (editReversals.some((m) => m.note === `Edit correction source:${body.movementId}`)) throw new AppError('Payment was replaced by a recorded correction; select the current receipt', 409);
     if (!movement || movement.orderId !== orderId || movement.direction !== 'IN'
       || !['ORDER_PAYMENT', 'DEBT_CLOSE'].includes(movement.type) || movement.financialKind
       || !movement.paymentType || movement.paymentType === 'DEBT') throw new AppError('Eligible payment not found', 400);
@@ -224,7 +226,9 @@ const list = async (user, orderId) => {
   getScopedBranchId(user, order.branchId);
   const requests = await prisma.financialRequest.findMany({ where: { orderId }, orderBy: { createdAt: 'desc' } });
   const sourcePayments = await prisma.cashMovement.findMany({ where: { orderId, direction: 'IN', type: { in: ['ORDER_PAYMENT', 'DEBT_CLOSE'] }, financialKind: null }, orderBy: { createdAt: 'asc' } });
-  const payments = sourcePayments.map((m) => {
+  const editReversals = await prisma.cashMovement.findMany({ where: { orderId, financialKind: 'EDIT_CORRECTION' } });
+  const replaced = new Set(editReversals.map((m) => m.note?.split('source:')[1]));
+  const payments = sourcePayments.filter((m) => !replaced.has(m.id)).map((m) => {
     const related = requests.filter((r) => r.movementId === m.id);
     const corrected = related.find((r) => r.kind === 'PAYMENT_CORRECTION' && r.status === 'EXECUTED');
     const refunded = related.filter((r) => r.kind === 'REFUND' && r.status !== 'REJECTED').reduce((sum, r) => sum + r.amount, 0);

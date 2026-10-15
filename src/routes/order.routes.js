@@ -107,6 +107,8 @@ router.patch(
       note: z.string().optional(),
       discountReason: z.string().optional(),
       priceChangeReason: z.string().trim().min(1).optional(),
+      exchangeRate: z.coerce.number().positive().optional(),
+      sourceExchangeRate: z.coerce.number().positive().optional(),
       realPaidReason: z.string().optional(),
       checkOut: z.string().datetime().optional(),
       plannedCheckOut: z.string().datetime().optional(),
