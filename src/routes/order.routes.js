@@ -109,6 +109,7 @@ router.patch(
       priceChangeReason: z.string().trim().min(1).optional(),
       exchangeRate: z.coerce.number().positive().optional(),
       sourceExchangeRate: z.coerce.number().positive().optional(),
+      paidPaymentType: paymentType.optional(),
       realPaidReason: z.string().optional(),
       checkOut: z.string().datetime().optional(),
       plannedCheckOut: z.string().datetime().optional(),
@@ -137,6 +138,8 @@ router.post(
     idParam.extend({
       body: z.object({
         realPickupTime: z.string().datetime().optional(),
+        exchangeRate: z.coerce.number().positive().optional(),
+        sourceExchangeRate: z.coerce.number().positive().optional(),
         realPaidAmount: amount.optional(),
         overtimeAmount: amount.optional(),
         extraPayment: amount.optional(),

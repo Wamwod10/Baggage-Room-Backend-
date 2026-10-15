@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { convertMinor, planEdit: rawPlanEdit, recordEdit } = require('../src/services/orderFinancialEdit.service');
+const { convertMinor, planEdit: rawPlanEdit, recordEdit, convertForPickup } = require('../src/services/orderFinancialEdit.service');
 const user = { id: 'manager', login: 'manager' };
 const planEdit = (...args) => {
   const previous = process.env.PRICE_APPROVER_USER_IDS;
@@ -30,7 +30,7 @@ test('method correction preserves amount, requires permission/reason and never c
   assert.throws(() => planEdit(order, { paymentType: 'TERMINAL' }, user));
   assert.throws(() => planEdit(order, { paymentType: 'TERMINAL', priceChangeReason: 'test' }, { id: 'employee' }));
   assert.throws(() => planEdit(order, { paymentType: 'DEBT', priceChangeReason: 'test' }, user));
-  assert.throws(() => planEdit(order, { paymentType: 'TERMINAL', realPaidAmount: 1, priceChangeReason: 'test' }, user));
+  assert.equal(planEdit(order, { paymentType: 'TERMINAL', realPaidAmount: 1, priceChangeReason: 'test' }, user).data.finalAmount, 1);
 });
 test('correction appends balancing receipts and durable signed sheet deliveries, preserving original', async () => {
   const source = { ...order, id: 'order', orderNumber: 'TEST-1', branchId: 'branch', branch: { code: 'TSV', name: 'Test' }, items: [], createdAt: new Date() };
@@ -79,6 +79,9 @@ test('order edit converts and records atomically through the existing save flow;
     assert.equal(state.cashMovements.length,3); assert.equal(outbox.length,2); assert.equal(audits.length,1);
     await service.updateOrder({...user,role:'SUPER_ADMIN'},state.id,body,{idempotencyKey:'financial-edit-integration'});
     assert.equal(state.cashMovements.length,3); assert.equal(outbox.length,2);
+    const corrected=await service.updateOrder({...user,role:'SUPER_ADMIN'},state.id,{realPaidAmount:250,finalAmount:500,priceChangeReason:'Correct receipt amount'},{idempotencyKey:'paid-amount-edit'});
+    assert.equal(corrected.realPaidAmount,250);assert.equal(corrected.finalAmount,250);assert.equal(corrected.discountAmount,750);
+    assert.equal(state.cashMovements.length,5);assert.equal(outbox.length,4);
     assert.throws(()=>planEdit({...order,cashMovements:[]},{paymentType:'TERMINAL',priceChangeReason:'test'},user),/reconciliation/);
   } finally {
     if (original.approvers === undefined) delete process.env.PRICE_APPROVER_USER_IDS; else process.env.PRICE_APPROVER_USER_IDS=original.approvers;
@@ -89,4 +92,32 @@ test('order edit converts and records atomically through the existing save flow;
 test('legacy rate snapshot keeps legacy overtime pricing after conversion', () => {
   const service = require('../src/services/order.service');
   assert.equal(service._internals.calculateOvertimeAmount({ order:{currency:'USD',pricingSnapshot:{version:0,exchangeRate:12000},items:[{size:'S',count:1,unitPrice:100,tariffHours:1}],checkIn:new Date(0)}, tariffs:[{size:'S',price1h:12000}],overtimeHours:1,actualTime:new Date(100*3600000) }),100);
+});
+test('manual paid amount changes rebuild receipts and reconcile discount without changing permissions', () => {
+  const lower = planEdit(order,{realPaidAmount:30000,priceChangeReason:'Correct amount'},user);
+  assert.equal(lower.data.realPaidAmount,30000);assert.equal(lower.data.finalAmount,30000);
+  assert.equal(lower.data.discountAmount,90000);assert.equal(lower.movements[0].amount,30000);
+  const higher = planEdit(order,{realPaidAmount:80000,priceChangeReason:'Correct amount'},user);
+  assert.equal(higher.data.realPaidAmount,80000);assert.equal(higher.movements[0].amount,80000);
+  assert.throws(()=>planEdit(order,{realPaidAmount:30000},user),/sabab/);
+  const debt={...order,paymentType:'DEBT',realPaidAmount:0,cashMovements:[]};
+  assert.throws(()=>planEdit(debt,{realPaidAmount:10000,priceChangeReason:'test'},user),/turini/);
+  assert.throws(()=>planEdit(debt,{realPaidAmount:10000,paidPaymentType:'DEBT',priceChangeReason:'test'},user),/turini/);
+  assert.equal(planEdit(debt,{realPaidAmount:10000,paidPaymentType:'TERMINAL',priceChangeReason:'test'},user).movements[0].paymentType,'TERMINAL');
+});
+test('pickup currency correction converts persisted order, items and receipts in the pickup transaction', async () => {
+  const source={...structuredClone(order),id:'order',branchId:'branch',branch:{code:'TSV',name:'Test'},orderNumber:'TEST',items:[{id:'item',unitPrice:120000,originalPrice:120000,discountAmount:60000,finalPrice:60000}],debt:null};
+  const movements=[...source.cashMovements],writes=[],deliveries=[],audits=[];
+  const tx={ financialRequest:{findMany:async()=>[]},shift:{findFirst:async()=>({id:'shift'})},
+    orderItem:{update:async({data})=>writes.push(data)},order:{update:async({data})=>writes.push(data)},
+    cashMovement:{create:async({data})=>movements.push({...data,id:`new${movements.length}`}),findMany:async()=>movements},
+    financialOutbox:{create:async({data})=>deliveries.push(data)},auditLog:{create:async({data})=>audits.push(data)} };
+  const body={currency:'USD',exchangeRate:12000,priceChangeReason:'Currency at pickup'};
+  const result=await convertForPickup(tx,source,body,{id:'owner',role:'SUPER_ADMIN'},'pickup-key');
+  assert.equal(result.currency,'USD');assert.equal(result.realPaidAmount,500);assert.equal(result.items[0].unitPrice,1000);
+  assert.equal(movements.length,3);assert.equal(deliveries.length,2);assert.equal(audits.length,1);
+  assert.equal(source.currency,'UZS');assert.equal(writes.length,2);
+  tx.financialRequest.findMany=async()=>[{id:'pending'}];
+  await assert.rejects(()=>convertForPickup(tx,source,body,{id:'owner',role:'SUPER_ADMIN'},'key'),/so‘rov/);
+  assert.equal(writes.length,2);
 });

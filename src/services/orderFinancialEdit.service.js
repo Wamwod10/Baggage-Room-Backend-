@@ -23,8 +23,10 @@ const convertMinor = (amount, from, to, sourceRate = 1, targetRate = 1) => {
 const planEdit = (order, body, user) => {
   const currency = body.currency || order.currency;
   const paymentType = body.paymentType || order.paymentType;
-  if (currency === order.currency && paymentType === order.paymentType) return null;
+  const amountChanged = body.realPaidAmount !== undefined && body.realPaidAmount !== order.realPaidAmount;
+  if (currency === order.currency && paymentType === order.paymentType && !amountChanged && !body.paidPaymentType) return null;
   assertPricePermission(user, body.priceChangeReason);
+  if (body.paidPaymentType && !['CASH','CARD','TERMINAL','CLICK','PAYME','TRANSFER'].includes(body.paidPaymentType)) throw new AppError('Haqiqiy olingan to‘lov turini tanlang', 400);
   if ((paymentType === 'DEBT') !== (order.paymentType === 'DEBT')) throw new AppError('Qarzga o‘tkazish yoki qarzni yopish uchun qarz/to‘lov tartibidan foydalaning', 400);
   const sourceRate = order.currency === 'UZS' ? 1 : order.pricingSnapshot?.exchangeRate || body.sourceExchangeRate;
   const targetRate = currency === 'UZS' ? 1 : body.exchangeRate;
@@ -41,21 +43,31 @@ const planEdit = (order, body, user) => {
   }
   const data = { currency, paymentType, calculatedAmount: convert(order.calculatedAmount),
     finalAmount: convert(order.finalAmount), realPaidAmount: convert(order.realPaidAmount), overtimeAmount: convert(order.overtimeAmount) };
+  if (body.realPaidAmount !== undefined) data.realPaidAmount = assertMinorAmount(body.realPaidAmount);
+  if (body.finalAmount !== undefined) data.finalAmount = assertMinorAmount(body.finalAmount);
+  if (data.finalAmount > data.calculatedAmount) throw new AppError('Final amount exceeds calculated price', 400);
+  if (paymentType !== 'DEBT' && data.realPaidAmount < data.finalAmount) data.finalAmount = data.realPaidAmount;
+  if (paymentType === 'DEBT' && data.realPaidAmount > data.finalAmount) throw new AppError('Debt payment exceeds price', 400);
   data.discountAmount = Math.max(0, data.calculatedAmount - data.finalAmount);
   data.paymentDifference = data.realPaidAmount - data.finalAmount;
   if (currency !== order.currency) data.pricingSnapshot = { ...(order.pricingSnapshot || { version: 0, tariffs: {}, dailyRates: {} }), exchangeRate: targetRate };
-  for (const key of ['finalAmount', 'realPaidAmount', 'overtimeAmount']) {
+  for (const key of ['overtimeAmount']) {
     if (body[key] !== undefined && body[key] !== data[key]) throw new AppError('Valyuta/to‘lovni almashtirishni summa tahriridan alohida saqlang', 400);
   }
   const movements = [];
   for (const extra of [false, true]) {
     const group = receipts.filter((m) => isExtra(m) === extra);
     let remaining = extra ? convert(extraPaid) : data.realPaidAmount;
+    if (!extra && !group.length && remaining > 0) {
+      const paidType = paymentType === 'DEBT' ? body.paidPaymentType : paymentType;
+      if (!['CASH','CARD','TERMINAL','CLICK','PAYME','TRANSFER'].includes(paidType)) throw new AppError('Haqiqiy olingan to‘lov turini tanlang', 400);
+      group.push({ id: 'initial', type: 'ORDER_PAYMENT', direction: 'IN', amount: 0, currency: order.currency, paymentType: paidType });
+    }
     group.forEach((source, index) => {
       const amount = index === group.length - 1 ? remaining : Math.min(remaining, convert(source.amount));
       remaining -= amount;
-      const nextPaymentType = extra || paymentType === 'DEBT' ? source.paymentType : paymentType;
-      if (source.currency !== currency || source.paymentType !== nextPaymentType) movements.push({ source, amount, currency, paymentType: nextPaymentType });
+      const nextPaymentType = extra ? source.paymentType : paymentType === 'DEBT' ? body.paidPaymentType || source.paymentType : paymentType;
+      if (source.currency !== currency || source.paymentType !== nextPaymentType || source.amount !== amount) movements.push({ source, amount, currency, paymentType: nextPaymentType });
     });
   }
   return { data, movements, convert };
@@ -67,15 +79,15 @@ const recordEdit = async (tx, order, updated, plan, user, key, reason) => {
   const sheets = require('./googleSheets.service');
   for (const { source, amount, currency, paymentType } of plan.movements) {
     const base = { branchId: order.branchId, shiftId: shift.id, orderId: order.id, type: source.type, createdById: user.id };
-    await tx.cashMovement.create({ data: { ...base, direction: 'OUT', amount: source.amount, currency: source.currency,
+    if (source.amount > 0) await tx.cashMovement.create({ data: { ...base, direction: 'OUT', amount: source.amount, currency: source.currency,
       paymentType: source.paymentType, financialKind: 'EDIT_CORRECTION', note: `Edit correction source:${source.id}` } });
     if (amount > 0) await tx.cashMovement.create({ data: { ...base, direction: 'IN', amount, currency, paymentType,
       note: `${String(source.note || '').startsWith('Overtime') ? 'Overtime' : 'Order'} ${order.orderNumber}; edit ${key}` } });
     const identity = `ORDER_EDIT:${key}:${source.id}`;
-    const payloads = [sheets._internals.orderPayload('FINANCIAL_OPERATION', order, {
+    const payloads = source.amount > 0 ? [sheets._internals.orderPayload('FINANCIAL_OPERATION', order, {
       idempotencyKey: `${identity}:OUT`, amount: -source.amount, currency: source.currency, paymentType: source.paymentType,
       financialKind: 'REFUND', operationName: 'To‘lov/valyuta tuzatishi (oldingi yozuv)', note: reason, deliveryIdentity: true,
-    })];
+    })] : [];
     if (amount > 0) payloads.push(sheets._internals.orderPayload('DEBT_PAYMENT', updated, {
       idempotencyKey: `${identity}:IN`, amount, currency, paymentType,
       operationName: 'To‘lov/valyuta tuzatishi (yangi yozuv)', note: reason, deliveryIdentity: true,
@@ -86,4 +98,31 @@ const recordEdit = async (tx, order, updated, plan, user, key, reason) => {
   }
 };
 
-module.exports = { convertMinor, planEdit, recordEdit };
+const convertForPickup = async (tx, order, body, user, key) => {
+  if (!body.currency || body.currency === order.currency) return order;
+  const plan = planEdit(order, { currency: body.currency, exchangeRate: body.exchangeRate,
+    sourceExchangeRate: body.sourceExchangeRate, priceChangeReason: body.priceChangeReason }, user);
+  const requests = await tx.financialRequest.findMany({ where: { orderId: order.id, status: { not: 'REJECTED' } } });
+  if (requests.length) throw new AppError('Avval mavjud moliyaviy so‘rovlarni yarashtiring', 409);
+  const items = [];
+  for (const item of order.items) {
+    const data = { currency: plan.data.currency, unitPrice: plan.convert(item.unitPrice), originalPrice: plan.convert(item.originalPrice),
+      discountAmount: plan.convert(item.discountAmount), finalPrice: plan.convert(item.finalPrice) };
+    await tx.orderItem.update({ where: { id: item.id }, data });
+    items.push({ ...item, ...data });
+  }
+  await tx.order.update({ where: { id: order.id }, data: { ...plan.data, priceApprovedById: user.id, priceApprovedByName: user.name } });
+  let debt = order.debt;
+  if (debt) {
+    const data = { amount: plan.convert(debt.amount), currency: plan.data.currency };
+    await tx.debt.update({ where: { id: debt.id }, data });
+    debt = { ...debt, ...data };
+  }
+  const updated = { ...order, ...plan.data, items, debt };
+  await recordEdit(tx, order, updated, plan, user, `${key}:currency`, body.priceChangeReason);
+  updated.cashMovements = await tx.cashMovement.findMany({ where: { orderId: order.id } });
+  await tx.auditLog.create({ data: { branchId: order.branchId, userId: user.id, entityType: 'Order', entityId: order.id,
+    action: 'ORDER_CURRENCY_CORRECTION', oldValue: JSON.parse(JSON.stringify(order)), newValue: JSON.parse(JSON.stringify(updated)), description: body.priceChangeReason } });
+  return updated;
+};
+module.exports = { convertMinor, planEdit, recordEdit, convertForPickup };

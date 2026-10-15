@@ -1127,7 +1127,8 @@ const updateOrder = async (user, id, body, { idempotencyKey } = {}) => {
     if (financialCurrencyChanged && current.debt) await tx.debt.update({ where: { id: current.debt.id }, data: {
       amount: financialPlan.convert(current.debt.amount), currency: updatedBase.currency,
     } });
-    if (!financialCurrencyChanged && updatedBase.finalAmount !== current.finalAmount && updatedBase.paymentType === "DEBT" && nextDebtAmount > 0) {
+    const debtBalanceChanged = updatedBase.finalAmount !== current.finalAmount || updatedBase.realPaidAmount !== current.realPaidAmount;
+    if (!financialCurrencyChanged && debtBalanceChanged && updatedBase.paymentType === "DEBT" && nextDebtAmount > 0) {
       await tx.debt.upsert({
         where: { orderId: id },
         create: {
@@ -1148,7 +1149,7 @@ const updateOrder = async (user, id, body, { idempotencyKey } = {}) => {
           currency: updatedBase.currency,
         },
       });
-    } else if (!financialCurrencyChanged && updatedBase.finalAmount !== current.finalAmount && current.debt?.status === 'OPEN' && nextDebtAmount === 0) {
+    } else if (!financialCurrencyChanged && debtBalanceChanged && current.debt?.status === 'OPEN' && nextDebtAmount === 0) {
       await tx.debt.update({
         where: { id: current.debt.id },
         data: { status: "CLOSED", amount: 0, closedAt: new Date(), closedById: user.id },
@@ -1277,6 +1278,7 @@ const pickupOrder = async (user, id, body, { idempotencyKey } = {}) => {
     let order = await timer.time("order lookup", () => tx.order.findUnique({ where: { id }, include: includeOrder }));
     if (!order || !["ACTIVE", "DELAYED"].includes(order.status)) throw new AppError("Active order not found", 404);
     await timer.time("branch lookup", async () => getScopedBranchId(user, order.branchId));
+    order = await financialEdit.convertForPickup(tx, order, body, user, requestKey);
     const discounted = withRecordedDiscount(order);
     if (discounted !== order) {
       await tx.order.update({ where: { id }, data: {
