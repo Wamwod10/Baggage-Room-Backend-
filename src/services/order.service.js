@@ -21,7 +21,7 @@ const { createTimer } = require("../utils/perf");
 const { markAnalyticsMutation } = require("./analyticsCache");
 const { normalizePaymentType, paymentLabel } = require("../utils/payment");
 const { requireIdempotencyKey } = require("../utils/idempotency");
-const { assertMinorAmount, assertPricePermission, validateBaggage, assertPickupPaid, lockOrder } = require('./financialControls');
+const { assertMinorAmount, assertPricePermission, validateBaggage, assertPickupPaid, withRecordedDiscount, lockOrder } = require('./financialControls');
 const {
   overtimeHoursAfterGrace,
   isOverdueAfterGrace,
@@ -593,7 +593,7 @@ const getOrder = async (user, id) => {
   const order = await prisma.order.findUnique({ where: { id }, include: includeOrder });
   if (!order) throw new AppError("Order not found", 404);
   getScopedBranchId(user, order.branchId);
-  return order;
+  return withRecordedDiscount(order);
 };
 
 const createOrder = async (user, body, { idempotencyKey } = {}) => {
@@ -768,12 +768,18 @@ const createOrder = async (user, body, { idempotencyKey } = {}) => {
 
     const calculatedAmount = itemRows.reduce((total, item) => total + item.data.originalPrice, 0);
     const itemDiscount = itemRows.reduce((total, item) => total + item.data.discountAmount, 0);
-    const discountAmount = Number(body.discountAmount || 0) + itemDiscount;
+    let discountAmount = Number(body.discountAmount || 0) + itemDiscount;
     assertMinorAmount(discountAmount);
     if (discountAmount > calculatedAmount) throw new AppError('Discount exceeds price', 400);
     if (discountAmount > 0) assertPricePermission(user, body.discountReason);
-    const finalAmount = Math.max(0, calculatedAmount - discountAmount);
+    let finalAmount = Math.max(0, calculatedAmount - discountAmount);
     const realPaidAmount = paymentType === "DEBT" ? Number(body.realPaidAmount || 0) : Number(body.realPaidAmount ?? finalAmount);
+    assertMinorAmount(realPaidAmount);
+    if (paymentType !== 'DEBT' && realPaidAmount < finalAmount) {
+      assertPricePermission(user, body.discountReason || body.realPaidReason || body.note);
+      discountAmount = calculatedAmount - realPaidAmount;
+      finalAmount = realPaidAmount;
+    }
     const checkIn = body.checkIn ? new Date(body.checkIn) : new Date();
     const plannedCheckOut = body.plannedCheckOut ? new Date(body.plannedCheckOut) : addHours(checkIn, tariffHours);
     if (plannedCheckOut.getTime() !== addHours(checkIn, tariffHours).getTime()) throw new AppError('Checkout must match the selected tariff duration', 400);
@@ -796,7 +802,7 @@ const createOrder = async (user, body, { idempotencyKey } = {}) => {
         paymentType,
         calculatedAmount,
         discountAmount,
-        discountReason: body.discountReason || null,
+        discountReason: body.discountReason || (discountAmount > 0 ? body.realPaidReason || body.note : null) || null,
         finalAmount,
         realPaidAmount,
         paymentDifference: realPaidAmount - finalAmount,
@@ -1243,10 +1249,19 @@ const pickupOrder = async (user, id, body, { idempotencyKey } = {}) => {
   try {
   result = await timer.time("transaction total", () => prisma.$transaction(async (tx) => {
     await lockOrder(tx, id);
-    const order = await timer.time("order lookup", () => tx.order.findUnique({ where: { id }, include: includeOrder }));
+    let order = await timer.time("order lookup", () => tx.order.findUnique({ where: { id }, include: includeOrder }));
     if (!order || !["ACTIVE", "DELAYED"].includes(order.status)) throw new AppError("Active order not found", 404);
     await timer.time("branch lookup", async () => getScopedBranchId(user, order.branchId));
-    assertPickupPaid(order);
+    const discounted = withRecordedDiscount(order);
+    if (discounted !== order) {
+      await tx.order.update({ where: { id }, data: {
+        finalAmount: discounted.finalAmount, discountAmount: discounted.discountAmount,
+        paymentDifference: 0, discountReason: order.discountReason || order.realPaidReason || order.note || 'Recorded payment difference',
+      } });
+    }
+    assertPickupPaid(discounted);
+    const originalOrder = order;
+    order = discounted;
     if (body.currency && body.currency !== order.currency) throw new AppError('Payment currency must match order currency', 400);
     let closedDebt = null;
     let debtPayment = null;
@@ -1413,7 +1428,7 @@ const pickupOrder = async (user, id, body, { idempotencyKey } = {}) => {
     }
     updated = await timer.time("order lookup final", () => tx.order.findUnique({ where: { id }, include: includeOrder }));
     await timer.time("notification", async () => null);
-    await timer.time("audit", () => audit({ tx, branchId: order.branchId, userId: user.id, entityType: "Order", entityId: id, action: "ORDER_PICKUP", oldValue: order, newValue: updated, description: "Order picked up" }));
+    await timer.time("audit", () => audit({ tx, branchId: order.branchId, userId: user.id, entityType: "Order", entityId: id, action: "ORDER_PICKUP", oldValue: originalOrder, newValue: updated, description: "Order picked up" }));
     return {
       updated: { ...updated, overtimeCurrency, overtimePaymentType },
       closedDebt,

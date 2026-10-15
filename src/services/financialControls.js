@@ -26,6 +26,19 @@ const validateBaggage = (items, branchCode) => {
 const paidForOrder = (order) => (order.cashMovements || [])
   .filter((m) => REVENUE_TYPES.includes(m.type) && m.currency === order.currency && m.paymentType && m.paymentType !== 'DEBT')
   .reduce((sum, m) => sum + m.amount * (m.direction === 'OUT' ? -1 : 1), 0);
+// Older non-debt orders stored the agreed discount as a negative payment difference.
+// Require matching receipts; refunds and formal debts must keep their own workflows.
+const withRecordedDiscount = (order) => {
+  const difference = order.finalAmount - order.realPaidAmount;
+  if (order.paymentType === 'DEBT' || order.debt?.status === 'OPEN'
+    || !Number.isSafeInteger(order.realPaidAmount) || order.realPaidAmount <= 0
+    || !Number.isSafeInteger(difference) || difference <= 0
+    || order.paymentDifference !== -difference || order.calculatedAmount < order.finalAmount
+    || paidForOrder(order) !== order.realPaidAmount
+    || (order.cashMovements || []).some((m) => m.direction === 'OUT')) return order;
+  return { ...order, finalAmount: order.realPaidAmount,
+    discountAmount: order.calculatedAmount - order.realPaidAmount, paymentDifference: 0 };
+};
 const assertPickupPaid = (order) => {
   const paid = paidForOrder(order);
   const formalDebt = order.paymentType === 'DEBT' && order.debt?.status === 'OPEN'
@@ -37,4 +50,4 @@ const assertPickupPaid = (order) => {
 // Serialize order/payment/debt mutations on the same row, including pickup.
 const lockOrder = (tx, id) => tx.$queryRaw`SELECT "id" FROM "Order" WHERE "id" = ${id} FOR UPDATE`;
 
-module.exports = { assertMinorAmount, assertPricePermission, validateBaggage, paidForOrder, assertPickupPaid, lockOrder };
+module.exports = { assertMinorAmount, assertPricePermission, validateBaggage, paidForOrder, withRecordedDiscount, assertPickupPaid, lockOrder };
