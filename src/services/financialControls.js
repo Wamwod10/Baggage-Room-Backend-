@@ -7,12 +7,8 @@ const assertMinorAmount = (value) => {
   }
   return value;
 };
-const assertPricePermission = (user, reason, configuredIds = process.env.PRICE_APPROVER_USER_IDS || '') => {
-  const ids = configuredIds.split(',').map((id) => id.trim()).filter(Boolean);
-  const logins = (process.env.PRICE_APPROVER_LOGINS || '').split(',').map((login) => login.trim()).filter(Boolean);
-  if (user.role !== 'SUPER_ADMIN' && !ids.includes(user.id) && !logins.includes(user.login)) throw new AppError('Sizda narx yoki chegirmani tasdiqlash huquqi yo‘q', 403);
-  if (!String(reason || '').trim()) throw new AppError('Narx o‘zgarishi uchun sabab majburiy', 400);
-};
+// All authenticated staff may adjust prices; callers retain branch and amount validation.
+const assertPricePermission = () => {};
 const validateBaggage = (items, branchCode) => {
   if (!Array.isArray(items) || !items.length) throw new AppError('At least one baggage item is required', 400);
   const sizes = ['S', 'M', 'L', ...(['TSV', 'TJV', 'SVK'].includes(branchCode) ? ['XL'] : [])];

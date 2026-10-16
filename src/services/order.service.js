@@ -958,10 +958,9 @@ const updateOrder = async (user, id, body, { idempotencyKey } = {}) => {
       const forbidden = ['realPaidAmount', 'currency', 'paymentType', 'overtimeAmount', 'overtimePaymentType']
         .some((key) => body[key] !== undefined && body[key] !== current[key]);
       if (forbidden && !financialPlan) throw new AppError('Financial changes require an approved financial operation', 403);
-      if (financialPlan && current.overtimeAmount > 0 && body.overtimePaymentType !== undefined && body.overtimePaymentType !== current.overtimePaymentType) throw new AppError('Qo‘shimcha to‘lov turini alohida tasdiqlash orqali o‘zgartiring', 403);
       assertPricePermission(user, body.priceChangeReason || body.discountReason);
     }
-    if (current.overtimeAmount > 0 && body.doplataPaymentType !== undefined && normalizePaymentType(body.doplataPaymentType) !== current.overtimePaymentType
+    if (!financialPlan && current.overtimeAmount > 0 && body.doplataPaymentType !== undefined && normalizePaymentType(body.doplataPaymentType) !== current.overtimePaymentType
       || !financialPlan && body.overtimeCurrency !== undefined && body.overtimeCurrency !== current.currency) {
       throw new AppError('Payment correction requires approval', 403);
     }
@@ -1545,7 +1544,7 @@ const cancelOrder = async (user, id, body, { idempotencyKey } = {}) => {
         data: { status: "CLOSED", amount: 0, closedAt: new Date(), closedById: user.id },
       });
     }
-    // Cancellation does not prove money was returned. Refunds require approval and a recorded payout.
+    // Cancellation does not prove money was returned. Refunds require a recorded payout.
     const reversals = [];
     await createNotification({
       tx,

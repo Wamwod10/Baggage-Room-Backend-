@@ -24,7 +24,11 @@ const planEdit = (order, body, user) => {
   const currency = body.currency || order.currency;
   const paymentType = body.paymentType || order.paymentType;
   const amountChanged = body.realPaidAmount !== undefined && body.realPaidAmount !== order.realPaidAmount;
-  if (currency === order.currency && paymentType === order.paymentType && !amountChanged && !body.paidPaymentType) return null;
+  const overtimeType = body.overtimePaymentType || body.doplataPaymentType || order.overtimePaymentType;
+  const overtimeChanged = (body.overtimeAmount !== undefined && body.overtimeAmount !== order.overtimeAmount)
+    || overtimeType !== order.overtimePaymentType;
+  if (currency === order.currency && paymentType === order.paymentType && !amountChanged && !body.paidPaymentType && !overtimeChanged) return null;
+  if (overtimeChanged && (overtimeType === 'DEBT' || order.overtimePaymentType === 'DEBT')) throw new AppError('Use the debt/payment workflow', 400);
   assertPricePermission(user, body.priceChangeReason);
   if (body.paidPaymentType && !['CASH','CARD','TERMINAL','CLICK','PAYME','TRANSFER'].includes(body.paidPaymentType)) throw new AppError('Haqiqiy olingan to‘lov turini tanlang', 400);
   if ((paymentType === 'DEBT') !== (order.paymentType === 'DEBT')) throw new AppError('Qarzga o‘tkazish yoki qarzni yopish uchun qarz/to‘lov tartibidan foydalaning', 400);
@@ -51,22 +55,21 @@ const planEdit = (order, body, user) => {
   data.discountAmount = Math.max(0, data.calculatedAmount - data.finalAmount);
   data.paymentDifference = data.realPaidAmount - data.finalAmount;
   if (currency !== order.currency) data.pricingSnapshot = { ...(order.pricingSnapshot || { version: 0, tariffs: {}, dailyRates: {} }), exchangeRate: targetRate };
-  for (const key of ['overtimeAmount']) {
-    if (body[key] !== undefined && body[key] !== data[key]) throw new AppError('Valyuta/to‘lovni almashtirishni summa tahriridan alohida saqlang', 400);
-  }
+  if (body.overtimeAmount !== undefined) data.overtimeAmount = assertMinorAmount(body.overtimeAmount);
+  if (overtimeType) data.overtimePaymentType = overtimeType;
   const movements = [];
   for (const extra of [false, true]) {
     const group = receipts.filter((m) => isExtra(m) === extra);
-    let remaining = extra ? convert(extraPaid) : data.realPaidAmount;
-    if (!extra && !group.length && remaining > 0) {
-      const paidType = paymentType === 'DEBT' ? body.paidPaymentType : paymentType;
+    let remaining = extra ? (data.overtimePaymentType === 'DEBT' ? 0 : data.overtimeAmount) : data.realPaidAmount;
+    if (!group.length && remaining > 0) {
+      const paidType = extra ? data.overtimePaymentType : paymentType === 'DEBT' ? body.paidPaymentType : paymentType;
       if (!['CASH','CARD','TERMINAL','CLICK','PAYME','TRANSFER'].includes(paidType)) throw new AppError('Haqiqiy olingan to‘lov turini tanlang', 400);
-      group.push({ id: 'initial', type: 'ORDER_PAYMENT', direction: 'IN', amount: 0, currency: order.currency, paymentType: paidType });
+      group.push({ id: extra ? 'initial-extra' : 'initial', note: extra ? 'Overtime' : 'Order', type: 'ORDER_PAYMENT', direction: 'IN', amount: 0, currency: order.currency, paymentType: paidType });
     }
     group.forEach((source, index) => {
       const amount = index === group.length - 1 ? remaining : Math.min(remaining, convert(source.amount));
       remaining -= amount;
-      const nextPaymentType = extra ? source.paymentType : paymentType === 'DEBT' ? body.paidPaymentType || source.paymentType : paymentType;
+      const nextPaymentType = extra ? data.overtimePaymentType : paymentType === 'DEBT' ? body.paidPaymentType || source.paymentType : paymentType;
       if (source.currency !== currency || source.paymentType !== nextPaymentType || source.amount !== amount) movements.push({ source, amount, currency, paymentType: nextPaymentType });
     });
   }

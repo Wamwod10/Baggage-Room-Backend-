@@ -17,8 +17,6 @@ const parseApprovers = (raw = process.env.FINANCE_TELEGRAM_APPROVERS || '{}') =>
     ) throw new AppError('Finance approver mapping is not configured', 503);
   return mapping;
 };
-const isConfiguredApprover = (user) => Object.values(parseApprovers()).some((mapped) =>
-  mapped.startsWith('login:') ? user.login === mapped.slice(6) : user.id === mapped);
 const verifyWebhookSecret = (supplied, configured = process.env.FINANCE_TELEGRAM_WEBHOOK_SECRET) => {
   if (!configured || !supplied) return false;
   const a = Buffer.from(supplied); const b = Buffer.from(configured);
@@ -62,11 +60,9 @@ const requestAudit = (tx, request, userId, action, oldValue = null) => audit({
   newValue: JSON.parse(JSON.stringify(request)), description: request.reason,
 });
 const createRequest = async (user, orderId, body, key) => {
-  await activation.assertReady();
   const idempotencyKey = requireIdempotencyKey(key);
-  parseApprovers();
   if (!String(body.reason || '').trim()) throw new AppError('Reason is required', 400);
-  return prisma.$transaction(async (tx) => {
+  const result = await prisma.$transaction(async (tx) => {
     await lockOrder(tx, orderId);
     const order = await tx.order.findUnique({ where: { id: orderId }, include: { branch: true } });
     if (!order) throw new AppError('Order not found', 404);
@@ -98,15 +94,19 @@ const createRequest = async (user, orderId, body, key) => {
     if (body.kind === 'PAYMENT_CORRECTION' && (!['CASH','TERMINAL','CLICK','PAYME','CARD','TRANSFER'].includes(body.newPaymentType)
       || body.newPaymentType === effectivePaymentType)) throw new AppError('Invalid correction payment type', 400);
     const request = await tx.financialRequest.create({ data: {
+      status: body.kind === 'REFUND' ? 'APPROVED_AWAITING_PAYOUT' : 'EXECUTED',
+      decidedById: user.id, decidedAt: new Date(),
       idempotencyKey, orderId, branchId: order.branchId, requestedById: user.id, kind: body.kind,
       movementId: movement.id, amount, currency: movement.currency, oldPaymentType: effectivePaymentType,
       newPaymentType: body.kind === 'PAYMENT_CORRECTION' ? body.newPaymentType : null, reason: body.reason.trim(),
       context: { branchName: order.branch.name, orderNumber: order.orderNumber, employeeName: user.name, paymentNote: movement.note },
     } });
     await requestAudit(tx, request, user.id, 'FINANCIAL_REQUEST_CREATED');
-    await enqueue(tx, request, 'TELEGRAM_REQUEST');
+    if (request.kind === 'PAYMENT_CORRECTION') await executeMovement(tx, request, user.id);
     return request;
   });
+  markAnalyticsMutation(result);
+  return result;
 };
 const decide = async (id, decision, telegramUserId, telegramContext) => {
   await activation.assertReady();
@@ -186,16 +186,13 @@ const executeMovement = async (tx, request, userId) => {
   await enqueue(tx, request, 'SHEETS_FINANCIAL');
 };
 const payout = async (user, id, body, key = `refund-payout:${id}`) => {
-  await activation.assertReady();
   const payoutKey = requireIdempotencyKey(key);
-  const managerCanRecord = isConfiguredApprover(user);
   const result = await prisma.$transaction(async (tx) => {
     const linked = await tx.financialRequest.findUnique({ where: { id } });
     if (!linked) throw new AppError('Request not found', 404);
     await lockOrder(tx, linked.orderId);
     const request = await tx.financialRequest.findUnique({ where: { id } });
     getScopedBranchId(user, request.branchId);
-    if (!managerCanRecord && request.requestedById !== user.id) throw new AppError('Only the approved requester or approver may record this payout', 403);
     const payoutPaymentType = body.paymentType || request.oldPaymentType;
     if (!['CASH', 'CARD', 'TERMINAL', 'CLICK', 'PAYME', 'TRANSFER'].includes(payoutPaymentType)) throw new AppError('Invalid actual payout method', 400);
     if (body.amount !== request.amount || body.currency !== request.currency || !String(body.reference || '').trim()) throw new AppError('Payout must match approved amount, currency and reference', 400);
@@ -206,8 +203,8 @@ const payout = async (user, id, body, key = `refund-payout:${id}`) => {
     }
     const replay = await tx.financialRequest.findUnique({ where: { payoutIdempotencyKey: payoutKey } });
     if (replay && replay.id !== id) throw new AppError('Payout key belongs to another request', 409);
-    if (request.kind !== 'REFUND' || request.status !== 'APPROVED_AWAITING_PAYOUT') throw new AppError('Approved refund required', 409);
-    const changed = await tx.financialRequest.updateMany({ where: { id, status: 'APPROVED_AWAITING_PAYOUT' }, data: {
+    if (request.kind !== 'REFUND' || !['PENDING', 'APPROVED_AWAITING_PAYOUT'].includes(request.status)) throw new AppError('Approved refund required', 409);
+    const changed = await tx.financialRequest.updateMany({ where: { id, status: request.status }, data: {
       status: 'EXECUTED', payoutById: user.id, paidAt: new Date(), payoutReference: body.reference.trim(), payoutIdempotencyKey: payoutKey, payoutPaymentType,
     } });
     if (changed.count !== 1) throw new AppError('Payout already recorded', 409);
@@ -234,8 +231,7 @@ const list = async (user, orderId) => {
     const refunded = related.filter((r) => r.kind === 'REFUND' && r.status !== 'REJECTED').reduce((sum, r) => sum + r.amount, 0);
     return { ...m, paymentType: corrected?.newPaymentType || m.paymentType, amount: Math.max(0, m.amount - refunded) };
   }).filter((m) => m.amount > 0);
-  let canRecordPayout = false;
-  try { canRecordPayout = isConfiguredApprover(user); } catch { /* Fail closed. */ }
+  const canRecordPayout = true;
   return { requests: requests.map((r) => ({ ...r, canRecordPayout: canRecordPayout || r.requestedById === user.id })), payments, canRecordPayout };
 };
 const handleCallback = async (update) => {
