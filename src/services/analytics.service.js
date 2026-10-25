@@ -140,9 +140,9 @@ const buildBranchSummary = ({ branches, orders = [], branchOrderStats = null, lo
     };
     const branchLockers = lockers.filter((locker) => locker.branchId === branch.id);
     const branchSummary = summarizeMovements(movements.filter((movement) => movement.branchId === branch.id));
-    const revenue = sum(branchSummary.groups.revenueIn);
-    const expenseAmount = sum(branchSummary.groups.expenses);
-    const inkassaAmount = sum(branchSummary.groups.inkassa);
+    const revenue = branchSummary.revenueByCurrency.UZS;
+    const expenseAmount = byCurrency(branchSummary.groups.expenses).UZS;
+    const inkassaAmount = byCurrency(branchSummary.groups.inkassa).UZS;
 
     return {
       id: branch.id,
@@ -157,6 +157,7 @@ const buildBranchSummary = ({ branches, orders = [], branchOrderStats = null, lo
       emptyLockers: branchLockers.filter((locker) => locker.status === "EMPTY").length,
       busyLockers: branchLockers.filter((locker) => locker.status === "BUSY").length,
       revenue,
+      revenueByCurrency: branchSummary.revenueByCurrency,
       netProfit: revenue - expenseAmount - inkassaAmount,
       cashOnHand: revenue - expenseAmount - inkassaAmount,
     };
@@ -416,15 +417,15 @@ const reportsUncached = async (user, query) => {
   const expensesByDay = {};
   const inkassaByDay = {};
   const ordersByDay = orderAnalytics.ordersByDay;
-  for (const item of inMovements) {
+  for (const item of inMovements.filter((item) => item.currency === "UZS")) {
     const day = dayKey(item.createdAt);
     revenueByDay[day] = (revenueByDay[day] || 0) + item.amount;
   }
-  for (const item of expenseMovements.length ? expenseMovements : expenses) {
+  for (const item of (expenseMovements.length ? expenseMovements : expenses).filter((item) => item.currency === "UZS")) {
     const day = dayKey(item.createdAt);
     expensesByDay[day] = (expensesByDay[day] || 0) + item.amount;
   }
-  for (const item of inkassaMovements.length ? inkassaMovements : inkassa) {
+  for (const item of (inkassaMovements.length ? inkassaMovements : inkassa).filter((item) => item.currency === "UZS")) {
     const day = dayKey(item.createdAt);
     inkassaByDay[day] = (inkassaByDay[day] || 0) + item.amount;
   }
@@ -432,15 +433,20 @@ const reportsUncached = async (user, query) => {
 
   const branchComparison = branches.map((branch) => {
     const branchOrders = orderAnalytics.branchOrderStats[branch.id] || { orders: 0, active: 0, delayed: 0, cancelled: 0 };
-    const branchRevenue = sum(inMovements.filter((item) => item.branchId === branch.id));
-    const branchExpenses = sum(expenseMovements.filter((item) => item.branchId === branch.id));
-    const branchInkassa = sum(inkassaMovements.filter((item) => item.branchId === branch.id));
+    const branchRevenueByCurrency = byCurrency(inMovements.filter((item) => item.branchId === branch.id));
+    const branchRevenue = branchRevenueByCurrency.UZS;
+    const branchExpensesByCurrency = byCurrency(expenseMovements.filter((item) => item.branchId === branch.id));
+    const branchExpenses = branchExpensesByCurrency.UZS;
+    const branchInkassaByCurrency = byCurrency(inkassaMovements.filter((item) => item.branchId === branch.id));
+    const branchInkassa = branchInkassaByCurrency.UZS;
     const delayed = branchOrders.delayed;
     const cancelled = branchOrders.cancelled;
 
     return {
       branch: branch.name,
       revenue: branchRevenue,
+      revenueByCurrency: branchRevenueByCurrency,
+      profitByCurrency: subtractCurrencyMaps(branchRevenueByCurrency, branchExpensesByCurrency, branchInkassaByCurrency),
       profit: branchRevenue - branchExpenses - branchInkassa,
       cashOnHand: branchRevenue - branchExpenses - branchInkassa,
       orders: branchOrders.orders,
@@ -456,14 +462,17 @@ const reportsUncached = async (user, query) => {
   const adminPerformanceMap = {};
   for (const movement of inMovements) {
     const key = userName(movement.createdBy);
-    if (!adminPerformanceMap[key]) adminPerformanceMap[key] = { admin: key, orders: 0, revenue: 0, profit: 0, shifts: 0 };
+    if (!adminPerformanceMap[key]) adminPerformanceMap[key] = { admin: key, orders: 0, revenue: 0, profit: 0, shifts: 0, revenueByCurrency: byCurrency([]) };
     if (["ORDER_PAYMENT", "DEBT_CLOSE"].includes(movement.type)) adminPerformanceMap[key].orders += asNumber(movement.count || 1);
-    adminPerformanceMap[key].revenue += asNumber(movement.amount);
-    adminPerformanceMap[key].profit += asNumber(movement.amount);
+    adminPerformanceMap[key].revenueByCurrency[movement.currency] += asNumber(movement.amount);
+    if (movement.currency === 'UZS') {
+      adminPerformanceMap[key].revenue += asNumber(movement.amount);
+      adminPerformanceMap[key].profit += asNumber(movement.amount);
+    }
   }
   for (const shift of shiftsWithReports) {
     const key = userName(shift.openedBy);
-    if (!adminPerformanceMap[key]) adminPerformanceMap[key] = { admin: key, orders: 0, revenue: 0, profit: 0, shifts: 0 };
+    if (!adminPerformanceMap[key]) adminPerformanceMap[key] = { admin: key, orders: 0, revenue: 0, profit: 0, shifts: 0, revenueByCurrency: byCurrency([]) };
     adminPerformanceMap[key].shifts += 1;
   }
 
@@ -497,7 +506,7 @@ const reportsUncached = async (user, query) => {
     expensesByDay,
     inkassaByDay,
     ordersByDay,
-    revenueByBranch: movements.filter((m) => m.direction === "IN").reduce((acc, item) => {
+    revenueByBranch: movements.filter((m) => m.direction === "IN" && m.currency === "UZS").reduce((acc, item) => {
       const name = branchName(item);
       acc[name] = (acc[name] || 0) + item.amount;
       return acc;
@@ -549,8 +558,8 @@ const reportsUncached = async (user, query) => {
         : null,
     },
     cashMovementAnalytics: {
-      in: sum(inMovements),
-      out: sum(outMovements),
+      in: byCurrency(inMovements).UZS,
+      out: byCurrency(outMovements).UZS,
       expense: totalExpenses,
       inkassa: totalInkassa,
     },
@@ -589,6 +598,7 @@ module.exports = {
   dashboard,
   reports,
   _internals: {
+    buildBranchSummary,
     buildOrderAnalyticsFromFacts,
     mergeOrderAnalyticsIntoReport,
   },

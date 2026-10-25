@@ -22,6 +22,9 @@ const calculatePrice = (tariff, hours, options = {}) => {
     if (!Number.isSafeInteger(options.dailyRate) || options.dailyRate <= 0) throw new AppError('Daily tariff requires configuration', 409);
     return Math.ceil(h / 24) * options.dailyRate;
   }
+  if (options.branchCode === 'TJV' && options.isCustom && h > 12 && h <= 72) {
+    return Number(tariff.price12h || 0) + Math.ceil(h - 12) * Number(tariff.price1h || 0);
+  }
   if (options.isCustom) return Number(tariff.price1h || 0) * Math.max(1, Math.ceil(h || 1));
   if (h <= 1) return tariff.price1h;
   if (h <= 12) return tariff.price12h;

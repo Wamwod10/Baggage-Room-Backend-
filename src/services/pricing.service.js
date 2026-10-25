@@ -14,7 +14,7 @@ const quote = async (user, body) => {
   const items = body.items.map((item) => {
     const tariff = tariffs.find((row) => row.size === item.size);
     if (!tariff) throw new AppError('Tariff not found', 409);
-    const unitPriceUZS = calculatePrice(tariff, body.hours, { isCustom: body.isCustom, dailyRate: dailyRates[item.size] });
+    const unitPriceUZS = calculatePrice(tariff, body.hours, { branchCode: branch.code, isCustom: body.isCustom, dailyRate: dailyRates[item.size] });
     const unitPrice = convertUzsToCurrencyMinor(unitPriceUZS, body.currency || 'UZS', body.exchangeRate || 1);
     return { ...item, unitPriceUZS, unitPrice, amount: assertMinorAmount(unitPrice * item.count) };
   });

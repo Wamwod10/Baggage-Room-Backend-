@@ -1,0 +1,24 @@
+const test=require('node:test');
+const assert=require('node:assert/strict');
+test('analytics keeps native minor currencies separate from UZS scalars',async(t)=>{
+ const paths=['../src/config/prisma','../src/repositories/cashMovementAnalytics.repository','../src/repositories/orderAnalytics.repository','../src/services/analytics.service'].map(require.resolve);
+ const saved=paths.map(p=>require.cache[p]);t.after(()=>paths.forEach((p,i)=>{if(saved[i])require.cache[p]=saved[i];else delete require.cache[p];}));
+ const branches=[{id:'tia',name:'Airport',code:'TIA'}];
+ const facts=[['USD',13280],['RUB',214285],['UZS',1000]].map(([currency,amount])=>({currency,amount,branchId:'tia',createdById:'staff',day:'2026-10-25',type:'ORDER_PAYMENT',direction:'IN',paymentType:'CASH',count:1}));
+ const empty={findMany:async()=>[]};
+ const mocks=[{branch:{findMany:async()=>branches},locker:empty,debt:empty,shift:empty,expense:empty,inkassa:empty,user:{findMany:async()=>[{id:'staff',name:'Staff'}]}},{loadMovementFacts:async()=>facts},{loadCombinedOrderFacts:async()=>({rows:[],total:{}})}];
+ paths.slice(0,3).forEach((p,i)=>{require.cache[p]={id:p,filename:p,loaded:true,exports:mocks[i]};});delete require.cache[paths[3]];
+ const service=require('../src/services/analytics.service');
+ require('../src/services/analyticsCache').invalidateAnalyticsCache();
+ const result=await service.reports({role:'SUPER_ADMIN'},{});
+ assert.equal(result.branchComparison[0].revenue,1000);
+ assert.equal(result.branchComparison[0].revenueByCurrency.USD,13280);
+ assert.equal(result.branchComparison[0].revenueByCurrency.RUB,214285);
+ assert.equal(result.adminPerformance[0].revenue,1000);
+ assert.equal(result.adminPerformance[0].revenueByCurrency.USD,13280);
+ assert.equal(result.revenueByDay['2026-10-25'],1000);
+ assert.equal(result.revenueByBranch.Airport,1000);
+ assert.equal(result.cashMovementAnalytics.in,1000);
+ const dashboard=service._internals.buildBranchSummary({branches,lockers:[],movements:facts});
+ assert.equal(dashboard[0].revenue,1000);assert.equal(dashboard[0].revenueByCurrency.USD,13280);
+});
