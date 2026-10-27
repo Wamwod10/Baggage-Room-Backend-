@@ -81,6 +81,8 @@ test('staff can discount existing active orders but cannot alter recorded receip
   assert.equal(controls.isStaffDiscountOnlyEdit(order, { finalAmount: 100000, overtimeAmount: 1000 }), false);
   assert.equal(controls.isStaffDiscountOnlyEdit(order, { finalAmount: 190000 }), false);
   assert.equal(controls.isStaffDiscountOnlyEdit({ ...order, status: 'PICKED_UP' }, { finalAmount: 100000 }), false);
+  assert.equal(controls.isStaffDiscountOnlyEdit({ ...order, paymentType: 'DEBT' }, { finalAmount: 100000 }), false);
+  assert.equal(controls.isStaffDiscountOnlyEdit({ ...order, debt: { status: 'OPEN' } }, { finalAmount: 100000 }), false);
   assert.throws(() => controls.assertDiscountReason(' '), /sababi/);
   assert.throws(() => controls.assertPricePermission({ id: 'employee', role: 'BRANCH_ADMIN' }, 'some reason', ''), /huquqi/);
 });
