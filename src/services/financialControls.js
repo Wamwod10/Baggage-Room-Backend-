@@ -18,6 +18,21 @@ const assertPricePermission = (user, reason, configuredIds = process.env.PRICE_A
 const assertDiscountReason = (reason) => {
   if (!String(reason || '').trim()) throw new AppError('Chegirma sababi majburiy', 400);
 };
+// An active order may be discounted by branch staff without changing recorded cash.
+// Real-paid, currency, payment-method and overtime corrections use the protected financial workflow.
+const isStaffDiscountOnlyEdit = (order, body) => {
+  if (!['ACTIVE', 'DELAYED'].includes(order.status)) return false;
+  const nextPrice = body.finalAmount;
+  if (!Number.isSafeInteger(nextPrice) || nextPrice < 0 || nextPrice >= order.finalAmount
+    || nextPrice > order.calculatedAmount) return false;
+  for (const field of ['realPaidAmount', 'currency', 'paymentType', 'overtimeAmount', 'overtimePaymentType']) {
+    if (body[field] !== undefined && body[field] !== order[field]) return false;
+  }
+  for (const field of ['doplataPaymentType', 'overtimeCurrency', 'paidPaymentType', 'sourceExchangeRate']) {
+    if (body[field] !== undefined) return false;
+  }
+  return true;
+};
 const validateBaggage = (items, branchCode) => {
   if (!Array.isArray(items) || !items.length) throw new AppError('At least one baggage item is required', 400);
   const sizes = ['S', 'M', 'L', ...(['TSV', 'TJV', 'SVK'].includes(branchCode) ? ['XL'] : [])];
@@ -62,4 +77,4 @@ const assertPickupTotal = (order, body, overtimeAmount, overtimePaymentType) => 
 // Serialize order/payment/debt mutations on the same row, including pickup.
 const lockOrder = (tx, id) => tx.$queryRaw`SELECT "id" FROM "Order" WHERE "id" = ${id} FOR UPDATE`;
 
-module.exports = { assertMinorAmount, assertPricePermission, assertDiscountReason, validateBaggage, paidForOrder, withRecordedDiscount, assertPickupPaid, assertPickupTotal, lockOrder };
+module.exports = { assertMinorAmount, assertPricePermission, assertDiscountReason, isStaffDiscountOnlyEdit, validateBaggage, paidForOrder, withRecordedDiscount, assertPickupPaid, assertPickupTotal, lockOrder };
