@@ -16,3 +16,4 @@ require('./orderFinancialEdit.test');
 
 require('./productionPricing.test');
 require('./analyticsCurrency.test');
+require('./validationLimits.test');
