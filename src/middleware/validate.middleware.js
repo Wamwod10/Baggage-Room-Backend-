@@ -25,7 +25,25 @@ const humanizeValidationMessage = (path, message) => {
   return message;
 };
 
-const validate = (schema) => (req, _res, next) => {
+const validate = (schema, { bodyArrayLimits = {}, bodyObjectLimits = {} } = {}) => (req, _res, next) => {
+  for (const [field, limit] of Object.entries(bodyArrayLimits)) {
+    if (Array.isArray(req.body?.[field]) && req.body[field].length > limit) {
+      const message = `${field} may contain at most ${limit} entries`;
+      throw new AppError(message, 400, [{ path: `body.${field}`, message }]);
+    }
+  }
+  for (const [field, limit] of Object.entries(bodyObjectLimits)) {
+    const value = req.body?.[field];
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      let count = 0;
+      for (const key in value) {
+        if (Object.prototype.hasOwnProperty.call(value, key) && ++count > limit) {
+          const message = `${field} may contain at most ${limit} entries`;
+          throw new AppError(message, 400, [{ path: `body.${field}`, message }]);
+        }
+      }
+    }
+  }
   const result = schema.safeParse({
     body: req.body,
     query: req.query,
@@ -33,10 +51,10 @@ const validate = (schema) => (req, _res, next) => {
   });
 
   if (!result.success) {
-    const errors = result.error.errors.map((err) => ({
-      path: err.path.join("."),
-      message: humanizeValidationMessage(err.path.join("."), err.message),
-    }));
+    const errors = result.error.errors.slice(0, 20).map((err) => {
+      const path = err.path.map((part) => String(part).slice(0, 256)).join(".").slice(0, 256);
+      return { path, message: humanizeValidationMessage(path, err.message).slice(0, 256) };
+    });
     throw new AppError(errors[0]?.message || "Ma'lumotlar noto'g'ri kiritilgan", 400, errors);
   }
 
