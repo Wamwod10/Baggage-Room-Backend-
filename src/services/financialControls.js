@@ -22,6 +22,7 @@ const assertDiscountReason = (reason) => {
 // Real-paid, currency, payment-method and overtime corrections use the protected financial workflow.
 const isStaffDiscountOnlyEdit = (order, body) => {
   if (!['ACTIVE', 'DELAYED'].includes(order.status)) return false;
+  if (order.paymentType === 'DEBT' || order.debt?.status === 'OPEN') return false;
   const nextPrice = body.finalAmount;
   if (!Number.isSafeInteger(nextPrice) || nextPrice < 0 || nextPrice >= order.finalAmount
     || nextPrice > order.calculatedAmount) return false;
