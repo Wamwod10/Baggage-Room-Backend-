@@ -61,6 +61,14 @@ test('price permission accepts only exact configured account logins and requires
     if (previous === undefined) delete process.env.PRICE_APPROVER_LOGINS; else process.env.PRICE_APPROVER_LOGINS = previous;
   }
 });
+test('authenticated branch staff can record a new-order discount without a manager; reason is still mandatory', () => {
+  assert.doesNotThrow(() => controls.assertDiscountReason('Sardor akadan chegirma'));
+  assert.doesNotThrow(() => controls.assertDiscountReason('TJV staff discount'));
+  assert.throws(() => controls.assertDiscountReason('  '), /sababi/);
+  assert.throws(() => controls.assertDiscountReason(undefined), /sababi/);
+  // Sensitive post-creation financial changes remain manager-only.
+  assert.throws(() => controls.assertPricePermission({ id: 'staff', role: 'BRANCH_ADMIN' }, 'reason', ''), /huquqi/);
+});
 test('structured baggage rejects zero, negative, fractional and airport XL', () => {
   for (const count of [0, -1, 1.5]) assert.throws(() => controls.validateBaggage([{ size: 'S', count }], 'TIA'));
   assert.throws(() => controls.validateBaggage([{ size: 'XL', count: 1 }], 'TIA'));
