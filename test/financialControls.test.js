@@ -50,6 +50,17 @@ test('price permission uses actual account allowlist and mandatory reason', () =
   assert.throws(() => controls.assertPricePermission({ id: 'manager' }, ' ', 'manager'), /sabab/);
   assert.doesNotThrow(() => controls.assertPricePermission({ id: 'manager' }, 'reason', 'manager'));
 });
+test('price permission accepts only exact configured account logins and requires a reason', () => {
+  const previous = process.env.PRICE_APPROVER_LOGINS;
+  process.env.PRICE_APPROVER_LOGINS = ' manager-login, other ';
+  try {
+    assert.doesNotThrow(() => controls.assertPricePermission({ id: '1', login: 'manager-login', role: 'BRANCH_ADMIN' }, 'Correction', ''));
+    assert.throws(() => controls.assertPricePermission({ id: '2', login: 'manager-login-extra', role: 'BRANCH_ADMIN' }, 'Correction', ''), /huquqi/);
+    assert.throws(() => controls.assertPricePermission({ id: '1', login: 'manager-login' }, '  ', ''), /sabab/);
+  } finally {
+    if (previous === undefined) delete process.env.PRICE_APPROVER_LOGINS; else process.env.PRICE_APPROVER_LOGINS = previous;
+  }
+});
 test('structured baggage rejects zero, negative, fractional and airport XL', () => {
   for (const count of [0, -1, 1.5]) assert.throws(() => controls.validateBaggage([{ size: 'S', count }], 'TIA'));
   assert.throws(() => controls.validateBaggage([{ size: 'XL', count: 1 }], 'TIA'));
