@@ -22,7 +22,7 @@ const { markAnalyticsMutation } = require("./analyticsCache");
 const { normalizePaymentType, paymentLabel } = require("../utils/payment");
 const { requireIdempotencyKey } = require("../utils/idempotency");
 const financialEdit = require('./orderFinancialEdit.service');
-const { assertMinorAmount, assertPricePermission, assertDiscountReason, validateBaggage, assertPickupPaid, assertPickupTotal, withRecordedDiscount, lockOrder } = require('./financialControls');
+const { assertMinorAmount, assertPricePermission, assertDiscountReason, isStaffDiscountOnlyEdit, validateBaggage, assertPickupPaid, assertPickupTotal, withRecordedDiscount, lockOrder } = require('./financialControls');
 const {
   overtimeHoursAfterGrace,
   isOverdueAfterGrace,
@@ -946,12 +946,14 @@ const updateOrder = async (user, id, body, { idempotencyKey } = {}) => {
     getScopedBranchId(user, current.branchId);
     if (!["ACTIVE", "DELAYED", "PICKED_UP"].includes(current.status)) throw new AppError("Only active or picked up orders can be edited", 400);
     const financialPlan = financialEdit.planEdit(current, body, user);
+    const staffDiscountOnly = !financialPlan && isStaffDiscountOnlyEdit(current, body);
     if (financialPlan) {
       const requests = await tx.financialRequest.findMany({ where: { orderId: id, status: { not: 'REJECTED' } } });
       if (requests.length) throw new AppError('Avval mavjud moliyaviy so‘rovlarni yarashtiring; to‘lov/valyuta tahriri bloklangan', 409);
     }
     if (body.discountReason !== undefined && body.discountReason !== current.discountReason && current.discountAmount > 0) {
-      assertPricePermission(user, body.discountReason);
+      if (staffDiscountOnly) assertDiscountReason(body.priceChangeReason || body.discountReason);
+      else assertPricePermission(user, body.discountReason);
     }
     const financialChanged = ['finalAmount', 'realPaidAmount', 'currency', 'paymentType', 'overtimeAmount', 'overtimePaymentType']
       .some((key) => body[key] !== undefined && body[key] !== current[key]);
@@ -959,7 +961,8 @@ const updateOrder = async (user, id, body, { idempotencyKey } = {}) => {
       const forbidden = ['realPaidAmount', 'currency', 'paymentType', 'overtimeAmount', 'overtimePaymentType']
         .some((key) => body[key] !== undefined && body[key] !== current[key]);
       if (forbidden && !financialPlan) throw new AppError('Financial changes require an approved financial operation', 403);
-      assertPricePermission(user, body.priceChangeReason || body.discountReason);
+      if (staffDiscountOnly) assertDiscountReason(body.priceChangeReason || body.discountReason);
+      else assertPricePermission(user, body.priceChangeReason || body.discountReason);
     }
     if (!financialPlan && current.overtimeAmount > 0 && body.doplataPaymentType !== undefined && normalizePaymentType(body.doplataPaymentType) !== current.overtimePaymentType
       || !financialPlan && body.overtimeCurrency !== undefined && body.overtimeCurrency !== current.currency) {
