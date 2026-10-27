@@ -69,6 +69,23 @@ test('authenticated branch staff can record a new-order discount without a manag
   // Sensitive post-creation financial changes remain manager-only.
   assert.throws(() => controls.assertPricePermission({ id: 'staff', role: 'BRANCH_ADMIN' }, 'reason', ''), /huquqi/);
 });
+test('staff can discount existing active orders but cannot alter recorded receipts', () => {
+  const order = { status: 'ACTIVE', calculatedAmount: 180000, finalAmount: 180000,
+    realPaidAmount: 180000, currency: 'UZS', paymentType: 'CASH', overtimeAmount: 0 };
+  assert.equal(controls.isStaffDiscountOnlyEdit(order, { finalAmount: 100000,
+    realPaidAmount: 180000, currency: 'UZS', paymentType: 'CASH' }), true);
+  assert.equal(controls.isStaffDiscountOnlyEdit({ ...order, status: 'DELAYED' }, { finalAmount: 100000 }), true);
+  assert.equal(controls.isStaffDiscountOnlyEdit(order, { finalAmount: 100000, realPaidAmount: 100000 }), false);
+  assert.equal(controls.isStaffDiscountOnlyEdit(order, { finalAmount: 100000, currency: 'USD' }), false);
+  assert.equal(controls.isStaffDiscountOnlyEdit(order, { finalAmount: 100000, paymentType: 'CARD' }), false);
+  assert.equal(controls.isStaffDiscountOnlyEdit(order, { finalAmount: 100000, overtimeAmount: 1000 }), false);
+  assert.equal(controls.isStaffDiscountOnlyEdit(order, { finalAmount: 190000 }), false);
+  assert.equal(controls.isStaffDiscountOnlyEdit({ ...order, status: 'PICKED_UP' }, { finalAmount: 100000 }), false);
+  assert.equal(controls.isStaffDiscountOnlyEdit({ ...order, paymentType: 'DEBT' }, { finalAmount: 100000 }), false);
+  assert.equal(controls.isStaffDiscountOnlyEdit({ ...order, debt: { status: 'OPEN' } }, { finalAmount: 100000 }), false);
+  assert.throws(() => controls.assertDiscountReason(' '), /sababi/);
+  assert.throws(() => controls.assertPricePermission({ id: 'employee', role: 'BRANCH_ADMIN' }, 'some reason', ''), /huquqi/);
+});
 test('structured baggage rejects zero, negative, fractional and airport XL', () => {
   for (const count of [0, -1, 1.5]) assert.throws(() => controls.validateBaggage([{ size: 'S', count }], 'TIA'));
   assert.throws(() => controls.validateBaggage([{ size: 'XL', count: 1 }], 'TIA'));
