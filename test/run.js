@@ -13,3 +13,6 @@ require("./verifyAnalyticsArchive.test");
 require("./pickupPayment.test");
 require('./financialControls.test');
 require('./orderFinancialEdit.test');
+
+require('./productionPricing.test');
+require('./analyticsCurrency.test');

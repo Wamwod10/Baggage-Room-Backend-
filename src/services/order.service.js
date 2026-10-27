@@ -53,6 +53,7 @@ const calculateOvertimeAmount = ({ order, tariffs, overtimeHours, actualTime = n
     if (order.currency !== "UZS") {
       const originalUzsPrice = calculatePrice(tariff, item.tariffHours, {
         isCustom: order.customHours !== null && order.customHours !== undefined,
+        branchCode: order.pricingSnapshot?.customTariffRule === 'TJV_12H_PLUS_HOURLY' ? 'TJV' : undefined,
       });
       hourlyPrice = originalUzsPrice > 0
         ? Math.round(hourlyPrice * (Number(item.unitPrice || 0) / originalUzsPrice))
@@ -747,7 +748,7 @@ const createOrder = async (user, body, { idempotencyKey } = {}) => {
       }
       const count = item.count === undefined ? 1 : Number(item.count);
       validateBaggage([{ size, count }], branch.code);
-      const unitPriceUZS = calculatePrice(tariff, itemTariffHours, { isCustom: isCustomTariff, dailyRate: dailyRates[size] });
+      const unitPriceUZS = calculatePrice(tariff, itemTariffHours, { branchCode: branch.code, isCustom: isCustomTariff, dailyRate: dailyRates[size] });
       const unitPrice = convertUzsToCurrencyMinor(unitPriceUZS, currency, exchangeRate);
       const originalPrice = assertMinorAmount(unitPrice * count);
       const discountAmount = Number(item.discountAmount || 0);
@@ -797,7 +798,7 @@ const createOrder = async (user, body, { idempotencyKey } = {}) => {
         passport: body.passport || null,
         tariffHours,
         customHours: body.customHours || null,
-        pricingSnapshot: { version: 1, dailyRates, tariffs: Object.fromEntries(tariffs.map(({ size, price1h, price12h, price24h, price48h, price72h, after72hPrice }) => [size, { price1h, price12h, price24h, price48h, price72h, after72hPrice }])), exchangeRate },
+        pricingSnapshot: { version: 1, ...(branch.code === 'TJV' && isCustomTariff && tariffHours > 12 && tariffHours <= 72 ? { customTariffRule: 'TJV_12H_PLUS_HOURLY' } : {}), dailyRates, tariffs: Object.fromEntries(tariffs.map(({ size, price1h, price12h, price24h, price48h, price72h, after72hPrice }) => [size, { price1h, price12h, price24h, price48h, price72h, after72hPrice }])), exchangeRate },
         priceApprovedById: discountAmount > 0 ? user.id : null,
         priceApprovedByName: discountAmount > 0 ? user.name : null,
         currency,
@@ -1084,6 +1085,7 @@ const updateOrder = async (user, id, body, { idempotencyKey } = {}) => {
             if (!tariff) throw new AppError('Tariff not found', 409);
             if (!current.pricingSnapshot && current.currency !== 'UZS') throw new AppError('Legacy foreign-currency repricing requires a verified exchange rate', 409);
             unitPrice = convertUzsToCurrencyMinor(calculatePrice(tariff, row.tariffHours, {
+              branchCode: current.pricingSnapshot?.customTariffRule === 'TJV_12H_PLUS_HOURLY' ? 'TJV' : undefined,
               isCustom: current.customHours !== null, dailyRate: current.pricingSnapshot?.dailyRates?.[row.size],
             }), current.currency, current.pricingSnapshot?.exchangeRate || 1);
           }
