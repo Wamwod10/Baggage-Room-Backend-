@@ -13,6 +13,11 @@ const assertPricePermission = (user, reason, configuredIds = process.env.PRICE_A
   if (user.role !== 'SUPER_ADMIN' && !ids.includes(user.id) && !logins.includes(user.login)) throw new AppError('Sizda narx yoki chegirmani tasdiqlash huquqi yo‘q', 403);
   if (!String(reason || '').trim()) throw new AppError('Narx o‘zgarishi uchun sabab majburiy', 400);
 };
+// New-order discounts are entered by authenticated branch staff without manager approval.
+// Still require a recorded reason. Post-creation financial edits retain their own permission checks.
+const assertDiscountReason = (reason) => {
+  if (!String(reason || '').trim()) throw new AppError('Chegirma sababi majburiy', 400);
+};
 const validateBaggage = (items, branchCode) => {
   if (!Array.isArray(items) || !items.length) throw new AppError('At least one baggage item is required', 400);
   const sizes = ['S', 'M', 'L', ...(['TSV', 'TJV', 'SVK'].includes(branchCode) ? ['XL'] : [])];
@@ -57,4 +62,4 @@ const assertPickupTotal = (order, body, overtimeAmount, overtimePaymentType) => 
 // Serialize order/payment/debt mutations on the same row, including pickup.
 const lockOrder = (tx, id) => tx.$queryRaw`SELECT "id" FROM "Order" WHERE "id" = ${id} FOR UPDATE`;
 
-module.exports = { assertMinorAmount, assertPricePermission, validateBaggage, paidForOrder, withRecordedDiscount, assertPickupPaid, assertPickupTotal, lockOrder };
+module.exports = { assertMinorAmount, assertPricePermission, assertDiscountReason, validateBaggage, paidForOrder, withRecordedDiscount, assertPickupPaid, assertPickupTotal, lockOrder };

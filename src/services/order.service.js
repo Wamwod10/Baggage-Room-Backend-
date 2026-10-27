@@ -22,7 +22,7 @@ const { markAnalyticsMutation } = require("./analyticsCache");
 const { normalizePaymentType, paymentLabel } = require("../utils/payment");
 const { requireIdempotencyKey } = require("../utils/idempotency");
 const financialEdit = require('./orderFinancialEdit.service');
-const { assertMinorAmount, assertPricePermission, validateBaggage, assertPickupPaid, assertPickupTotal, withRecordedDiscount, lockOrder } = require('./financialControls');
+const { assertMinorAmount, assertPricePermission, assertDiscountReason, validateBaggage, assertPickupPaid, assertPickupTotal, withRecordedDiscount, lockOrder } = require('./financialControls');
 const {
   overtimeHoursAfterGrace,
   isOverdueAfterGrace,
@@ -774,12 +774,12 @@ const createOrder = async (user, body, { idempotencyKey } = {}) => {
     let discountAmount = Number(body.discountAmount || 0) + itemDiscount;
     assertMinorAmount(discountAmount);
     if (discountAmount > calculatedAmount) throw new AppError('Discount exceeds price', 400);
-    if (discountAmount > 0) assertPricePermission(user, body.discountReason);
+    if (discountAmount > 0) assertDiscountReason(body.discountReason);
     let finalAmount = Math.max(0, calculatedAmount - discountAmount);
     const realPaidAmount = paymentType === "DEBT" ? Number(body.realPaidAmount || 0) : Number(body.realPaidAmount ?? finalAmount);
     assertMinorAmount(realPaidAmount);
     if (paymentType !== 'DEBT' && realPaidAmount < finalAmount) {
-      assertPricePermission(user, body.discountReason || body.realPaidReason || body.note);
+      assertDiscountReason(body.discountReason || body.realPaidReason || body.note);
       discountAmount = calculatedAmount - realPaidAmount;
       finalAmount = realPaidAmount;
     }
