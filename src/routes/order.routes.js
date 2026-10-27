@@ -2,6 +2,7 @@ const router = require("express").Router();
 const { z, idParam, amount, currency, paymentType, phone, orderStatus, lockerSize } = require("../utils/validation");
 const validate = require("../middleware/validate.middleware");
 const orderController = require("../controllers/order.controller");
+const orderArrayLimits = { bodyArrayLimits: { items: 1000, lockerIds: 1000 } };
 
 const orderItem = z.object({
   lockerId: z.string().min(1),
@@ -20,7 +21,7 @@ router.get('/financial-capabilities', (req, res) => {
 router.post('/quote', validate(z.object({ body: z.object({
   branchId: z.string().min(1), hours: z.number().positive(), isCustom: z.boolean().optional(), currency,
   exchangeRate: z.number().positive().optional(), items: z.array(z.object({ size: lockerSize, count: z.number().int().positive() })).min(1),
-}) })), require('../utils/response').asyncHandler(async (req, res) => require('../utils/response').success(res,
+}) }), orderArrayLimits), require('../utils/response').asyncHandler(async (req, res) => require('../utils/response').success(res,
   await require('../services/pricing.service').quote(req.user, req.body))));
 router.get('/:id/pickup-quote', require('../utils/response').asyncHandler(async (req, res) => require('../utils/response').success(res,
   await require('../services/pricing.service').pickupQuote(req.user, req.params.id))));
@@ -93,7 +94,7 @@ router.post(
           });
         }
       }),
-    })
+    }), orderArrayLimits
   ),
   orderController.create
 );
@@ -129,7 +130,7 @@ router.patch(
         count: z.coerce.number().int().positive().optional(),
       })).optional(),
     }),
-  })),
+  }), orderArrayLimits),
   orderController.update
 );
 router.post(
