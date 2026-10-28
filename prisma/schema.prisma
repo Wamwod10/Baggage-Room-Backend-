@@ -359,6 +359,12 @@ model CashMovement {
   amount       Int
   currency     Currency          @default(UZS)
   paymentType  PaymentType?
+  // Only payments created after CBU rollout have these rate snapshots.
+  fxRate       String?
+  fxRateDate   String?
+  fxNominal    Int?
+  fxSource     String?
+  uzsEquivalent Int?
   note         String?
   financialKind String?
   createdById  String
