@@ -1292,6 +1292,12 @@ const pickupOrder = async (user, id, body, { idempotencyKey } = {}) => {
     if (replay.id !== id) throw new AppError("Idempotency key belongs to another order", 409);
     return replay;
   }
+  // Fetch the applicable rate outside the pickup transaction. Old orders retain
+  // their original price snapshot; only this NEW payment gets today's rate.
+  const fxOrder = await prisma.order.findUnique({ where: { id }, select: { branchId: true, currency: true } });
+  if (!fxOrder) throw new AppError('Order not found', 404);
+  getScopedBranchId(user, fxOrder.branchId);
+  const pickupFx = await cbuRates.getRate(body.currency || fxOrder.currency);
   const timer = createTimer("orders.pickup", {
     hasOvertime: Number(body.overtimeAmount || body.extraPayment || 0) > 0,
     hasDebtPayment: body.debtPaidAmount !== undefined,
@@ -1304,6 +1310,7 @@ const pickupOrder = async (user, id, body, { idempotencyKey } = {}) => {
     if (!order || !["ACTIVE", "DELAYED"].includes(order.status)) throw new AppError("Active order not found", 404);
     await timer.time("branch lookup", async () => getScopedBranchId(user, order.branchId));
     order = await financialEdit.convertForPickup(tx, order, body, user, requestKey);
+    if (pickupFx.currency !== order.currency) throw new AppError('Payment currency changed. Retry the pickup.', 409);
     const discounted = withRecordedDiscount(order);
     if (discounted !== order) {
       await tx.order.update({ where: { id }, data: {
@@ -1375,6 +1382,7 @@ const pickupOrder = async (user, id, body, { idempotencyKey } = {}) => {
         amount: overtimeAmount,
         currency: overtimeCurrency,
         paymentType: overtimePaymentType,
+        fxSnapshot: cbuRates.paymentSnapshot(overtimeAmount, pickupFx),
         note: `Overtime ${order.orderNumber}`,
         createdById: user.id,
       }));
@@ -1396,6 +1404,7 @@ const pickupOrder = async (user, id, body, { idempotencyKey } = {}) => {
           amount: debtPaidAmount,
           currency: body.currency || order.currency,
           paymentType: debtPaymentType,
+          fxSnapshot: cbuRates.paymentSnapshot(debtPaidAmount, pickupFx),
           note: `Debt payment ${order.orderNumber}`,
           createdById: user.id,
         }));
