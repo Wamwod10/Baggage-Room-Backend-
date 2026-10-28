@@ -117,6 +117,19 @@ http.createServer((req, res) => {
   res.end(req.url === "/health" ? '{"status":"probe-only"}' : '{"error":"not-found"}');
 }).listen(Number(process.env.PORT || 10000), "0.0.0.0", () => {
   console.log(JSON.stringify({ diagnostic: "CBU_FRANKFURT_PROBE_STARTED" }));
+  if (process.env.CURRENCYAPI_KEY) {
+    // Explicit operator-supplied secret is used only inside this isolated
+    // diagnostic service; never publish key, never insert rates into the app.
+    require('./verifyCurrencyapiCbu').verify().then(result => {
+      console.log(JSON.stringify({diagnostic:'CBU_CURRENCYAPI_AUTHENTICATED_CHECK',...result}));
+    }).catch(error => {
+      console.log(JSON.stringify({diagnostic:'CBU_CURRENCYAPI_AUTHENTICATED_CHECK',
+        valid:false,error:error.message}));
+    });
+  } else {
+    console.log(JSON.stringify({diagnostic:'CBU_CURRENCYAPI_AUTHENTICATED_CHECK',
+      valid:false,reason:'CURRENCYAPI_KEY not configured (expected)'}));
+  }
   runKeylessCbuMirrorProbe().catch(error=>console.log(JSON.stringify({diagnostic:"CBU_KEYLESS_PROBE_FATAL",error:error?.name||"Error"})));
   runMirrorDiagnostic().catch(error=>console.log(JSON.stringify({diagnostic:"CBU_ALTERNATIVES_FAILED",error:error?.name||"Error"})));
   run().catch(error => console.log(JSON.stringify({ diagnostic: "CBU_FRANKFURT_PROBE_FATAL", error: error?.name || "Error" })));
