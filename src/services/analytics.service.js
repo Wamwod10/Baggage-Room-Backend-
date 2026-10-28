@@ -232,6 +232,19 @@ const mergeOrderAnalyticsIntoReport = (report, orderAnalytics) => ({
   debtAnalytics: orderAnalytics.debtAnalytics,
 });
 
+const fxRevenueTotals = async (where) => {
+  const movements = await prisma.cashMovement.groupBy({
+    by: ["direction", "currency"],
+    where: { ...where, type: { in: ["ORDER_PAYMENT", "DEBT_CLOSE"] },
+      currency: { not: "UZS" }, uzsEquivalent: { not: null } },
+    _sum: { uzsEquivalent: true },
+  });
+  return movements.reduce((total, item) =>
+    total + (item.direction === "OUT" ? -1 : 1) * Number(item._sum.uzsEquivalent || 0), 0);
+};
+
+// Foreign-currency equivalents are available only for newly snapshotted payment rows.
+// Never silently reinterpret historical foreign payments at a later exchange rate.
 const dashboardUncached = async (user, query) => {
   const timer = createTimer("analytics.dashboard");
   const scopedBranchId = getScopedBranchId(user, query.branchId);
@@ -279,6 +292,7 @@ const dashboardUncached = async (user, query) => {
     ]);
     shiftStatus = buildShiftReports({ shifts, movements: shiftMovements, debts: shiftDebts, orders: shiftOrders });
   }
+  const fxRevenueUzsEquivalent = await fxRevenueTotals({ ...scope, createdAt: { gte: today } });
   const todaySummary = summarizeMovements(todayMovements);
   const todayPayments = todaySummary.groups.revenueIn;
   const todayOut = todaySummary.groups.balanceOut;
@@ -298,6 +312,8 @@ const dashboardUncached = async (user, query) => {
 
   const result = {
     todayRevenue,
+    fxRevenueUzsEquivalent,
+    todayRevenueUzsWithNewFx: todayRevenue + fxRevenueUzsEquivalent,
     totalRevenue: todayRevenue,
     revenue: todayRevenue,
     activeOrders,
@@ -411,6 +427,7 @@ const reportsUncached = async (user, query) => {
   const totalRevenue = revenueByCurrency.UZS;
   const totalExpenses = expensesByCurrency.UZS;
   const totalInkassa = inkassaByCurrency.UZS;
+  const fxRevenueUzsEquivalent = await fxRevenueTotals({ ...scope, ...range });
   const totalOrders = orderAnalytics.orderStats.totalOrders;
 
   const revenueByDay = {};
@@ -486,6 +503,8 @@ const reportsUncached = async (user, query) => {
     orderStats: orderAnalytics.orderStats,
     financeAnalytics: {
       revenue: totalRevenue,
+      fxRevenueUzsEquivalent,
+      revenueUzsWithNewFx: totalRevenue + fxRevenueUzsEquivalent,
       totalExpenses,
       totalInkassa,
       netProfit: totalRevenue - totalExpenses - totalInkassa,
