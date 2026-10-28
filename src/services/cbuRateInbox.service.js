@@ -49,11 +49,18 @@ async function acceptSignedEnvelope(raw, headers, { now = new Date(), prisma = r
   try { body = JSON.parse(raw.toString('utf8')); }
   catch { throw new AppError('Invalid CBU JSON body', 400); }
   const record = validateEnvelope(body, now);
-  await prisma.cbuRateInbox.upsert({
-    where: { day: record.day },
-    create: { day: record.day, officialRows: record.rates, fetchedAt: record.fetchedAt, receivedAt: now },
-    update: { officialRows: record.rates, fetchedAt: record.fetchedAt, receivedAt: now },
-  });
+  // Atomic monotonic upsert: a replayed/older but correctly signed snapshot
+  // must never replace a newer official snapshot for this day.
+  const affected = await prisma.$executeRaw`
+    INSERT INTO "CbuRateInbox" ("day", "officialRows", "fetchedAt", "receivedAt")
+    VALUES (${record.day}, CAST(${JSON.stringify(record.rates)} AS jsonb), ${record.fetchedAt}, ${now})
+    ON CONFLICT ("day") DO UPDATE
+      SET "officialRows" = EXCLUDED."officialRows",
+          "fetchedAt" = EXCLUDED."fetchedAt",
+          "receivedAt" = EXCLUDED."receivedAt"
+    WHERE "CbuRateInbox"."fetchedAt" < EXCLUDED."fetchedAt"
+  `;
+  if (affected !== 1) throw new AppError('Older or duplicate CBU sync rejected', 409);
   return { accepted: true, date: record.day, currencies: CURRENCIES.size };
 }
 
