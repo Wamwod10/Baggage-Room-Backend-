@@ -2,6 +2,8 @@ const prisma = require("../config/prisma");
 const { branchWhere } = require("../utils/scope");
 const { dateRangeWhere } = require("../utils/date");
 const { paginated } = require("../utils/pagination");
+const { getRate, paymentFxFields } = require("./cbuFx.service");
+const { AppError } = require("../utils/response");
 
 const findOpenShift = (tx, branchId) => tx.shift.findFirst({
   where: { branchId, status: "OPEN" },
@@ -9,8 +11,11 @@ const findOpenShift = (tx, branchId) => tx.shift.findFirst({
 });
 
 const createCashMovement = async ({ tx = prisma, branchId, shiftId, orderId = null, type, direction, amount, currency, paymentType = null, note = null, createdById }) => {
+  let fx;
+  try { fx = await getRate(currency || "UZS"); }
+  catch { throw new AppError("CBU kursini olib bo‘lmadi. To‘lov saqlanmadi.", 503); }
   return tx.cashMovement.create({
-    data: { branchId, shiftId, orderId, type, direction, amount, currency, paymentType, note, createdById },
+    data: { branchId, shiftId, orderId, type, direction, amount, currency, paymentType, note, createdById, ...paymentFxFields(amount, currency || "UZS", fx) },
   });
 };
 
