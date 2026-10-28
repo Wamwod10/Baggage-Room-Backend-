@@ -100,6 +100,36 @@ test("Inkassa and doplata Telegram messages use real admin and safe business ide
   assert.doesNotMatch(`${inkassa}\n${doplata}`, /undefined|null|branchId|order\.id/);
 });
 
+test("TSV 96-hour prepaid pickup stays free within grace even after 72 hours", () => {
+  const checkIn = new Date("2026-10-24T08:16:00.000Z");
+  const plannedCheckOut = new Date("2026-10-28T08:16:00.000Z");
+  const xlTariff = {
+    price1h: 12000, price12h: 110000, price24h: 200000,
+    price48h: 380000, price72h: 550000, after72hPrice: 80000,
+  };
+  const order = {
+    checkIn, plannedCheckOut, currency: "UZS",
+    finalAmount: 320000, discountAmount: 0,
+    items: [{ size: "XL", count: 1, tariffHours: 96, unitPrice: 320000 }],
+    pricingSnapshot: {
+      version: 1, tariffs: { XL: xlTariff },
+      dailyRates: { XL: 80000 }, exchangeRate: 1,
+    },
+  };
+  const tariffs = [{ ...xlTariff, size: "XL" }];
+  const quote = (at) => {
+    const actualTime = new Date(at);
+    return orderServiceInternals.calculateOvertimeAmount({
+      order, tariffs, overtimeHours: overtimeHoursAfterGrace(plannedCheckOut, actualTime), actualTime,
+    });
+  };
+  assert.equal(quote("2026-10-28T08:16:00.000Z"), 0);
+  // Production incident TSV-005376: pickup at 13:18:58 Tashkent time.
+  assert.equal(quote("2026-10-28T08:18:58.043Z"), 0);
+  assert.equal(quote("2026-10-28T08:31:00.000Z"), 0);
+  assert.equal(quote("2026-10-28T08:31:01.000Z"), 80000);
+});
+
 test("overtime stays free through 15 minutes and charges one hour after that", () => {
   const checkout = new Date("2026-07-09T10:00:00.000Z");
   assert.equal(OVERTIME_GRACE_MINUTES, 15);
