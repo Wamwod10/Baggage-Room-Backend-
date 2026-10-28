@@ -37,6 +37,19 @@ test('CBU uses the Asia/Tashkent business date, not UTC date', () => {
   assert.equal(cbu.tashkentDate(new Date('2026-10-28T18:59:59Z')), '2026-10-28');
 });
 
+test('CBU rates stale across multiple business days are never used for payments', () => {
+  const rows = ['USD','EUR','RUB','KZT','TJS'].map(
+    code => mk(code, 1, code === 'RUB' ? '145.96' : '12000', '22.10.2026')
+  );
+  assert.throws(() => cbu._internals.validateRates(rows, '2026-10-28'), /out of range/);
+  const friday = rows.map(row => ({...row, Date:'23.10.2026'}));
+  // Saturday, Sunday and first weekday after Friday can reuse the last rate,
+  // but a second elapsed weekday without official publication is blocked.
+  assert.equal(cbu._internals.validateRates(friday, '2026-10-26').RUB.rate, 145.96);
+  assert.throws(() => cbu._internals.validateRates(friday, '2026-10-27'), /out of range/);
+  assert.equal(cbu._internals.countElapsedWeekdays('2026-10-22','2026-10-28'), 2);
+});
+
 test('official CBU fallback accepts only correctly dated official feed, not stale currency rows', async (t) => {
   const priorFetch = global.fetch;
   const requested = '2026-08-17';
