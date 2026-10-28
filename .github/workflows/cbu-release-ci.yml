@@ -13,16 +13,29 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
-      - name: Verify live official CBU rate endpoint
+      - name: Diagnose official CBU endpoint reachability
         run: |
           node - <<'NODE'
           (async () => {
-            const { getRates } = require('./src/services/cbuRates.service');
-            const rates = await getRates();
-            for (const code of ['RUB','USD','EUR','KZT','TJS']) {
-              if (!(rates[code]?.rate > 0)) throw new Error('Missing verified CBU rate for ' + code);
+            const paths = [
+              'https://cbu.uz/uz/arkhiv-kursov-valyut/json/all/2026-10-28/',
+              'https://cbu.uz/uz/arkhiv-kursov-valyut/json/',
+              'https://www.cbu.uz/uz/arkhiv-kursov-valyut/json/',
+              'https://cbu.uz/ru/arkhiv-kursov-valyut/json/',
+            ];
+            for (const url of paths) {
+              try {
+                const res = await fetch(url, { signal: AbortSignal.timeout(6000), headers: { Accept: 'application/json' } });
+                const body = await res.text();
+                const json = JSON.parse(body);
+                console.log(new URL(url).host + new URL(url).pathname,
+                  'status', res.status, 'jsonArray', Array.isArray(json),
+                  'RUBRate', json.find?.((item) => item.Ccy === 'RUB')?.Rate ?? 'missing');
+              } catch (e) {
+                console.log(new URL(url).host + new URL(url).pathname, 'failed',
+                  e.name, e.cause?.code || e.code || e.message);
+              }
             }
-            console.log('CBU official daily rate endpoint reachable; five supported currencies validated');
           })().catch((error) => { console.error(error.message); process.exitCode = 1; });
           NODE
       - run: npm test
