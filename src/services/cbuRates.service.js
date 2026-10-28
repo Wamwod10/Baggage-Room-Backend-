@@ -3,7 +3,23 @@ const { currencyFractionDigits } = require('../utils/money');
 
 // CBU official JSON reference rates. All rates are quoted in UZS per Nominal foreign units.
 const CBU_BASE = 'https://cbu.uz/uz/arkhiv-kursov-valyut/json/';
-const CBU_RATE_MAX_AGE_DAYS = 7;
+// Fail closed on delayed publications. Allow one elapsed weekday for
+// weekends/time-zone publication lag; do not silently accept a multi-day-old
+// third-party snapshot as today's CBU rate. Longer public holidays require a
+// separately verified schedule rather than guessing.
+const CBU_RATE_MAX_WEEKDAY_AGE = 1;
+const countElapsedWeekdays = (fromDay, toDay) => {
+  const from = Date.parse(fromDay + 'T00:00:00Z');
+  const to = Date.parse(toDay + 'T00:00:00Z');
+  if (!Number.isFinite(from) || !Number.isFinite(to) || to < from) return Infinity;
+  let n = 0;
+  for (let t = from + 86400000; t <= to; t += 86400000) {
+    const day = new Date(t).getUTCDay();
+    if (day !== 0 && day !== 6) n++;
+    if (n > CBU_RATE_MAX_WEEKDAY_AGE) return n;
+  }
+  return n;
+};
 const CURRENCIES = ['USD', 'EUR', 'RUB', 'KZT', 'TJS'];
 const TTL_MS = 15 * 60 * 1000;
 let cached = null;
@@ -46,10 +62,11 @@ const validateRates = (body, requestedDay = null) => {
     if (requestedDay) {
       const effective = Date.parse(rates[currency].effectiveDate + 'T00:00:00Z');
       const requested = Date.parse(requestedDay + 'T00:00:00Z');
-      const age = (requested - effective) / 86400000;
-      // Weekends/holidays use the most recent published CBU rate.
-      // Reject future-dated or unusually stale snapshots rather than misprice payments.
-      if (!Number.isFinite(age) || age < 0 || age > CBU_RATE_MAX_AGE_DAYS) {
+      const elapsedWeekdays = countElapsedWeekdays(rates[currency].effectiveDate, requestedDay);
+      // Saturday/Sunday can reuse Friday's official rate; unusually stale
+      // weekday publications must never silently price current payments.
+      if (!Number.isFinite(effective) || !Number.isFinite(requested) ||
+          requested < effective || elapsedWeekdays > CBU_RATE_MAX_WEEKDAY_AGE) {
         throw new Error('CBU rate out of range for ' + currency);
       }
     }
@@ -141,4 +158,4 @@ const quoteSnapshot = (amountMinor, fx) => ({
 });
 
 module.exports = { getRate, getRates, tashkentDate, paymentSnapshot, quoteSnapshot, toUzsEquivalent,
-  _internals: { parseRate, validateRates, dateFromCbu } };
+  _internals: { parseRate, validateRates, dateFromCbu, countElapsedWeekdays } };
