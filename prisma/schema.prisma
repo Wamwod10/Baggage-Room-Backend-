@@ -358,6 +358,9 @@ model CashMovement {
   direction    CashDirection
   amount       Int
   currency     Currency          @default(UZS)
+  fxRate       Decimal?          @db.Decimal(20, 8)
+  fxRateDate   DateTime?         @db.Date
+  uzsEquivalent BigInt?
   paymentType  PaymentType?
   note         String?
   financialKind String?
