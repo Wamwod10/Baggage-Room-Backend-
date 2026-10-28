@@ -1337,7 +1337,7 @@ const pickupOrder = async (user, id, body, { idempotencyKey } = {}) => {
     if (!order || !["ACTIVE", "DELAYED"].includes(order.status)) throw new AppError("Active order not found", 404);
     await timer.time("branch lookup", async () => getScopedBranchId(user, order.branchId));
     order = await financialEdit.convertForPickup(tx, order,
-      pickupFx ? { ...body, exchangeRate: pickupFx.rate } : body, user, requestKey);
+      pickupFx ? { ...body, exchangeRate: pickupFx.rate } : body, user, requestKey, pickupFx);
     if (pickupFx && pickupFx.currency !== order.currency) throw new AppError('Payment currency changed. Retry the pickup.', 409);
     const discounted = withRecordedDiscount(order);
     if (discounted !== order) {
