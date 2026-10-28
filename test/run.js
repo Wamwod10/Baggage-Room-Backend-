@@ -1,3 +1,4 @@
+require('./currencyapiProbe.test');
 require('./cbuRateInbox.test');
 require('./cbuRates.test');
 require("./moneySheets.test");
