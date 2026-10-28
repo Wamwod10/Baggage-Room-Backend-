@@ -951,6 +951,13 @@ const updateOrder = async (user, id, body, { idempotencyKey } = {}) => {
     if (replay.id !== id) throw new AppError("Idempotency key belongs to another order", 409);
     return replay;
   }
+  // A new payment or payment correction receives today's verified CBU rate.
+  const preEdit = await prisma.order.findUnique({ where: { id }, select: { branchId: true, currency: true } });
+  if (!preEdit) throw new AppError('Order not found', 404);
+  getScopedBranchId(user, preEdit.branchId);
+  const needsPaymentFx = ['currency', 'paymentType', 'realPaidAmount', 'overtimeAmount', 'overtimePaymentType']
+    .some((field) => body[field] !== undefined);
+  const editFx = needsPaymentFx ? await cbuRates.getRate(body.currency || preEdit.currency) : null;
   let result;
   try {
     result = await prisma.$transaction(async (tx) => {
@@ -959,7 +966,9 @@ const updateOrder = async (user, id, body, { idempotencyKey } = {}) => {
     if (!current) throw new AppError("Order not found", 404);
     getScopedBranchId(user, current.branchId);
     if (!["ACTIVE", "DELAYED", "PICKED_UP"].includes(current.status)) throw new AppError("Only active or picked up orders can be edited", 400);
-    const financialPlan = financialEdit.planEdit(current, body, user);
+    if (editFx && editFx.currency !== (body.currency || current.currency)) throw new AppError('Payment currency changed. Retry this edit.', 409);
+    const financialPlan = financialEdit.planEdit(current,
+      editFx ? { ...body, exchangeRate: editFx.rate } : body, user);
     const staffDiscountOnly = !financialPlan && isStaffDiscountOnlyEdit(current, body);
     if (financialPlan) {
       const requests = await tx.financialRequest.findMany({ where: { orderId: id, status: { not: 'REJECTED' } } });
@@ -1146,7 +1155,7 @@ const updateOrder = async (user, id, body, { idempotencyKey } = {}) => {
       throw new AppError("Order was changed by another operator. Reload and try again.", 409);
     }
     const updatedBase = await tx.order.findUnique({ where: { id }, include: includeOrder });
-    if (financialPlan) await financialEdit.recordEdit(tx, current, updatedBase, financialPlan, user, requestKey, body.priceChangeReason);
+    if (financialPlan) await financialEdit.recordEdit(tx, current, updatedBase, financialPlan, user, requestKey, body.priceChangeReason, editFx);
     const nextDebtAmount = financialPlan && current.debt?.status === 'OPEN' ? financialEdit.debtBalance(current, financialPlan)
       : Math.max(0, Number(updatedBase.finalAmount || 0) - Number(updatedBase.realPaidAmount || 0));
     const financialCurrencyChanged = financialPlan && updatedBase.currency !== current.currency;
@@ -1310,7 +1319,7 @@ const pickupOrder = async (user, id, body, { idempotencyKey } = {}) => {
     let order = await timer.time("order lookup", () => tx.order.findUnique({ where: { id }, include: includeOrder }));
     if (!order || !["ACTIVE", "DELAYED"].includes(order.status)) throw new AppError("Active order not found", 404);
     await timer.time("branch lookup", async () => getScopedBranchId(user, order.branchId));
-    order = await financialEdit.convertForPickup(tx, order, body, user, requestKey);
+    order = await financialEdit.convertForPickup(tx, order, { ...body, exchangeRate: pickupFx.rate }, user, requestKey);
     if (pickupFx.currency !== order.currency) throw new AppError('Payment currency changed. Retry the pickup.', 409);
     const discounted = withRecordedDiscount(order);
     if (discounted !== order) {
