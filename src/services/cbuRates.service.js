@@ -66,6 +66,17 @@ const getRates = async (now = new Date()) => {
   if (cached?.day === day && Date.now() - cached.fetchedAt < TTL_MS) return cached.rates;
   if (pending?.day === day) return pending.promise;
   const promise = (async () => {
+    // Optional authenticated domestic worker feed, stored in our own database.
+    // Never fall back to stale browser config or untrusted third-party FX services.
+    if (process.env.CBU_RELAY_ENABLED === '1') {
+      try {
+        const rates = await require('./cbuRateInbox.service').readFreshRates(day, { now });
+        if (rates) {
+          cached = { day, fetchedAt: Date.now(), rates };
+          return rates;
+        }
+      } catch { /* Ignore missing/unavailable inbox; direct official feed is still attempted. */ }
+    }
     // Only the Central Bank's OWN endpoints are trusted. The dated archive is
     // primary; the official current-rate feed is used for weekends/holidays.
     for (const url of [CBU_BASE + 'all/' + day + '/', CBU_BASE]) {
