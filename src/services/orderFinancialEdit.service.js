@@ -87,7 +87,7 @@ const recordEdit = async (tx, order, updated, plan, user, key, reason, fx) => {
     const originalFx = source.fxRateDate && source.uzsEquivalent != null
       ? { fxRate: source.fxRate, fxRateDate: source.fxRateDate, fxNominal: source.fxNominal,
         fxSource: source.fxSource, uzsEquivalent: source.uzsEquivalent }
-      : fx && fx.currency === source.currency ? paymentSnapshot(source.amount, fx) : {};
+      : {}; // Never revalue a historical receipt using today's exchange rate.
     const nextFx = fx && fx.currency === currency ? paymentSnapshot(amount, fx) : {};
     if (source.amount > 0) await tx.cashMovement.create({ data: { ...base, direction: 'OUT', amount: source.amount, currency: source.currency,
       paymentType: source.paymentType, financialKind: 'EDIT_CORRECTION', note: `Edit correction source:${source.id}`,
