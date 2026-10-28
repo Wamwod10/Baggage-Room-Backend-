@@ -886,6 +886,9 @@ const createOrder = async (user, body, { idempotencyKey } = {}) => {
     const createdOrder = await tx.order.findUnique({ where: { id: order.id }, include: orderMutationInclude });
     const sheetsPayload = googleSheets._internals.orderPayload('NEW_ORDER', createdOrder, {
       amount: googleSheets._internals.newOrderSheetAmount(createdOrder),
+      // The Apps Script checks the stable order number + operation label across retries.
+      // This prevents a duplicate NEW_ORDER row even after its short-lived cache expires.
+      deliveryIdentity: true, operationName: 'Хранение багажа',
     });
     await tx.financialOutbox.create({ data: {
       deliveryKey: `NEW_ORDER_SHEETS:${order.id}`, action: 'PAYMENT_SHEETS', payload: sheetsPayload,
