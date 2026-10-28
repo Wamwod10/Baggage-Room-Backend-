@@ -86,6 +86,16 @@ test('staff can discount existing active orders but cannot alter recorded receip
   assert.throws(() => controls.assertDiscountReason(' '), /sababi/);
   assert.throws(() => controls.assertPricePermission({ id: 'employee', role: 'BRANCH_ADMIN' }, 'some reason', ''), /huquqi/);
 });
+test('completed baggage corrections preserve cash and reconcile price without a refund', () => {
+  const original = { finalAmount: 180000, realPaidAmount: 180000 };
+  assert.deepEqual(controls.completedOrderReprice(original, 120000), {
+    calculatedAmount: 120000, finalAmount: 120000, discountAmount: 0, paymentDifference: 60000,
+  });
+  assert.deepEqual(controls.completedOrderReprice(original, 220000), {
+    calculatedAmount: 220000, finalAmount: 180000, discountAmount: 40000, paymentDifference: 0,
+  });
+  assert.throws(() => controls.completedOrderReprice(original, 120000, 150000), /exceeds/);
+});
 test('structured baggage rejects zero, negative, fractional and airport XL', () => {
   for (const count of [0, -1, 1.5]) assert.throws(() => controls.validateBaggage([{ size: 'S', count }], 'TIA'));
   assert.throws(() => controls.validateBaggage([{ size: 'XL', count: 1 }], 'TIA'));

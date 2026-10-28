@@ -1,6 +1,6 @@
 const { AppError } = require('../utils/response');
 const { currencyFractionDigits } = require('../utils/money');
-const { assertMinorAmount, assertPricePermission } = require('./financialControls');
+const { assertMinorAmount, assertPricePermission, assertDiscountReason } = require('./financialControls');
 const { findOpenShift } = require('./cashMovement.service');
 
 const convertMinor = (amount, from, to, sourceRate = 1, targetRate = 1) => {
@@ -20,7 +20,7 @@ const convertMinor = (amount, from, to, sourceRate = 1, targetRate = 1) => {
   return assertMinorAmount(Number((numerator * 2n + denominator) / (2n * denominator)));
 };
 
-const planEdit = (order, body, user) => {
+const planEdit = (order, body, user, { requireManagerApproval = false } = {}) => {
   const currency = body.currency || order.currency;
   const paymentType = body.paymentType || order.paymentType;
   const amountChanged = body.realPaidAmount !== undefined && body.realPaidAmount !== order.realPaidAmount;
@@ -29,7 +29,8 @@ const planEdit = (order, body, user) => {
     || overtimeType !== order.overtimePaymentType;
   if (currency === order.currency && paymentType === order.paymentType && !amountChanged && !body.paidPaymentType && !overtimeChanged) return null;
   if (overtimeChanged && (overtimeType === 'DEBT' || order.overtimePaymentType === 'DEBT')) throw new AppError('Use the debt/payment workflow', 400);
-  assertPricePermission(user, body.priceChangeReason);
+  if (requireManagerApproval) assertPricePermission(user, body.priceChangeReason);
+  else assertDiscountReason(body.priceChangeReason);
   if (body.paidPaymentType && !['CASH','CARD','TERMINAL','CLICK','PAYME','TRANSFER'].includes(body.paidPaymentType)) throw new AppError('Haqiqiy olingan to‘lov turini tanlang', 400);
   if ((paymentType === 'DEBT') !== (order.paymentType === 'DEBT')) throw new AppError('Qarzga o‘tkazish yoki qarzni yopish uchun qarz/to‘lov tartibidan foydalaning', 400);
   const sourceRate = order.currency === 'UZS' ? 1 : order.pricingSnapshot?.exchangeRate || body.sourceExchangeRate;
@@ -111,7 +112,7 @@ const debtBalance = (order, plan) => {
 const convertForPickup = async (tx, order, body, user, key) => {
   if (!body.currency || body.currency === order.currency) return order;
   const plan = planEdit(order, { currency: body.currency, exchangeRate: body.exchangeRate,
-    sourceExchangeRate: body.sourceExchangeRate, priceChangeReason: body.priceChangeReason }, user);
+    sourceExchangeRate: body.sourceExchangeRate, priceChangeReason: body.priceChangeReason }, user, { requireManagerApproval: true });
   const requests = await tx.financialRequest.findMany({ where: { orderId: order.id, status: { not: 'REJECTED' } } });
   if (requests.length) throw new AppError('Avval mavjud moliyaviy so‘rovlarni yarashtiring', 409);
   const items = [];

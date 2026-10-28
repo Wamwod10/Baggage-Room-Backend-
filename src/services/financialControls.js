@@ -34,6 +34,16 @@ const isStaffDiscountOnlyEdit = (order, body) => {
   }
   return true;
 };
+// Correct completed-order baggage metadata without rewriting historical cash receipts.
+// Price reductions are reflected in the order totals; actual cash stays unchanged.
+const completedOrderReprice = (order, calculatedAmount, requestedFinalAmount) => {
+  assertMinorAmount(calculatedAmount);
+  const finalAmount = requestedFinalAmount === undefined
+    ? Math.min(order.finalAmount, calculatedAmount) : assertMinorAmount(requestedFinalAmount);
+  if (finalAmount > calculatedAmount) throw new AppError('Final amount exceeds corrected price', 400);
+  return { calculatedAmount, finalAmount, discountAmount: calculatedAmount - finalAmount,
+    paymentDifference: order.realPaidAmount - finalAmount };
+};
 const validateBaggage = (items, branchCode) => {
   if (!Array.isArray(items) || !items.length) throw new AppError('At least one baggage item is required', 400);
   const sizes = ['S', 'M', 'L', ...(['TSV', 'TJV', 'SVK'].includes(branchCode) ? ['XL'] : [])];
@@ -78,4 +88,4 @@ const assertPickupTotal = (order, body, overtimeAmount, overtimePaymentType) => 
 // Serialize order/payment/debt mutations on the same row, including pickup.
 const lockOrder = (tx, id) => tx.$queryRaw`SELECT "id" FROM "Order" WHERE "id" = ${id} FOR UPDATE`;
 
-module.exports = { assertMinorAmount, assertPricePermission, assertDiscountReason, isStaffDiscountOnlyEdit, validateBaggage, paidForOrder, withRecordedDiscount, assertPickupPaid, assertPickupTotal, lockOrder };
+module.exports = { assertMinorAmount, assertPricePermission, assertDiscountReason, isStaffDiscountOnlyEdit, completedOrderReprice, validateBaggage, paidForOrder, withRecordedDiscount, assertPickupPaid, assertPickupTotal, lockOrder };

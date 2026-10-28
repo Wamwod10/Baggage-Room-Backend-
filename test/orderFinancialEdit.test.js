@@ -28,7 +28,8 @@ test('authorized edit converts price, discount and real receipts together', () =
 test('method correction preserves amount, requires permission/reason and never creates debt', () => {
   assert.equal(planEdit(order, { paymentType: 'TERMINAL', priceChangeReason: 'Wrong method' }, user).movements[0].paymentType, 'TERMINAL');
   assert.throws(() => planEdit(order, { paymentType: 'TERMINAL' }, user));
-  assert.throws(() => planEdit(order, { paymentType: 'TERMINAL', priceChangeReason: 'test' }, { id: 'employee' }));
+  assert.doesNotThrow(() => planEdit(order, { paymentType: 'TERMINAL', priceChangeReason: 'test' }, { id: 'employee' }));
+  assert.throws(() => rawPlanEdit(order, { paymentType: 'TERMINAL', priceChangeReason: 'test' }, { id: 'employee' }, { requireManagerApproval: true }), /huquqi/);
   assert.throws(() => planEdit(order, { paymentType: 'DEBT', priceChangeReason: 'test' }, user));
   assert.equal(planEdit(order, { paymentType: 'TERMINAL', realPaidAmount: 1, priceChangeReason: 'test' }, user).data.finalAmount, 1);
 });

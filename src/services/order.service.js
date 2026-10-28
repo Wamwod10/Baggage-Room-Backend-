@@ -22,7 +22,7 @@ const { markAnalyticsMutation } = require("./analyticsCache");
 const { normalizePaymentType, paymentLabel } = require("../utils/payment");
 const { requireIdempotencyKey } = require("../utils/idempotency");
 const financialEdit = require('./orderFinancialEdit.service');
-const { assertMinorAmount, assertPricePermission, assertDiscountReason, isStaffDiscountOnlyEdit, validateBaggage, assertPickupPaid, assertPickupTotal, withRecordedDiscount, lockOrder } = require('./financialControls');
+const { assertMinorAmount, assertPricePermission, assertDiscountReason, isStaffDiscountOnlyEdit, completedOrderReprice, validateBaggage, assertPickupPaid, assertPickupTotal, withRecordedDiscount, lockOrder } = require('./financialControls');
 const {
   overtimeHoursAfterGrace,
   isOverdueAfterGrace,
@@ -883,7 +883,17 @@ const createOrder = async (user, body, { idempotencyKey } = {}) => {
     await timer.time("audit", () =>
       audit({ tx, branchId, userId: user.id, entityType: "Order", entityId: order.id, action: "ORDER_CREATE", newValue: order, description: "Order created" }),
     );
-    return tx.order.findUnique({ where: { id: order.id }, include: orderMutationInclude });
+    const createdOrder = await tx.order.findUnique({ where: { id: order.id }, include: orderMutationInclude });
+    const sheetsPayload = googleSheets._internals.orderPayload('NEW_ORDER', createdOrder, {
+      amount: googleSheets._internals.newOrderSheetAmount(createdOrder),
+      // The Apps Script checks the stable order number + operation label across retries.
+      // This prevents a duplicate NEW_ORDER row even after its short-lived cache expires.
+      deliveryIdentity: true, operationName: 'Хранение багажа',
+    });
+    await tx.financialOutbox.create({ data: {
+      deliveryKey: `NEW_ORDER_SHEETS:${order.id}`, action: 'PAYMENT_SHEETS', payload: sheetsPayload,
+    } });
+    return createdOrder;
     }));
   } catch (error) {
     const target = Array.isArray(error?.meta?.target) ? error.meta.target.join(",") : String(error?.meta?.target || "");
@@ -912,7 +922,7 @@ const createOrder = async (user, body, { idempotencyKey } = {}) => {
   // order response open for up to the provider timeout.
   markAnalyticsMutation(created);
   void sendNewOrderTelegram(created, { userId: user.id });
-  googleSheets.sendSafely(() => googleSheets.sendNewOrder(created), { action: "NEW_ORDER", branchId, userId: user.id, entityType: "Order", entityId: created.id });
+  // NEW_ORDER Sheets delivery is durable and retried from FinancialOutbox, inserted within the order transaction.
   timer.end({ ok: true, outcome: "created", warnings: warnings.length });
   return { order: created, warnings, telegram: { sent: null, pending: true } };
 };
@@ -953,7 +963,7 @@ const updateOrder = async (user, id, body, { idempotencyKey } = {}) => {
     }
     if (body.discountReason !== undefined && body.discountReason !== current.discountReason && current.discountAmount > 0) {
       if (staffDiscountOnly) assertDiscountReason(body.priceChangeReason || body.discountReason);
-      else assertPricePermission(user, body.discountReason);
+      else assertDiscountReason( body.discountReason);
     }
     const financialChanged = ['finalAmount', 'realPaidAmount', 'currency', 'paymentType', 'overtimeAmount', 'overtimePaymentType']
       .some((key) => body[key] !== undefined && body[key] !== current[key]);
@@ -962,7 +972,7 @@ const updateOrder = async (user, id, body, { idempotencyKey } = {}) => {
         .some((key) => body[key] !== undefined && body[key] !== current[key]);
       if (forbidden && !financialPlan) throw new AppError('Financial changes require an approved financial operation', 403);
       if (staffDiscountOnly) assertDiscountReason(body.priceChangeReason || body.discountReason);
-      else assertPricePermission(user, body.priceChangeReason || body.discountReason);
+      else assertDiscountReason( body.priceChangeReason || body.discountReason);
     }
     if (!financialPlan && current.overtimeAmount > 0 && body.doplataPaymentType !== undefined && normalizePaymentType(body.doplataPaymentType) !== current.overtimePaymentType
       || !financialPlan && body.overtimeCurrency !== undefined && body.overtimeCurrency !== current.currency) {
@@ -977,7 +987,7 @@ const updateOrder = async (user, id, body, { idempotencyKey } = {}) => {
       const plannedCheckOut = new Date(body.plannedCheckOut || body.checkOut);
       if (Number.isNaN(plannedCheckOut.getTime())) throw new AppError("Invalid checkOut", 400);
       if (Math.abs(plannedCheckOut - current.plannedCheckOut) >= 60000) {
-        assertPricePermission(user, body.priceChangeReason);
+        assertDiscountReason( body.priceChangeReason);
       }
       data.plannedCheckOut = plannedCheckOut;
       if (["ACTIVE", "DELAYED"].includes(current.status)) {
@@ -993,6 +1003,7 @@ const updateOrder = async (user, id, body, { idempotencyKey } = {}) => {
     if (body.finalAmount !== undefined) data.finalAmount = Number(body.finalAmount);
     if (body.finalAmount !== undefined && body.finalAmount !== current.finalAmount) {
       assertMinorAmount(body.finalAmount);
+      if (body.finalAmount > current.calculatedAmount && !Array.isArray(body.items)) throw new AppError('Price cannot exceed calculated amount', 400);
       data.discountAmount = Math.max(0, current.calculatedAmount - body.finalAmount);
       data.discountReason = body.priceChangeReason || body.discountReason;
       data.priceApprovedById = user.id;
@@ -1071,7 +1082,7 @@ const updateOrder = async (user, id, body, { idempotencyKey } = {}) => {
         }
       }
       if (itemChanged) {
-        if (current.status === 'PICKED_UP') throw new AppError('Completed baggage cannot be repriced', 403);
+        if (current.status === 'PICKED_UP') assertDiscountReason(body.priceChangeReason || body.discountReason);
         const nextItems = await tx.orderItem.findMany({ where: { orderId: id } });
         validateBaggage(nextItems, current.branch.code);
         const tariffs = await tx.tariff.findMany({ where: { branchId: current.branchId } });
@@ -1096,11 +1107,17 @@ const updateOrder = async (user, id, body, { idempotencyKey } = {}) => {
           calculatedAmount = assertMinorAmount(calculatedAmount + originalPrice);
           await tx.orderItem.update({ where: { id: row.id }, data: { unitPrice, originalPrice, finalPrice: Math.max(0, originalPrice - row.discountAmount) } });
         }
-        if (current.discountAmount > calculatedAmount) throw new AppError('Baggage change would exceed approved discount', 409);
-        data.calculatedAmount = calculatedAmount;
-        if (body.finalAmount === undefined || body.finalAmount === current.finalAmount) data.finalAmount = calculatedAmount - current.discountAmount;
-        else data.discountAmount = Math.max(0, calculatedAmount - data.finalAmount);
-        data.paymentDifference = current.realPaidAmount - data.finalAmount;
+        if (current.status === 'PICKED_UP') {
+          Object.assign(data, completedOrderReprice(current, calculatedAmount,
+            body.finalAmount !== undefined && body.finalAmount !== current.finalAmount ? body.finalAmount : undefined));
+        } else {
+          if (current.discountAmount > calculatedAmount) throw new AppError('Baggage change would exceed approved discount', 409);
+          data.calculatedAmount = calculatedAmount;
+          if (body.finalAmount === undefined || body.finalAmount === current.finalAmount) data.finalAmount = calculatedAmount - current.discountAmount;
+          else data.discountAmount = Math.max(0, calculatedAmount - data.finalAmount);
+          if (data.finalAmount > calculatedAmount) throw new AppError('Final amount exceeds calculated price', 400);
+          data.paymentDifference = current.realPaidAmount - data.finalAmount;
+        }
         await tx.locker.updateMany({ where: { currentOrderId: id, id: { notIn: [...new Set(nextItems.map((row) => row.lockerId))] } }, data: { status: 'EMPTY', currentOrderId: null } });
       }
     }
