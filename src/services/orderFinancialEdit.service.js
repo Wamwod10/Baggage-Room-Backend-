@@ -81,11 +81,20 @@ const recordEdit = async (tx, order, updated, plan, user, key, reason) => {
   const shift = await findOpenShift(tx, order.branchId);
   if (!shift) throw new AppError('Open shift required to correct payment/currency', 409);
   const sheets = require('./googleSheets.service');
+  const { getRate, paymentFxFields } = require('./cbuFx.service');
   for (const { source, amount, currency, paymentType } of plan.movements) {
     const base = { branchId: order.branchId, shiftId: shift.id, orderId: order.id, type: source.type, createdById: user.id };
-    if (source.amount > 0) await tx.cashMovement.create({ data: { ...base, direction: 'OUT', amount: source.amount, currency: source.currency,
+    const priorFx = source.fxRate && source.fxRateDate && source.uzsEquivalent !== null ? {
+      fxRate: source.fxRate, fxRateDate: source.fxRateDate, uzsEquivalent: source.uzsEquivalent,
+    } : {};
+    let newFx = {};
+    if (amount > 0) {
+      try { newFx = paymentFxFields(amount, currency, await getRate(currency)); }
+      catch { throw new AppError('CBU kursi olinmadi. Tuzatish saqlanmadi.', 503); }
+    }
+    if (source.amount > 0) await tx.cashMovement.create({ data: { ...base, ...priorFx, direction: 'OUT', amount: source.amount, currency: source.currency,
       paymentType: source.paymentType, financialKind: 'EDIT_CORRECTION', note: `Edit correction source:${source.id}` } });
-    if (amount > 0) await tx.cashMovement.create({ data: { ...base, direction: 'IN', amount, currency, paymentType,
+    if (amount > 0) await tx.cashMovement.create({ data: { ...base, ...newFx, direction: 'IN', amount, currency, paymentType,
       note: `${String(source.note || '').startsWith('Overtime') ? 'Overtime' : 'Order'} ${order.orderNumber}; edit ${key}` } });
     const identity = `ORDER_EDIT:${key}:${source.id}`;
     const payloads = source.amount > 0 ? [sheets._internals.orderPayload('FINANCIAL_OPERATION', order, {
