@@ -191,6 +191,41 @@ test('Jarvis real PostgreSQL HTTP + ledger reconciliation (isolated DB required)
       }
       assert.deepEqual(await fingerprint(),before,'GETs and rejected methods must not change business DB records');
     });
+    await t.test('two synthetic RUB and USD payments reconcile with Jarvis, old records remain unchanged', async () => {
+      const { paymentSnapshot } = require('../src/services/cbuRates.service');
+      const mockRate = (currency, rate) => ({
+        currency, rate, publishedRate: String(rate), nominal: 1, source: 'CBU', effectiveDate: '2026-10-28',
+      });
+      const fixtures = [
+        { id: 'fx-rub', order: 'FX-TEST-RUB', currency: 'RUB', amount: 10000, fx: mockRate('RUB', 146.75), expected: 14675 },
+        { id: 'fx-usd', order: 'FX-TEST-USD', currency: 'USD', amount: 2500, fx: mockRate('USD', 12000), expected: 300000 },
+      ];
+      for (const entry of fixtures) {
+        await pool.query(`INSERT INTO "Order" (id,"orderNumber","branchId","clientName",phone,"tariffHours","currency","paymentType","finalAmount","realPaidAmount","checkIn","plannedCheckOut","createdById","createdAt","updatedAt")
+          VALUES ($1,$2,'b1','synthetic customer','synthetic-phone',1,$3,'CASH',$4,$4,'2026-10-28T06:00:00Z','2026-10-28T07:00:00Z','u1','2026-10-28T06:00:00Z','2026-10-28T06:00:00Z')`,
+          [entry.id + '-order', entry.order, entry.currency, entry.amount]);
+        const snap = paymentSnapshot(entry.amount, entry.fx);
+        assert.equal(snap.uzsEquivalent, entry.expected);
+        await pool.query(`INSERT INTO "CashMovement" (id,"branchId","orderId","shiftId",type,direction,amount,currency,"paymentType","createdById","createdAt","updatedAt","fxRate","fxRateDate","fxNominal","fxSource","uzsEquivalent")
+          VALUES ($1,'b1',$2,'s1','ORDER_PAYMENT','IN',$3,$4,'CASH','u1','2026-10-28T06:00:00Z','2026-10-28T06:00:00Z',$5,$6,$7,$8,$9)`,
+          [entry.id, entry.id + '-order', entry.amount, entry.currency, snap.fxRate, snap.fxRateDate, snap.fxNominal, snap.fxSource, snap.uzsEquivalent]);
+      }
+      const transactions = (await get('transactions', { branchCode: 'BR1', from: '2026-10-28', to: '2026-10-28' })).data;
+      for (const entry of fixtures) {
+        const row = transactions.find(item => item.id === entry.id);
+        assert.ok(row, entry.id + ' missing from Jarvis');
+        assert.equal(row.currency, entry.currency);
+        assert.equal(row.amount, entry.amount);
+        assert.equal(Number(row.fxRate), entry.fx.rate);
+        assert.equal(row.fxRateDate, '2026-10-28');
+        assert.equal(row.fxSource, 'CBU');
+        assert.equal(row.uzsEquivalent, entry.expected);
+      }
+      const original = (await get('transactions', { branchCode: 'BR1', from: '2026-10-09', to: '2026-10-09' })).data.find(item=>item.id==='rub');
+      assert.ok(original, 'existing RUB transaction must be retained');
+      assert.equal(original.fxRate, null);
+      assert.equal(original.uzsEquivalent, null);
+    });
   } finally {
     if(server) await new Promise(resolve=>server.close(resolve));
     if(prisma) await prisma.$disconnect();
