@@ -117,7 +117,7 @@ const debtBalance = (order, plan) => {
     Math.max(0, plan.data.finalAmount - plan.data.realPaidAmount) + plan.convert(debt.amount - previousBase));
   return plan.convert(debt?.amount || 0);
 };
-const convertForPickup = async (tx, order, body, user, key) => {
+const convertForPickup = async (tx, order, body, user, key, officialFx = null) => {
   if (!body.currency || body.currency === order.currency) return order;
   const plan = planEdit(order, { currency: body.currency, exchangeRate: body.exchangeRate,
     sourceExchangeRate: body.sourceExchangeRate, priceChangeReason: body.priceChangeReason }, user, { requireManagerApproval: true });
@@ -138,7 +138,7 @@ const convertForPickup = async (tx, order, body, user, key) => {
     debt = { ...debt, ...data };
   }
   const updated = { ...order, ...plan.data, items, debt };
-  await recordEdit(tx, order, updated, plan, user, `${key}:currency`, body.priceChangeReason);
+  await recordEdit(tx, order, updated, plan, user, `${key}:currency`, body.priceChangeReason, officialFx);
   updated.cashMovements = await tx.cashMovement.findMany({ where: { orderId: order.id } });
   await tx.auditLog.create({ data: { branchId: order.branchId, userId: user.id, entityType: 'Order', entityId: order.id,
     action: 'ORDER_CURRENCY_CORRECTION', oldValue: JSON.parse(JSON.stringify(order)), newValue: JSON.parse(JSON.stringify(updated)), description: body.priceChangeReason } });
