@@ -153,9 +153,21 @@ const executeMovement = async (tx, request, userId) => {
   const source = await tx.cashMovement.findUnique({ where: { id: request.movementId } });
   const shift = await findOpenShift(tx, request.branchId);
   if (!shift) throw new AppError('Open shift required to record financial operation', 409);
+  // A refund/correction belongs to the ORIGINAL receipt and its rate, never
+  // today's rate. Legacy receipts remain without an FX snapshot.
+  let fxSnapshot = {};
+  if (source.fxRateDate && Number.isSafeInteger(source.uzsEquivalent)
+      && Number.isSafeInteger(source.amount) && source.amount > 0) {
+    const numerator = BigInt(source.uzsEquivalent) * BigInt(request.amount);
+    const equivalent = Number((numerator + BigInt(source.amount) / 2n) / BigInt(source.amount));
+    if (!Number.isSafeInteger(equivalent)) throw new AppError('Invalid refund FX equivalent', 409);
+    fxSnapshot = { fxRate: source.fxRate, fxRateDate: source.fxRateDate,
+      fxNominal: source.fxNominal, fxSource: source.fxSource, uzsEquivalent: equivalent };
+  }
   const base = { branchId: request.branchId, orderId: request.orderId, shiftId: shift.id,
     type: source.type, amount: request.amount, currency: request.currency, createdById: userId,
-    note: `${request.kind} ${request.id}; source ${source.id}`, financialKind: request.kind };
+    note: `${request.kind} ${request.id}; source ${source.id}`, financialKind: request.kind,
+    ...fxSnapshot };
   await tx.cashMovement.create({ data: { ...base, direction: 'OUT', paymentType: request.kind === 'REFUND' ? request.payoutPaymentType : request.oldPaymentType } });
   if (request.kind === 'PAYMENT_CORRECTION') {
     await tx.cashMovement.create({ data: { ...base, direction: 'IN', paymentType: request.newPaymentType } });
