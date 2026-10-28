@@ -213,6 +213,14 @@ test("backend accepts only versioned 22-column INKASSA webhook results", () => {
 
   assert.equal(appsScript.SCRIPT_VERSION, scriptVersion);
   assert.equal(result.scriptVersion, scriptVersion);
+  assert.doesNotThrow(() => sheets._internals.validateWebhookResult(payload, {
+    success: true, scriptVersion, branchCode: "TJV", spreadsheetId: "10-h62nZAEp-puvFF_MurFu1UE0Xdjdx5Qtlv3Qpd0L8",
+    spreadsheetName: "Toshkent Janubiy vokzal", sheetName: monthSheetName + " ", monthSheetName: monthSheetName + " ", row: 1885, finalRow: row,
+  }));
+  assert.throws(() => sheets._internals.validateWebhookResult(payload, {
+    success: true, scriptVersion, branchCode: "TJV", spreadsheetId: "10-h62nZAEp-puvFF_MurFu1UE0Xdjdx5Qtlv3Qpd0L8",
+    spreadsheetName: "Toshkent Janubiy vokzal", sheetName: "Wrong month", monthSheetName, row: 1885, finalRow: row,
+  }), /wrong sheet/);
   assert.equal(result.row[14], 500000);
   assert.deepEqual(result.row.slice(5, 14), new Array(9).fill(""));
   assert.throws(
