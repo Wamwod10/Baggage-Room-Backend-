@@ -88,6 +88,7 @@ const includeOrder = {
       paymentType: true,
       note: true,
       financialKind: true,
+      fxRate: true, fxRateDate: true, fxNominal: true, fxSource: true, uzsEquivalent: true,
       createdAt: true,
     },
     orderBy: { createdAt: "asc" },
