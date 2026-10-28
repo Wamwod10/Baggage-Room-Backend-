@@ -418,6 +418,14 @@ const reportsUncached = async (user, query) => {
     : subtractCurrencyMaps(revenueByCurrency, expensesByCurrency, inkassaByCurrency);
   const netProfitByCurrency = subtractCurrencyMaps(revenueByCurrency, expensesByCurrency, inkassaByCurrency);
   const totalRevenue = revenueByCurrency.UZS;
+  // Existing UZS revenue remains unchanged. The additional equivalent is
+  // presented separately and only includes payments with an FX snapshot.
+  const foreignRevenueUzsEquivalent = inMovements.reduce((sum, movement) =>
+    sum + (movement.currency === 'UZS' || movement.uzsEquivalent == null
+      ? 0 : (movement.direction === 'OUT' ? -1 : 1) * Number(movement.uzsEquivalent)), 0);
+  const revenueUzsEquivalent = totalRevenue + foreignRevenueUzsEquivalent;
+  const legacyForeignMovementsWithoutRate = inMovements.reduce((sum, movement) =>
+    sum + Number(movement.missingFxCount || 0), 0);
   const totalExpenses = expensesByCurrency.UZS;
   const totalInkassa = inkassaByCurrency.UZS;
   const totalOrders = orderAnalytics.orderStats.totalOrders;
@@ -495,6 +503,9 @@ const reportsUncached = async (user, query) => {
     orderStats: orderAnalytics.orderStats,
     financeAnalytics: {
       revenue: totalRevenue,
+      revenueUzsEquivalent,
+      foreignRevenueUzsEquivalent,
+      legacyForeignMovementsWithoutRate,
       totalExpenses,
       totalInkassa,
       netProfit: totalRevenue - totalExpenses - totalInkassa,
