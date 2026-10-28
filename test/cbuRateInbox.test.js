@@ -22,10 +22,15 @@ test('signed CBU sync stores 5 official values in isolated fake store and reads 
   process.env.CBU_SYNC_SHARED_SECRET = SECRET;
   t.after(()=>{ if(previous===undefined)delete process.env.CBU_SYNC_SHARED_SECRET;else process.env.CBU_SYNC_SHARED_SECRET=previous;});
   let record;
-  const prisma = { cbuRateInbox:{
-    upsert:async query => { record={...query.create};return record; },
-    findUnique:async()=>record,
-  }};
+  const prisma = {
+    $executeRaw:async (sql, ...values) => {
+      const [day, rawRows, fetchedAt, receivedAt] = values;
+      if (record && record.fetchedAt >= fetchedAt) return 0;
+      record={day,officialRows:JSON.parse(rawRows),fetchedAt,receivedAt};
+      return 1;
+    },
+    cbuRateInbox: { findUnique:async()=>record },
+  };
   const payload={source:'CBU', fetchedAt:NOW.toISOString(), rates:rows};
   const {raw,headers}=signed(payload);
   const result=await relay.acceptSignedEnvelope(raw,headers,{prisma,now:NOW});
@@ -35,6 +40,8 @@ test('signed CBU sync stores 5 official values in isolated fake store and reads 
   assert.equal(actual.USD.rate,12000);
   assert.equal(actual.KZT.rate,12.3456);
   assert.equal(actual.RUB.source,'CBU');
+  await assert.rejects(relay.acceptSignedEnvelope(raw,headers,{prisma,now:NOW}),/Older or duplicate CBU sync rejected/);
+  assert.equal(record.officialRows.find(x=>x.Ccy==='RUB').Rate,'146.75');
   assert.equal(await relay.readFreshRates('2026-10-28',{prisma,now:new Date('2026-10-30T14:00:00Z')}),null);
 });
 
