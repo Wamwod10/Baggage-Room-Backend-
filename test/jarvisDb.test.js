@@ -51,6 +51,38 @@ test('Jarvis real PostgreSQL HTTP + ledger reconciliation (isolated DB required)
       }
     } finally { migrationClient.release(); }
     prisma = new PrismaClient({ adapter: new PrismaPg(pool, { schema }), log: [] });
+    await t.test('signed CBU inbox persists and rejects forged receipts against isolated real PostgreSQL', async () => {
+      const cbuInbox = require('../src/services/cbuRateInbox.service');
+      const sharedSecret = 'ci-test-only-strong-secret-key-with-32-chars-or-more';
+      const priorSecret = process.env.CBU_SYNC_SHARED_SECRET;
+      process.env.CBU_SYNC_SHARED_SECRET = sharedSecret;
+      try {
+        const now = new Date('2026-10-28T11:00:00Z');
+        const rates = ['RUB','USD','EUR','KZT','TJS'].map(Ccy => ({
+          Ccy, Rate: Ccy === 'RUB' ? '146.75' : '12000.00',
+          Nominal: 1, Date: '28.10.2026',
+        }));
+        const raw = Buffer.from(JSON.stringify({ source:'CBU', fetchedAt:now.toISOString(), rates }));
+        const timestamp = String(now.getTime());
+        const signature = 'sha256=' + crypto.createHmac('sha256', sharedSecret)
+          .update(timestamp).update('.').update(raw).digest('hex');
+        const headers = {'x-cbu-sync-timestamp':timestamp,'x-cbu-sync-signature':signature};
+        await assert.rejects(cbuInbox.acceptSignedEnvelope(
+          Buffer.from(raw.toString().replace('146.75','89')), headers, {now,prisma}
+        ), /authentication/);
+        assert.deepEqual(await cbuInbox.acceptSignedEnvelope(raw, headers, {now,prisma}),{
+          accepted:true,date:'2026-10-28',currencies:5,
+        });
+        const fromDb = await prisma.cbuRateInbox.findUnique({where:{day:'2026-10-28'}});
+        assert.equal(fromDb.officialRows.find(row=>row.Ccy==='RUB').Rate,'146.75');
+        const result = await cbuInbox.readFreshRates('2026-10-28',{now,prisma});
+        assert.equal(result.RUB.rate,146.75);
+        assert.equal(result.USD.rate,12000);
+      } finally {
+        if(priorSecret===undefined)delete process.env.CBU_SYNC_SHARED_SECRET;
+        else process.env.CBU_SYNC_SHARED_SECRET=priorSecret;
+      }
+    });
     for (let n = 1; n <= 5; n++) await pool.query('INSERT INTO "Branch" (id,name,code,"createdAt","updatedAt") VALUES ($1,$2,$3,$4,$4)', ['b' + n, 'Test branch ' + n, 'BR' + n, '2026-10-01T00:00:00Z']);
     await pool.query('INSERT INTO "User" (id,login,name,"passwordHash",role,"branchId","updatedAt") VALUES ($1,$2,$3,$4,$5,$6,$7)', ['u1','test-staff','private staff','private-hash','BRANCH_ADMIN','b1','2026-10-01']);
     await pool.query(`INSERT INTO "Order" (id,"orderNumber","branchId","clientName",phone,passport,"tariffHours","paymentType","finalAmount","realPaidAmount","checkIn","plannedCheckOut","createdById","createdAt","updatedAt")
