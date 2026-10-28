@@ -30,6 +30,11 @@ const {
 } = require("../utils/overtime");
 
 const calculateOvertimeAmount = ({ order, tariffs, overtimeHours, actualTime = new Date() }) => {
+  // The 15-minute grace period applies to every duration, including 72+ hour
+  // long-term tariffs. Without this guard, an on-time 96h pickup is rounded
+  // into a fifth paid day even when overtimeHoursAfterGrace returns zero.
+  const hours = Math.max(0, Number(overtimeHours || 0));
+  if (!hours) return 0;
   if (order.pricingSnapshot && order.pricingSnapshot.version !== 0) {
     const elapsedHours = (new Date(actualTime) - new Date(order.checkIn)) / 3600000;
     if (elapsedHours > 72) {
@@ -40,9 +45,6 @@ const calculateOvertimeAmount = ({ order, tariffs, overtimeHours, actualTime = n
       return Math.max(0, total - order.discountAmount - order.finalAmount);
     }
   }
-  const hours = Math.max(0, Number(overtimeHours || 0));
-  if (!hours) return 0;
-
   const tariffsBySize = new Map((tariffs || []).map((tariff) => [tariff.size, tariff]));
   return (order.items || []).reduce((total, item) => {
     const tariff = tariffsBySize.get(item.size);
