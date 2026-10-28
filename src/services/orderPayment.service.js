@@ -3,6 +3,7 @@ const { lockOrder, assertMinorAmount, paidForOrder } = require('./financialContr
 const { getScopedBranchId } = require('../utils/scope');
 const { requireIdempotencyKey } = require('../utils/idempotency');
 const { AppError } = require('../utils/response');
+const { getRate, paymentFxFields } = require('./cbuFx.service');
 const { findOpenShift } = require('./cashMovement.service');
 const { audit } = require('./activity.service');
 const { markAnalyticsMutation } = require('./analyticsCache');
@@ -25,8 +26,12 @@ const pay = async (user, orderId, body, key) => {
     if (order.debt?.status === 'OPEN') throw new AppError('Use the existing debt payment workflow', 409);
     const shift = await findOpenShift(tx, order.branchId);
     if (!shift) throw new AppError('Open shift required', 409);
+    let fx;
+    try { fx = await getRate(body.currency); }
+    catch { throw new AppError('CBU kursini olish imkonsiz. To‘lov saqlanmadi.', 503); }
     const movement = await tx.cashMovement.create({ data: { idempotencyKey, branchId: order.branchId,
       orderId, shiftId: shift.id, type: 'ORDER_PAYMENT', direction: 'IN', amount: body.amount, currency: body.currency,
+      ...paymentFxFields(body.amount, body.currency, fx),
       paymentType: body.paymentType, createdById: user.id, note: `Additional payment ${order.orderNumber}` } });
     await tx.order.update({ where: { id: orderId }, data: { realPaidAmount: { increment: body.amount }, paymentDifference: order.realPaidAmount + body.amount - order.finalAmount } });
     await audit({ tx, branchId: order.branchId, userId: user.id, entityType: 'Order', entityId: orderId, action: 'ORDER_PAYMENT_RECEIVED',
