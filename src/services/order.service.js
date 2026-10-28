@@ -16,6 +16,7 @@ const { findOpenShift, createCashMovement } = require("./cashMovement.service");
 const { computeShiftReport, normalizeCurrencyMap } = require("./shift.service");
 const telegram = require("./telegram.service");
 const googleSheets = require("./googleSheets.service");
+const cbuRates = require("./cbuRates.service");
 const { getPagination } = require("../utils/pagination");
 const { createTimer } = require("../utils/perf");
 const { markAnalyticsMutation } = require("./analyticsCache");
@@ -662,6 +663,9 @@ const createOrder = async (user, body, { idempotencyKey } = {}) => {
   );
   if (duplicate) warnings.push({ type: "DUPLICATE_ACTIVE_CUSTOMER", orderNumber: duplicate.orderNumber });
 
+  // Fetch official rate before opening a database transaction; never trust browser rates.
+  // For UZS this is resolved locally and never depends on the CBU website.
+  const paymentFx = await cbuRates.getRate(body.currency || "UZS");
   let created;
   try {
     created = await timer.time("transaction total", () => prisma.$transaction(async (tx) => {
@@ -710,12 +714,8 @@ const createOrder = async (user, body, { idempotencyKey } = {}) => {
       { field: "paymentType", message: "paymentType is required" },
     ]);
     const currency = body.currency || "UZS";
-    const exchangeRate = currency === "UZS" ? 1 : Number(body.exchangeRate || 0);
-    if (currency !== "UZS" && (!Number.isFinite(exchangeRate) || exchangeRate <= 0)) {
-      throw new AppError(`Exchange rate for ${currency} is required`, 400, [
-        { field: "exchangeRate", message: `Exchange rate for ${currency} is required` },
-      ]);
-    }
+    // Every new order uses the official CBU snapshot, not mutable local Settings.
+    const exchangeRate = paymentFx.rate;
     const itemRows = inputItems.map((item) => {
       const locker = lockers.find((row) => row.id === item.lockerId);
       if (!locker) {
@@ -800,7 +800,7 @@ const createOrder = async (user, body, { idempotencyKey } = {}) => {
         passport: body.passport || null,
         tariffHours,
         customHours: body.customHours || null,
-        pricingSnapshot: { version: 1, ...(branch.code === 'TJV' && isCustomTariff && tariffHours > 12 && tariffHours <= 72 ? { customTariffRule: 'TJV_12H_PLUS_HOURLY' } : {}), dailyRates, tariffs: Object.fromEntries(tariffs.map(({ size, price1h, price12h, price24h, price48h, price72h, after72hPrice }) => [size, { price1h, price12h, price24h, price48h, price72h, after72hPrice }])), exchangeRate },
+        pricingSnapshot: { version: 1, ...(branch.code === 'TJV' && isCustomTariff && tariffHours > 12 && tariffHours <= 72 ? { customTariffRule: 'TJV_12H_PLUS_HOURLY' } : {}), dailyRates, tariffs: Object.fromEntries(tariffs.map(({ size, price1h, price12h, price24h, price48h, price72h, after72hPrice }) => [size, { price1h, price12h, price24h, price48h, price72h, after72hPrice }])), exchangeRate, fx: cbuRates.quoteSnapshot(realPaidAmount, paymentFx) },
         priceApprovedById: discountAmount > 0 ? user.id : null,
         priceApprovedByName: discountAmount > 0 ? user.name : null,
         currency,
@@ -858,6 +858,7 @@ const createOrder = async (user, body, { idempotencyKey } = {}) => {
         amount: realPaidAmount,
         currency,
         paymentType: paidPaymentType,
+        fxSnapshot: cbuRates.paymentSnapshot(realPaidAmount, paymentFx),
         note: `Order ${order.orderNumber}`,
         createdById: user.id,
       }));
