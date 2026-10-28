@@ -9,11 +9,11 @@ const numberText = (value) => {
     throw new Error('Missing or invalid rate value');
   }
   const asText = value.toString();
-  if (!/^\\d+(?:\\.\\d{1,12})?$/.test(asText)) throw new Error('Unsupported rate precision');
+  if (!/^\d+(?:\.\d{1,12})?$/.test(asText)) throw new Error('Unsupported rate precision');
   return asText;
 };
 const dateToCbu = (date) => {
-  if (typeof date !== 'string' || !/^\\d{4}-\\d{2}-\\d{2}$/.test(date)) {
+  if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
     throw new Error('Missing publication date');
   }
   const [year, month, day] = date.split('-');
