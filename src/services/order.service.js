@@ -22,6 +22,7 @@ const { markAnalyticsMutation } = require("./analyticsCache");
 const { normalizePaymentType, paymentLabel } = require("../utils/payment");
 const { requireIdempotencyKey } = require("../utils/idempotency");
 const financialEdit = require('./orderFinancialEdit.service');
+const { getRate } = require("./cbuFx.service");
 const { assertMinorAmount, assertPricePermission, assertDiscountReason, isStaffDiscountOnlyEdit, completedOrderReprice, validateBaggage, assertPickupPaid, assertPickupTotal, withRecordedDiscount, lockOrder } = require('./financialControls');
 const {
   overtimeHoursAfterGrace,
@@ -84,6 +85,9 @@ const includeOrder = {
       direction: true,
       amount: true,
       currency: true,
+      fxRate: true,
+      fxRateDate: true,
+      uzsEquivalent: true,
       paymentType: true,
       note: true,
       financialKind: true,
@@ -664,6 +668,9 @@ const createOrder = async (user, body, { idempotencyKey } = {}) => {
 
   let created;
   try {
+    let authoritativeFx;
+    try { authoritativeFx = await getRate(body.currency || "UZS"); }
+    catch { throw new AppError("CBU kursini olib bo‘lmadi. Buyurtma saqlanmadi.", 503); }
     created = await timer.time("transaction total", () => prisma.$transaction(async (tx) => {
     const branch = await timer.time("branch lookup", () => tx.branch.findUnique({ where: { id: branchId } }));
     if (!branch) throw new AppError("Branch not found", 404);
@@ -710,7 +717,7 @@ const createOrder = async (user, body, { idempotencyKey } = {}) => {
       { field: "paymentType", message: "paymentType is required" },
     ]);
     const currency = body.currency || "UZS";
-    const exchangeRate = currency === "UZS" ? 1 : Number(body.exchangeRate || 0);
+    const exchangeRate = Number(authoritativeFx.rate);
     if (currency !== "UZS" && (!Number.isFinite(exchangeRate) || exchangeRate <= 0)) {
       throw new AppError(`Exchange rate for ${currency} is required`, 400, [
         { field: "exchangeRate", message: `Exchange rate for ${currency} is required` },
@@ -800,7 +807,7 @@ const createOrder = async (user, body, { idempotencyKey } = {}) => {
         passport: body.passport || null,
         tariffHours,
         customHours: body.customHours || null,
-        pricingSnapshot: { version: 1, ...(branch.code === 'TJV' && isCustomTariff && tariffHours > 12 && tariffHours <= 72 ? { customTariffRule: 'TJV_12H_PLUS_HOURLY' } : {}), dailyRates, tariffs: Object.fromEntries(tariffs.map(({ size, price1h, price12h, price24h, price48h, price72h, after72hPrice }) => [size, { price1h, price12h, price24h, price48h, price72h, after72hPrice }])), exchangeRate },
+        pricingSnapshot: { version: 1, ...(branch.code === 'TJV' && isCustomTariff && tariffHours > 12 && tariffHours <= 72 ? { customTariffRule: 'TJV_12H_PLUS_HOURLY' } : {}), dailyRates, tariffs: Object.fromEntries(tariffs.map(({ size, price1h, price12h, price24h, price48h, price72h, after72hPrice }) => [size, { price1h, price12h, price24h, price48h, price72h, after72hPrice }])), exchangeRate, exchangeRateDate: authoritativeFx.effectiveDate, exchangeRateSource: authoritativeFx.source },
         priceApprovedById: discountAmount > 0 ? user.id : null,
         priceApprovedByName: discountAmount > 0 ? user.name : null,
         currency,
