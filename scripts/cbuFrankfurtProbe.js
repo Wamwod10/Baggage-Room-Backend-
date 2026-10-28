@@ -36,6 +36,32 @@ async function runForcedIpv4(url) {
     req.once("timeout", () => req.destroy(new Error("IPv4 Timeout")));
   });
 }
+async function runKeylessCbuMirrorProbe() {
+  for (const [label, url] of [
+    ["allratestoday-open", "https://allratestoday.com/api/open/central-bank/cbu"],
+    ["allratestoday-public", "https://allratestoday.com/api/public/central-bank/cbu"],
+  ]) {
+    try {
+      const response = await fetch(url, {
+        headers: { Accept: "application/json" }, signal: AbortSignal.timeout(6500),
+      });
+      let json = null;
+      try { json = await response.json(); } catch { /* only report status */ }
+      const rows = Array.isArray(json?.rates) ? json.rates : Array.isArray(json?.data?.rates) ? json.data.rates : [];
+      console.log(JSON.stringify({
+        diagnostic: "CBU_KEYLESS_MIRROR_PROBE", provider: label,
+        httpStatus: response.status, ok: response.ok,
+        bank: json?.bank ?? json?.data?.bank ?? null,
+        rateDate: json?.rate_date ?? json?.data?.rate_date ?? null,
+        rowCount: rows.length, sample: rows.find(x=>x?.base==="RUB"||x?.source==="RUB")||null,
+        topKeys: json&&typeof json==="object"?Object.keys(json).slice(0,12):[],
+      }));
+    } catch(error) {
+      console.log(JSON.stringify({diagnostic:"CBU_KEYLESS_MIRROR_PROBE",
+        provider:label,ok:false,error:error?.name||"Error"}));
+    }
+  }
+}
 async function runMirrorDiagnostic() {
   const sources = [
     ["allratestoday.com","https://allratestoday.com/api/v1/central-bank/cbu/latest"],
@@ -91,6 +117,7 @@ http.createServer((req, res) => {
   res.end(req.url === "/health" ? '{"status":"probe-only"}' : '{"error":"not-found"}');
 }).listen(Number(process.env.PORT || 10000), "0.0.0.0", () => {
   console.log(JSON.stringify({ diagnostic: "CBU_FRANKFURT_PROBE_STARTED" }));
+  runKeylessCbuMirrorProbe().catch(error=>console.log(JSON.stringify({diagnostic:"CBU_KEYLESS_PROBE_FATAL",error:error?.name||"Error"})));
   runMirrorDiagnostic().catch(error=>console.log(JSON.stringify({diagnostic:"CBU_ALTERNATIVES_FAILED",error:error?.name||"Error"})));
   run().catch(error => console.log(JSON.stringify({ diagnostic: "CBU_FRANKFURT_PROBE_FATAL", error: error?.name || "Error" })));
 });
