@@ -40,13 +40,18 @@ test('Jarvis preserves exact minor integers without rescaling',()=>{
 test('pricing quote passes TJV scope, count and minor-unit conversion', async (t) => {
  const prismaPath=require.resolve('../src/config/prisma');
  const pricingPath=require.resolve('../src/services/pricing.service');
+ const cbuPath=require.resolve('../src/services/cbuRates.service');
+ const previousCbu=require.cache[cbuPath];
  const previousPrisma=require.cache[prismaPath], previousPricing=require.cache[pricingPath];
+ require.cache[cbuPath]={id:cbuPath,filename:cbuPath,loaded:true,exports:{
+   getRate:async(currency)=>({ currency, rate:currency==='USD'?12500:1, publishedRate:currency==='USD'?'12500':'1', nominal:1, effectiveDate:'2026-10-28', source:currency==='UZS'?'UZS':'CBU' })
+ }};
  require.cache[prismaPath]={id:prismaPath,filename:prismaPath,loaded:true,exports:{
    branch:{findUnique:async()=>({id:'tjv',code:'TJV'})},
    tariff:{findMany:async()=>Object.entries(rates).map(([size,rate])=>({size,...rate}))}
  }};
  delete require.cache[pricingPath];
- t.after(()=>{require.cache[prismaPath]=previousPrisma;if(previousPricing)require.cache[pricingPath]=previousPricing;else delete require.cache[pricingPath];});
+ t.after(()=>{require.cache[prismaPath]=previousPrisma;if(previousPricing)require.cache[pricingPath]=previousPricing;else delete require.cache[pricingPath];if(previousCbu)require.cache[cbuPath]=previousCbu;else delete require.cache[cbuPath];});
  const {quote}=require('../src/services/pricing.service');
  const body={branchId:'tjv',hours:15,isCustom:true,currency:'UZS',items:[{size:'S',count:2},{size:'M',count:1}]};
  assert.equal((await quote({role:'SUPER_ADMIN'},body)).calculatedAmount,177000);
