@@ -165,10 +165,13 @@ const validateWebhookResult = (payload, json, expectedRow = sheetMapper.buildLeg
     throw new Error("Google Sheets response is missing spreadsheetName or sheetName");
   }
   const expectedMonthSheetName = payload?.monthSheetName || sheetMapper.monthSheetNameForPayload_(payload || {});
-  if (json?.monthSheetName !== expectedMonthSheetName) {
+  // Some existing branch tabs have trailing spaces in their names. The script may
+  // correctly write and return that exact tab name; normalize only outer whitespace.
+  // Keep verifying spreadsheet identity, month, 22-column row and amounts below.
+  if (String(json?.monthSheetName || '').trim() !== expectedMonthSheetName) {
     throw new Error(`Google Sheets month sheet mismatch: expected ${expectedMonthSheetName}, received ${json?.monthSheetName || "missing"}`);
   }
-  if (json?.sheetName !== expectedMonthSheetName) {
+  if (String(json?.sheetName || '').trim() !== expectedMonthSheetName) {
     throw new Error(`Google Sheets wrote to wrong sheet: expected ${expectedMonthSheetName}, received ${json?.sheetName || "missing"}`);
   }
   const row = Array.isArray(json?.finalRow) ? json.finalRow : expectedRow;
