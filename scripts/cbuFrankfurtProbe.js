@@ -11,6 +11,31 @@ const urls = [
   "https://www.cbu.uz/uz/arkhiv-kursov-valyut/json/",
   "https://cbu.uz/ru/arkhiv-kursov-valyut/json/",
 ];
+async function runForcedIpv4(url) {
+  const https = require("node:https");
+  return new Promise(resolve => {
+    const req = https.get(url, {
+      family: 4, timeout: 10000, headers: { Accept: "application/json" },
+    }, response => {
+      let raw = "";
+      response.on("data", chunk => {
+        raw += chunk.toString("utf8");
+        if (raw.length > 500000) req.destroy(new Error("Response too large"));
+      });
+      response.on("end", () => {
+        try {
+          const data = JSON.parse(raw);
+          const rub = Array.isArray(data) ? data.find(row => row.Ccy === "RUB") : null;
+          const usd = Array.isArray(data) ? data.find(row => row.Ccy === "USD") : null;
+          resolve({ status: response.statusCode, reachable: response.statusCode === 200 && Boolean(rub?.Rate && usd?.Rate),
+            effectiveDate: rub?.Date || null, rate: rub?.Rate || null });
+        } catch (error) { resolve({ reachable:false, error: error.name }); }
+      });
+    });
+    req.once("error", error => resolve({ reachable:false, error:error.name, code:error.code || null }));
+    req.once("timeout", () => req.destroy(new Error("IPv4 Timeout")));
+  });
+}
 async function run() {
   for (const url of urls) {
     const path = new URL(url).pathname;
@@ -39,7 +64,9 @@ async function run() {
       }));
     }
   }
-  console.log(JSON.stringify({ diagnostic: "CBU_FRANKFURT_PROBE_RESULT", reachable: false }));
+  const ipv4 = await runForcedIpv4("https://cbu.uz/uz/arkhiv-kursov-valyut/json/");
+  console.log(JSON.stringify({ diagnostic: "CBU_FORCED_IPV4_RESULT", ...ipv4 }));
+  console.log(JSON.stringify({ diagnostic: "CBU_FRANKFURT_PROBE_RESULT", reachable: ipv4.reachable }));
 }
 // A minimal listener satisfies Render web health requirements; no DB, credentials or customer data.
 http.createServer((req, res) => {
