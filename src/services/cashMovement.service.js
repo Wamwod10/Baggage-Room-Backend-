@@ -11,11 +11,13 @@ const findOpenShift = (tx, branchId) => tx.shift.findFirst({
 });
 
 const createCashMovement = async ({ tx = prisma, branchId, shiftId, orderId = null, type, direction, amount, currency, paymentType = null, note = null, createdById }) => {
-  let fx;
-  try { fx = await getRate(currency || "UZS"); }
-  catch { throw new AppError("CBU kursini olib bo‘lmadi. To‘lov saqlanmadi.", 503); }
+  let fxFields = {};
+  if (["ORDER_PAYMENT", "DEBT_CLOSE"].includes(type)) {
+    try { fxFields = paymentFxFields(amount, currency || "UZS", await getRate(currency || "UZS")); }
+    catch { throw new AppError("CBU kursini olib bo‘lmadi. To‘lov saqlanmadi.", 503); }
+  }
   return tx.cashMovement.create({
-    data: { branchId, shiftId, orderId, type, direction, amount, currency, paymentType, note, createdById, ...paymentFxFields(amount, currency || "UZS", fx) },
+    data: { branchId, shiftId, orderId, type, direction, amount, currency, paymentType, note, createdById, ...fxFields },
   });
 };
 
