@@ -13,6 +13,8 @@ test("movement analytics are aggregated in SQL without raw notes or customer dat
         type: "ORDER_PAYMENT",
         direction: "IN",
         amount: 1500n,
+        uzsEquivalent: null,
+        missingFxCount: 0,
         currency: "UZS",
         paymentType: "CASH",
         createdById: "user-a",
@@ -31,6 +33,8 @@ test("movement analytics are aggregated in SQL without raw notes or customer dat
     type: "ORDER_PAYMENT",
     direction: "IN",
     amount: 1500,
+    uzsEquivalent: null,
+    missingFxCount: 0,
     currency: "UZS",
     paymentType: "CASH",
     createdById: "user-a",
@@ -39,6 +43,8 @@ test("movement analytics are aggregated in SQL without raw notes or customer dat
     count: 3,
   }]);
   assert.match(sql, /SUM\(m\."amount"\)/);
+  assert.match(sql, /SUM\(m\."uzsEquivalent"\)/);
+  assert.match(sql, /AS "missingFxCount"/);
   assert.match(sql, /COUNT\(\*\)/);
   assert.match(sql, /AT TIME ZONE 'UTC' AT TIME ZONE 'Asia\/Tashkent'/);
   assert.doesNotMatch(sql, /m\."note"\s+AS/);
