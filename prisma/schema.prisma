@@ -545,3 +545,11 @@ model OrderArchiveRun {
   combinedCountAfter  Int
   executedAt          DateTime @default(now())
 }
+
+// Verified signed CBU feed for the operating date (new data only).
+model CbuRateInbox {
+  day          String   @id @db.VarChar(10)
+  officialRows Json
+  fetchedAt    DateTime
+  receivedAt   DateTime @default(now())
+}
