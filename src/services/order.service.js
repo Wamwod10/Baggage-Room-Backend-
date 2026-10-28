@@ -671,6 +671,9 @@ const createOrder = async (user, body, { idempotencyKey } = {}) => {
     let authoritativeFx;
     try { authoritativeFx = await getRate(body.currency || "UZS"); }
     catch { throw new AppError("CBU kursini olib bo‘lmadi. Buyurtma saqlanmadi.", 503); }
+    if (body.currency && body.currency !== "UZS" && Number(body.exchangeRate) !== Number(authoritativeFx.rate)) {
+      throw new AppError("Markaziy bank kursi o‘zgardi. Narxni yangilab qayta saqlang.", 409);
+    }
     created = await timer.time("transaction total", () => prisma.$transaction(async (tx) => {
     const branch = await timer.time("branch lookup", () => tx.branch.findUnique({ where: { id: branchId } }));
     if (!branch) throw new AppError("Branch not found", 404);
