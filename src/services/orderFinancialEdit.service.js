@@ -77,16 +77,24 @@ const planEdit = (order, body, user, { requireManagerApproval = false } = {}) =>
   return { data, movements, convert };
 };
 
-const recordEdit = async (tx, order, updated, plan, user, key, reason) => {
+const recordEdit = async (tx, order, updated, plan, user, key, reason, fx) => {
   const shift = await findOpenShift(tx, order.branchId);
   if (!shift) throw new AppError('Open shift required to correct payment/currency', 409);
   const sheets = require('./googleSheets.service');
   for (const { source, amount, currency, paymentType } of plan.movements) {
     const base = { branchId: order.branchId, shiftId: shift.id, orderId: order.id, type: source.type, createdById: user.id };
+    const { paymentSnapshot } = require('./cbuRates.service');
+    const originalFx = source.fxRateDate && source.uzsEquivalent != null
+      ? { fxRate: source.fxRate, fxRateDate: source.fxRateDate, fxNominal: source.fxNominal,
+        fxSource: source.fxSource, uzsEquivalent: source.uzsEquivalent }
+      : fx && fx.currency === source.currency ? paymentSnapshot(source.amount, fx) : {};
+    const nextFx = fx && fx.currency === currency ? paymentSnapshot(amount, fx) : {};
     if (source.amount > 0) await tx.cashMovement.create({ data: { ...base, direction: 'OUT', amount: source.amount, currency: source.currency,
-      paymentType: source.paymentType, financialKind: 'EDIT_CORRECTION', note: `Edit correction source:${source.id}` } });
+      paymentType: source.paymentType, financialKind: 'EDIT_CORRECTION', note: `Edit correction source:${source.id}`,
+      ...originalFx } });
     if (amount > 0) await tx.cashMovement.create({ data: { ...base, direction: 'IN', amount, currency, paymentType,
-      note: `${String(source.note || '').startsWith('Overtime') ? 'Overtime' : 'Order'} ${order.orderNumber}; edit ${key}` } });
+      note: `${String(source.note || '').startsWith('Overtime') ? 'Overtime' : 'Order'} ${order.orderNumber}; edit ${key}`,
+      ...nextFx } });
     const identity = `ORDER_EDIT:${key}:${source.id}`;
     const payloads = source.amount > 0 ? [sheets._internals.orderPayload('FINANCIAL_OPERATION', order, {
       idempotencyKey: `${identity}:OUT`, amount: -source.amount, currency: source.currency, paymentType: source.paymentType,
