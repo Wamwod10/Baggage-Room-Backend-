@@ -36,3 +36,27 @@ test('CBU uses the Asia/Tashkent business date, not UTC date', () => {
   assert.equal(cbu.tashkentDate(new Date('2026-10-27T21:01:00Z')), '2026-10-28');
   assert.equal(cbu.tashkentDate(new Date('2026-10-28T18:59:59Z')), '2026-10-28');
 });
+
+test('official CBU fallback accepts only correctly dated official feed, not stale currency rows', async (t) => {
+  const priorFetch = global.fetch;
+  const requested = '2026-08-17';
+  const calls = [];
+  const officialRows = ['USD','EUR','RUB','KZT','TJS']
+    .map((code) => mk(code, 1, '120.00', '17.08.2026'));
+  global.fetch = async (url) => {
+    calls.push(url);
+    if (url.endsWith('/all/' + requested + '/')) return { ok: false, status: 404 };
+    return { ok: true, json: async () => officialRows };
+  };
+  t.after(() => { global.fetch = priorFetch; });
+  const rates = await cbu.getRates(new Date('2026-08-17T09:00:00Z'));
+  assert.equal(rates.RUB.rate, 120);
+  assert.deepEqual(calls, [
+    'https://cbu.uz/uz/arkhiv-kursov-valyut/json/all/2026-08-17/',
+    'https://cbu.uz/uz/arkhiv-kursov-valyut/json/',
+  ]);
+  const stale = ['USD','EUR','RUB','KZT','TJS'].map((code) => mk(code, 1, '120', '01.08.2026'));
+  assert.throws(() => cbu._internals.validateRates(stale, requested), /out of range/);
+  const future = ['USD','EUR','RUB','KZT','TJS'].map((code) => mk(code, 1, '120', '19.08.2026'));
+  assert.throws(() => cbu._internals.validateRates(future, requested), /out of range/);
+});
