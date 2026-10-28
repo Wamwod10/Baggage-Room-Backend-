@@ -2,7 +2,8 @@ const { AppError } = require('../utils/response');
 const { currencyFractionDigits } = require('../utils/money');
 
 // CBU official JSON reference rates. All rates are quoted in UZS per Nominal foreign units.
-const CBU_URL = 'https://cbu.uz/uz/arkhiv-kursov-valyut/json/all/';
+const CBU_BASE = 'https://cbu.uz/uz/arkhiv-kursov-valyut/json/';
+const CBU_RATE_MAX_AGE_DAYS = 7;
 const CURRENCIES = ['USD', 'EUR', 'RUB', 'KZT', 'TJS'];
 const TTL_MS = 15 * 60 * 1000;
 let cached = null;
@@ -37,10 +38,22 @@ const parseRate = (record) => {
   return { currency, source: 'CBU', rate, publishedRate, nominal,
     effectiveDate: dateFromCbu(record.Date) };
 };
-const validateRates = (body) => {
+const validateRates = (body, requestedDay = null) => {
   if (!Array.isArray(body)) throw new Error('CBU rate response must be an array');
   const rates = Object.fromEntries(body.map(parseRate).filter(Boolean).map((fx) => [fx.currency, fx]));
-  for (const currency of CURRENCIES) if (!rates[currency]) throw new Error('CBU rate missing for ' + currency);
+  for (const currency of CURRENCIES) {
+    if (!rates[currency]) throw new Error('CBU rate missing for ' + currency);
+    if (requestedDay) {
+      const effective = Date.parse(rates[currency].effectiveDate + 'T00:00:00Z');
+      const requested = Date.parse(requestedDay + 'T00:00:00Z');
+      const age = (requested - effective) / 86400000;
+      // Weekends/holidays use the most recent published CBU rate.
+      // Reject future-dated or unusually stale snapshots rather than misprice payments.
+      if (!Number.isFinite(age) || age < 0 || age > CBU_RATE_MAX_AGE_DAYS) {
+        throw new Error('CBU rate out of range for ' + currency);
+      }
+    }
+  }
   return rates;
 };
 
@@ -53,22 +66,27 @@ const getRates = async (now = new Date()) => {
   if (cached?.day === day && Date.now() - cached.fetchedAt < TTL_MS) return cached.rates;
   if (pending?.day === day) return pending.promise;
   const promise = (async () => {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 7000);
-    try {
-      const response = await fetch(CBU_URL + day + '/', {
-        signal: controller.signal, headers: { Accept: 'application/json' },
-      });
-      if (!response.ok) throw new Error('CBU HTTP ' + response.status);
-      const rates = validateRates(await response.json());
-      // Never silently fall back to stale or manually configured rates.
-      cached = { day, fetchedAt: Date.now(), rates };
-      return rates;
-    } catch {
-      throw unavailable();
-    } finally {
-      clearTimeout(timeout);
+    // Only the Central Bank's OWN endpoints are trusted. The dated archive is
+    // primary; the official current-rate feed is used for weekends/holidays.
+    for (const url of [CBU_BASE + 'all/' + day + '/', CBU_BASE]) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 7000);
+      try {
+        const response = await fetch(url, {
+          signal: controller.signal, headers: { Accept: 'application/json' },
+        });
+        if (!response.ok) continue;
+        const rates = validateRates(await response.json(), day);
+        cached = { day, fetchedAt: Date.now(), rates };
+        return rates;
+      } catch {
+        // Try the other official endpoint. Never use unverified third-party
+        // exchange rates or obsolete browser-configured prices.
+      } finally {
+        clearTimeout(timeout);
+      }
     }
+    throw unavailable();
   })();
   pending = { day, promise };
   try { return await promise; }
