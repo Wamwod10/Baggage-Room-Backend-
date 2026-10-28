@@ -44,7 +44,7 @@ test('pricing quote passes TJV scope, count and minor-unit conversion', async (t
  const previousCbu=require.cache[cbuPath];
  const previousPrisma=require.cache[prismaPath], previousPricing=require.cache[pricingPath];
  require.cache[cbuPath]={id:cbuPath,filename:cbuPath,loaded:true,exports:{
-   getRate:async(currency)=>({ currency, rate:currency==='USD'?12500:1, publishedRate:currency==='USD'?'12500':'1', nominal:1, effectiveDate:'2026-10-28', source:currency==='UZS'?'UZS':'CBU' })
+   getRate:async(currency)=>({ currency, rate:currency==='USD'?12500:currency==='RUB'?146.75:1, publishedRate:currency==='USD'?'12500':currency==='RUB'?'146.75':'1', nominal:1, effectiveDate:'2026-10-28', source:currency==='UZS'?'UZS':'CBU' })
  }};
  require.cache[prismaPath]={id:prismaPath,filename:prismaPath,loaded:true,exports:{
    branch:{findUnique:async()=>({id:'tjv',code:'TJV'})},
@@ -56,6 +56,10 @@ test('pricing quote passes TJV scope, count and minor-unit conversion', async (t
  const body={branchId:'tjv',hours:15,isCustom:true,currency:'UZS',items:[{size:'S',count:2},{size:'M',count:1}]};
  assert.equal((await quote({role:'SUPER_ADMIN'},body)).calculatedAmount,177000);
  assert.equal((await quote({role:'SUPER_ADMIN'},{...body,currency:'USD',exchangeRate:12500})).calculatedAmount,1416);
+ const rub = await quote({role:'SUPER_ADMIN'}, {...body, currency:'RUB', exchangeRate:89});
+ assert.equal(rub.exchangeRate, 146.75, 'client-supplied stale rate must be ignored');
+ const { convertUzsToCurrencyMinor } = require('../src/utils/money');
+ assert.equal(rub.calculatedAmount, convertUzsToCurrencyMinor(52000,'RUB',146.75)*2 + convertUzsToCurrencyMinor(73000,'RUB',146.75));
 });
 
 test('new TJV foreign-currency overtime uses corrected base, historical snapshots retain hourly rule',()=>{
