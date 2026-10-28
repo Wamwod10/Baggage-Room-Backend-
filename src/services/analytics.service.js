@@ -250,7 +250,7 @@ const dashboardUncached = async (user, query) => {
   ] = await Promise.all([
     prisma.cashMovement.findMany({
       where: { ...scope, createdAt: { gte: today } },
-      select: { branchId: true, type: true, direction: true, amount: true, currency: true, paymentType: true, createdAt: true },
+      select: { branchId: true, type: true, direction: true, amount: true, currency: true, paymentType: true, createdAt: true, uzsEquivalent: true },
     }),
     loadCombinedOrderFacts({ branchId: scopedBranchId }, prisma, timer),
     prisma.debt.findMany({ where: { ...scope, status: "OPEN" }, select: { amount: true, currency: true } }),
@@ -290,6 +290,13 @@ const dashboardUncached = async (user, query) => {
   const cashOnHandByCurrency = sumCurrencyMaps(shiftStatus.map((shift) => shift.cashBalanceByCurrency));
   const netProfitByCurrency = subtractCurrencyMaps(revenueByCurrency, expensesByCurrency, inkassaByCurrency);
   const todayRevenue = revenueByCurrency.UZS;
+  // Equivalent sums are separate from physical UZS receipts and never revalue old foreign payments.
+  const revenueUzsEquivalent = todaySummary.groups.revenueIn.reduce((sum, movement) =>
+    sum + (movement.currency === 'UZS' ? Number(movement.amount || 0)
+      : movement.uzsEquivalent == null ? 0
+        : Math.sign(Number(movement.amount || 0)) * Number(movement.uzsEquivalent)), 0);
+  const legacyForeignMovementsWithoutRate = todaySummary.groups.revenueIn
+    .filter((movement) => movement.currency !== 'UZS' && movement.uzsEquivalent == null).length;
   const expenseAmount = expensesByCurrency.UZS;
   const inkassaAmount = inkassaByCurrency.UZS;
   const cashMovementIn = todayRevenue;
@@ -298,6 +305,8 @@ const dashboardUncached = async (user, query) => {
 
   const result = {
     todayRevenue,
+    revenueUzsEquivalent,
+    legacyForeignMovementsWithoutRate,
     totalRevenue: todayRevenue,
     revenue: todayRevenue,
     activeOrders,
