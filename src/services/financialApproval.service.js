@@ -156,9 +156,12 @@ const executeMovement = async (tx, request, userId) => {
   const base = { branchId: request.branchId, orderId: request.orderId, shiftId: shift.id,
     type: source.type, amount: request.amount, currency: request.currency, createdById: userId,
     note: `${request.kind} ${request.id}; source ${source.id}`, financialKind: request.kind };
-  await tx.cashMovement.create({ data: { ...base, direction: 'OUT', paymentType: request.kind === 'REFUND' ? request.payoutPaymentType : request.oldPaymentType } });
+  const previousFx = source.fxRate && source.fxRateDate && source.uzsEquivalent !== null ? {
+    fxRate: source.fxRate, fxRateDate: source.fxRateDate, uzsEquivalent: source.uzsEquivalent,
+  } : {};
+  await tx.cashMovement.create({ data: { ...base, ...previousFx, direction: 'OUT', paymentType: request.kind === 'REFUND' ? request.payoutPaymentType : request.oldPaymentType } });
   if (request.kind === 'PAYMENT_CORRECTION') {
-    await tx.cashMovement.create({ data: { ...base, direction: 'IN', paymentType: request.newPaymentType } });
+    await tx.cashMovement.create({ data: { ...base, ...previousFx, direction: 'IN', paymentType: request.newPaymentType } });
     if (source.type === 'ORDER_PAYMENT') {
       const isOvertime = String(source.note || '').startsWith('Overtime');
       const field = isOvertime ? 'overtimePaymentType' : 'paymentType';
