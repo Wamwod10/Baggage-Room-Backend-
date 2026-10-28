@@ -22,7 +22,7 @@ const { markAnalyticsMutation } = require("./analyticsCache");
 const { normalizePaymentType, paymentLabel } = require("../utils/payment");
 const { requireIdempotencyKey } = require("../utils/idempotency");
 const financialEdit = require('./orderFinancialEdit.service');
-const { assertMinorAmount, assertPricePermission, assertDiscountReason, isStaffDiscountOnlyEdit, validateBaggage, assertPickupPaid, assertPickupTotal, withRecordedDiscount, lockOrder } = require('./financialControls');
+const { assertMinorAmount, assertPricePermission, assertDiscountReason, isStaffDiscountOnlyEdit, completedOrderReprice, validateBaggage, assertPickupPaid, assertPickupTotal, withRecordedDiscount, lockOrder } = require('./financialControls');
 const {
   overtimeHoursAfterGrace,
   isOverdueAfterGrace,
@@ -1079,7 +1079,7 @@ const updateOrder = async (user, id, body, { idempotencyKey } = {}) => {
         }
       }
       if (itemChanged) {
-        if (current.status === 'PICKED_UP') throw new AppError('Completed baggage cannot be repriced', 403);
+        if (current.status === 'PICKED_UP') assertDiscountReason(body.priceChangeReason || body.discountReason);
         const nextItems = await tx.orderItem.findMany({ where: { orderId: id } });
         validateBaggage(nextItems, current.branch.code);
         const tariffs = await tx.tariff.findMany({ where: { branchId: current.branchId } });
@@ -1104,11 +1104,17 @@ const updateOrder = async (user, id, body, { idempotencyKey } = {}) => {
           calculatedAmount = assertMinorAmount(calculatedAmount + originalPrice);
           await tx.orderItem.update({ where: { id: row.id }, data: { unitPrice, originalPrice, finalPrice: Math.max(0, originalPrice - row.discountAmount) } });
         }
-        if (current.discountAmount > calculatedAmount) throw new AppError('Baggage change would exceed approved discount', 409);
-        data.calculatedAmount = calculatedAmount;
-        if (body.finalAmount === undefined || body.finalAmount === current.finalAmount) data.finalAmount = calculatedAmount - current.discountAmount;
-        else data.discountAmount = Math.max(0, calculatedAmount - data.finalAmount);
-        data.paymentDifference = current.realPaidAmount - data.finalAmount;
+        if (current.status === 'PICKED_UP') {
+          Object.assign(data, completedOrderReprice(current, calculatedAmount,
+            body.finalAmount !== undefined && body.finalAmount !== current.finalAmount ? body.finalAmount : undefined));
+        } else {
+          if (current.discountAmount > calculatedAmount) throw new AppError('Baggage change would exceed approved discount', 409);
+          data.calculatedAmount = calculatedAmount;
+          if (body.finalAmount === undefined || body.finalAmount === current.finalAmount) data.finalAmount = calculatedAmount - current.discountAmount;
+          else data.discountAmount = Math.max(0, calculatedAmount - data.finalAmount);
+          if (data.finalAmount > calculatedAmount) throw new AppError('Final amount exceeds calculated price', 400);
+          data.paymentDifference = current.realPaidAmount - data.finalAmount;
+        }
         await tx.locker.updateMany({ where: { currentOrderId: id, id: { notIn: [...new Set(nextItems.map((row) => row.lockerId))] } }, data: { status: 'EMPTY', currentOrderId: null } });
       }
     }
