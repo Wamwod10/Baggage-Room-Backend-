@@ -717,6 +717,11 @@ const createOrder = async (user, body, { idempotencyKey } = {}) => {
     const currency = body.currency || "UZS";
     // Every new order uses the official CBU snapshot, not mutable local Settings.
     const exchangeRate = paymentFx.rate;
+    // A stale quote must never become an implicit discount or overpayment.
+    if (currency !== "UZS" && body.exchangeRate !== undefined
+        && Math.abs(Number(body.exchangeRate) - exchangeRate) > 0.00000001) {
+      throw new AppError("CBU kursi yangilandi. Narxni qayta hisoblab, buyurtmani qayta saqlang.", 409);
+    }
     const itemRows = inputItems.map((item) => {
       const locker = lockers.find((row) => row.id === item.lockerId);
       if (!locker) {
@@ -952,11 +957,14 @@ const updateOrder = async (user, id, body, { idempotencyKey } = {}) => {
     return replay;
   }
   // A new payment or payment correction receives today's verified CBU rate.
-  const preEdit = await prisma.order.findUnique({ where: { id }, select: { branchId: true, currency: true } });
+  const preEdit = await prisma.order.findUnique({ where: { id }, select: {
+    branchId: true, currency: true, paymentType: true, realPaidAmount: true,
+    overtimeAmount: true, overtimePaymentType: true,
+  } });
   if (!preEdit) throw new AppError('Order not found', 404);
   getScopedBranchId(user, preEdit.branchId);
   const needsPaymentFx = ['currency', 'paymentType', 'realPaidAmount', 'overtimeAmount', 'overtimePaymentType']
-    .some((field) => body[field] !== undefined);
+    .some((field) => body[field] !== undefined && String(body[field]) !== String(preEdit[field]));
   const editFx = needsPaymentFx ? await cbuRates.getRate(body.currency || preEdit.currency) : null;
   let result;
   try {
@@ -1307,7 +1315,16 @@ const pickupOrder = async (user, id, body, { idempotencyKey } = {}) => {
   const fxOrder = await prisma.order.findUnique({ where: { id }, select: { branchId: true, currency: true } });
   if (!fxOrder) throw new AppError('Order not found', 404);
   getScopedBranchId(user, fxOrder.branchId);
-  const pickupFx = await cbuRates.getRate(body.currency || fxOrder.currency);
+  let pickupFx = null;
+  let pickupFxFailure = null;
+  try {
+    pickupFx = await cbuRates.getRate(body.currency || fxOrder.currency);
+  } catch (error) {
+    pickupFxFailure = error;
+  }
+  // An old fully-paid order can be picked up without a new FX transaction
+  // even during a CBU outage. Never use a stale rate for a NEW receipt.
+  if (!pickupFx && body.currency && body.currency !== fxOrder.currency) throw pickupFxFailure;
   const timer = createTimer("orders.pickup", {
     hasOvertime: Number(body.overtimeAmount || body.extraPayment || 0) > 0,
     hasDebtPayment: body.debtPaidAmount !== undefined,
@@ -1319,8 +1336,9 @@ const pickupOrder = async (user, id, body, { idempotencyKey } = {}) => {
     let order = await timer.time("order lookup", () => tx.order.findUnique({ where: { id }, include: includeOrder }));
     if (!order || !["ACTIVE", "DELAYED"].includes(order.status)) throw new AppError("Active order not found", 404);
     await timer.time("branch lookup", async () => getScopedBranchId(user, order.branchId));
-    order = await financialEdit.convertForPickup(tx, order, { ...body, exchangeRate: pickupFx.rate }, user, requestKey);
-    if (pickupFx.currency !== order.currency) throw new AppError('Payment currency changed. Retry the pickup.', 409);
+    order = await financialEdit.convertForPickup(tx, order,
+      pickupFx ? { ...body, exchangeRate: pickupFx.rate } : body, user, requestKey);
+    if (pickupFx && pickupFx.currency !== order.currency) throw new AppError('Payment currency changed. Retry the pickup.', 409);
     const discounted = withRecordedDiscount(order);
     if (discounted !== order) {
       await tx.order.update({ where: { id }, data: {
@@ -1362,6 +1380,10 @@ const pickupOrder = async (user, id, body, { idempotencyKey } = {}) => {
     }
     if (Number(body.debtPaidAmount || 0) > 0 && !debtPaymentType) {
       throw new AppError("paymentType is required", 400);
+    }
+    if (!pickupFx && ((overtimeAmount > 0 && overtimePaymentType !== "DEBT")
+      || Number(body.debtPaidAmount || 0) > 0)) {
+      throw pickupFxFailure || new AppError("CBU kursi topilmadi", 503);
     }
     await timer.time("order status transition", () => ensureSingleStatusTransition({
       model: tx.order,
