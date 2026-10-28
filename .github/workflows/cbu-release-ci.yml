@@ -13,5 +13,17 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
+      - name: Verify live official CBU rate endpoint
+        run: |
+          node - <<'NODE'
+          (async () => {
+            const { getRates } = require('./src/services/cbuRates.service');
+            const rates = await getRates();
+            for (const code of ['RUB','USD','EUR','KZT','TJS']) {
+              if (!(rates[code]?.rate > 0)) throw new Error('Missing verified CBU rate for ' + code);
+            }
+            console.log('CBU official daily rate endpoint reachable; five supported currencies validated');
+          })().catch((error) => { console.error(error.message); process.exitCode = 1; });
+          NODE
       - run: npm test
       - run: npm run test:jarvis
