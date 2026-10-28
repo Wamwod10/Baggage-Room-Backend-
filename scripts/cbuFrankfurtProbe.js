@@ -37,19 +37,18 @@ async function runForcedIpv4(url) {
   });
 }
 async function runMirrorDiagnostic() {
-  const url = "https://apicloud.uz/v1/currency/rates?valyuta=RUB";
-  try {
-    const response = await fetch(url,{signal:AbortSignal.timeout(8500),headers:{Accept:"application/json"}});
-    const body = await response.json();
-    // Diagnostic only. Do not trust or ingest third-party rate data into any payment table.
-    const entry = body?.valyuta || body?.data?.valyuta || body?.data || {};
-    console.log(JSON.stringify({diagnostic:"CBU_UNTRUSTED_MIRROR_CONNECTIVITY",
-      vendor:"apicloud.uz",reachable:response.ok,status:response.status,
-      hasRate:Number.isFinite(Number(entry.kurs ?? entry.rate)),
-      hasEffectiveDate:Boolean(entry.sana || entry.date || entry.Date || body?.sana || body?.date || body?.Date),
-    }));
-  } catch(error) { console.log(JSON.stringify({diagnostic:"CBU_UNTRUSTED_MIRROR_CONNECTIVITY",
-    vendor:"apicloud.uz",reachable:false,error:error?.name||"Error"})); }
+  const sources = [
+    ["allratestoday.com","https://allratestoday.com/api/v1/central-bank/cbu/latest"],
+    ["api.currencyapi.com","https://api.currencyapi.com/v3/official?source=cbu"],
+  ];
+  await Promise.all(sources.map(async ([vendor, url]) => {
+    try {
+      const response = await fetch(url,{signal:AbortSignal.timeout(7000),headers:{Accept:"application/json"}});
+      console.log(JSON.stringify({diagnostic:"CBU_ALTERNATIVE_SERVICE_CONNECTIVITY",
+        vendor,httpStatus:response.status,networkReachable:true,requiresAuthentication:response.status===401||response.status===403}));
+    } catch(error) { console.log(JSON.stringify({diagnostic:"CBU_ALTERNATIVE_SERVICE_CONNECTIVITY",
+      vendor,networkReachable:false,error:error?.name||"Error"})); }
+  }));
 }
 async function run() {
   for (const url of urls) {
@@ -82,7 +81,7 @@ async function run() {
   const ipv4 = await runForcedIpv4("https://cbu.uz/uz/arkhiv-kursov-valyut/json/");
   console.log(JSON.stringify({ diagnostic: "CBU_FORCED_IPV4_RESULT", ...ipv4 }));
   console.log(JSON.stringify({ diagnostic: "CBU_FRANKFURT_PROBE_RESULT", reachable: ipv4.reachable }));
-  await runMirrorDiagnostic();
+
 }
 // A minimal listener satisfies Render web health requirements; no DB, credentials or customer data.
 http.createServer((req, res) => {
@@ -92,5 +91,6 @@ http.createServer((req, res) => {
   res.end(req.url === "/health" ? '{"status":"probe-only"}' : '{"error":"not-found"}');
 }).listen(Number(process.env.PORT || 10000), "0.0.0.0", () => {
   console.log(JSON.stringify({ diagnostic: "CBU_FRANKFURT_PROBE_STARTED" }));
+  runMirrorDiagnostic().catch(error=>console.log(JSON.stringify({diagnostic:"CBU_ALTERNATIVES_FAILED",error:error?.name||"Error"})));
   run().catch(error => console.log(JSON.stringify({ diagnostic: "CBU_FRANKFURT_PROBE_FATAL", error: error?.name || "Error" })));
 });
