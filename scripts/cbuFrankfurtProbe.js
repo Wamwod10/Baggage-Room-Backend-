@@ -36,6 +36,21 @@ async function runForcedIpv4(url) {
     req.once("timeout", () => req.destroy(new Error("IPv4 Timeout")));
   });
 }
+async function runMirrorDiagnostic() {
+  const url = "https://apicloud.uz/v1/currency/rates?valyuta=RUB";
+  try {
+    const response = await fetch(url,{signal:AbortSignal.timeout(8500),headers:{Accept:"application/json"}});
+    const body = await response.json();
+    // Diagnostic only. Do not trust or ingest third-party rate data into any payment table.
+    const entry = body?.valyuta || body?.data?.valyuta || body?.data || {};
+    console.log(JSON.stringify({diagnostic:"CBU_UNTRUSTED_MIRROR_CONNECTIVITY",
+      vendor:"apicloud.uz",reachable:response.ok,status:response.status,
+      hasRate:Number.isFinite(Number(entry.kurs ?? entry.rate)),
+      hasEffectiveDate:Boolean(entry.sana || entry.date || entry.Date || body?.sana || body?.date || body?.Date),
+    }));
+  } catch(error) { console.log(JSON.stringify({diagnostic:"CBU_UNTRUSTED_MIRROR_CONNECTIVITY",
+    vendor:"apicloud.uz",reachable:false,error:error?.name||"Error"})); }
+}
 async function run() {
   for (const url of urls) {
     const path = new URL(url).pathname;
@@ -67,6 +82,7 @@ async function run() {
   const ipv4 = await runForcedIpv4("https://cbu.uz/uz/arkhiv-kursov-valyut/json/");
   console.log(JSON.stringify({ diagnostic: "CBU_FORCED_IPV4_RESULT", ...ipv4 }));
   console.log(JSON.stringify({ diagnostic: "CBU_FRANKFURT_PROBE_RESULT", reachable: ipv4.reachable }));
+  await runMirrorDiagnostic();
 }
 // A minimal listener satisfies Render web health requirements; no DB, credentials or customer data.
 http.createServer((req, res) => {
