@@ -253,6 +253,15 @@ test('Jarvis real PostgreSQL HTTP + ledger reconciliation (isolated DB required)
         assert.equal(row.fxSource, 'CBU');
         assert.equal(row.uzsEquivalent, entry.expected);
       }
+      // The Analytics SQL aggregation must preserve FX equivalent and legacy
+      // coverage even after grouping many ledger movements into one row.
+      const { loadMovementFacts } = require('../src/repositories/cashMovementAnalytics.repository');
+      const fxFacts = await loadMovementFacts({branchId:'b1',dateFrom:'2026-10-28',dateTo:'2026-10-28'},prisma);
+      assert.equal(fxFacts.filter(m=>m.currency==='RUB').reduce((n,m)=>n+Number(m.uzsEquivalent || 0),0),14675);
+      assert.equal(fxFacts.filter(m=>m.currency==='USD').reduce((n,m)=>n+Number(m.uzsEquivalent || 0),0),300000);
+      assert.equal(fxFacts.reduce((n,m)=>n+m.missingFxCount,0),0);
+      const oldFacts = await loadMovementFacts({branchId:'b1',dateFrom:'2026-10-09',dateTo:'2026-10-09'},prisma);
+      assert.ok(oldFacts.some(m=>m.currency==='RUB' && m.uzsEquivalent===null && m.missingFxCount>=1));
       const original = (await get('transactions', { branchCode: 'BR1', from: '2026-10-09', to: '2026-10-09' })).data.find(item=>item.id==='rub');
       assert.ok(original, 'existing RUB transaction must be retained');
       assert.equal(original.fxRate, null);
