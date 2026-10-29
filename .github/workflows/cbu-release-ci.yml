@@ -13,30 +13,25 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
-      - name: Diagnose official CBU endpoint reachability
+      # External CBU HTTPS has repeatedly timed out from GitHub runners.
+      # Only run this 6-second read-only diagnostic when explicitly requested,
+      # not on every PR. Production-rate availability is verified separately.
+      - name: Manual official CBU network check
+        if: github.event_name == 'workflow_dispatch'
         run: |
           node - <<'NODE'
           (async () => {
-            const paths = [
-              'https://cbu.uz/uz/arkhiv-kursov-valyut/json/all/2026-10-28/',
-              'https://cbu.uz/uz/arkhiv-kursov-valyut/json/',
-              'https://www.cbu.uz/uz/arkhiv-kursov-valyut/json/',
-              'https://cbu.uz/ru/arkhiv-kursov-valyut/json/',
-            ];
-            for (const url of paths) {
-              try {
-                const res = await fetch(url, { signal: AbortSignal.timeout(6000), headers: { Accept: 'application/json' } });
-                const body = await res.text();
-                const json = JSON.parse(body);
-                console.log(new URL(url).host + new URL(url).pathname,
-                  'status', res.status, 'jsonArray', Array.isArray(json),
-                  'RUBRate', json.find?.((item) => item.Ccy === 'RUB')?.Rate ?? 'missing');
-              } catch (e) {
-                console.log(new URL(url).host + new URL(url).pathname, 'failed',
-                  e.name, e.cause?.code || e.code || e.message);
-              }
+            const url = 'https://cbu.uz/uz/arkhiv-kursov-valyut/json/';
+            try {
+              const response = await fetch(url, { signal: AbortSignal.timeout(6000) });
+              const data = await response.json();
+              const rub = Array.isArray(data) && data.find(row => row.Ccy === 'RUB');
+              console.log(JSON.stringify({ reachable: response.ok && Boolean(rub?.Rate),
+                effectiveDate: rub?.Date || null }));
+            } catch (error) {
+              console.log(JSON.stringify({ reachable: false, error: error.name }));
             }
-          })().catch((error) => { console.error(error.message); process.exitCode = 1; });
+          })().catch(err => { console.error(err.message); process.exitCode = 1; });
           NODE
       - run: npm test
       - run: npm run test:jarvis
