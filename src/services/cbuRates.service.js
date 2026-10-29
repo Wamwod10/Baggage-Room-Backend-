@@ -80,6 +80,13 @@ const unavailable = () => new AppError(
 
 const getRates = async (now = new Date()) => {
   const day = tashkentDate(now);
+  // Explicit provider mode: never consult CBU or a browser rate when Google mode is active.
+  if (process.env.FX_RATE_PROVIDER === 'GOOGLE_FINANCE') {
+    const rates = await require('./googleFinanceInbox.service').getFreshRates(day,{now});
+    if (!rates) throw new AppError(
+      'Google Finance kurslari yangilanmagan. Xorijiy valyuta to‘lovi vaqtincha yopiq.',503);
+    return rates;
+  }
   if (cached?.day === day && Date.now() - cached.fetchedAt < TTL_MS) return cached.rates;
   if (pending?.day === day) return pending.promise;
   const promise = (async () => {
