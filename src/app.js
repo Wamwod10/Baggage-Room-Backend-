@@ -79,12 +79,6 @@ app.use(
     credentials: true,
   })
 );
-// Isolated official-rate ingestion: raw body is HMAC-verified; no JWT or DB credentials exposed.
-// It is disabled unless an operator configures a 32+ byte shared secret.
-app.post('/api/integrations/cbu-rate-sync',
-  rateLimit({ windowMs: 60 * 1000, limit: 8, standardHeaders: 'draft-7', legacyHeaders: false }),
-  express.raw({ type: 'application/json', limit: '64kb' }),
-  require('./services/cbuRateInbox.service').handleSync);
 // Authenticated Google Finance observations; separate from the legacy CBU relay.
 app.post('/api/integrations/google-finance-sync',
   rateLimit({windowMs:60*1000, limit:8, standardHeaders:'draft-7', legacyHeaders:false}),
