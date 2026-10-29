@@ -1,3 +1,4 @@
+require('./googleFinanceInbox.test');
 require('./googleCbuRelay.test');
 require('./currencyapiProbe.test');
 require('./cbuRateInbox.test');
