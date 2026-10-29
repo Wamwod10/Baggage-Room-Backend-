@@ -553,3 +553,10 @@ model CbuRateInbox {
   fetchedAt    DateTime
   receivedAt   DateTime @default(now())
 }
+
+model GoogleFinanceRateInbox {
+  day        String   @id @db.VarChar(10)
+  rates      Json
+  observedAt DateTime
+  receivedAt DateTime @default(now())
+}
