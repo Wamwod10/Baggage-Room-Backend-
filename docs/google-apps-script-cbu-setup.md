@@ -50,9 +50,12 @@ makes them auditable.
    rates, and test one synthetic 100 RUB and one synthetic 25 USD payment.
    Compare order detail, `CashMovement.fxRate/fxRateDate/uzsEquivalent`,
    Analytics, and Jarvis for the *same* official effective date.
-8. ONLY after staging reconciliation succeeds, run `installCbuTrigger` once
-   from the Google Apps Script editor. It installs exactly one time-driven
-   30-minute trigger. It can be disabled with `stopCbuTrigger`.
+8. For a **single-click staging activation**, once steps 1–5 and the staging
+   backend are ready, select `activateGoogleCbuOnStaging` and press **Run**.
+   It performs the Google-to-CBU probe, pushes one HMAC-signed staging snapshot,
+   then installs the recurring 30-minute trigger **only if both succeed**.
+   It can be disabled with `stopCbuTrigger`. This does **not** enable the
+   production backend or deploy frontend code.
 
 ## Operational safety
 
