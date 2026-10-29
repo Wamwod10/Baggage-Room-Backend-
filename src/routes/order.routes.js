@@ -18,6 +18,16 @@ router.get('/financial-capabilities', (req, res) => {
   try { require('../services/financialControls').assertPricePermission(req.user, 'Capability check'); canAdjustPrice = true; } catch { /* Fail closed. */ }
   return require('../utils/response').success(res, { canAdjustPrice });
 });
+router.get('/exchange-rates', require('../utils/response').asyncHandler(async (req, res) => {
+  const { getRates, tashkentDate } = require('../services/cbuRates.service');
+  const rates = await getRates();
+  return require('../utils/response').success(res, {
+    source: 'GOOGLE_FINANCE', date: tashkentDate(), rates: {
+      UZS: { currency: 'UZS', rate: 1, source: 'UZS', nominal: 1, effectiveDate: tashkentDate() },
+      ...rates,
+    },
+  });
+}));
 router.post('/quote', validate(z.object({ body: z.object({
   branchId: z.string().min(1), hours: z.number().positive(), isCustom: z.boolean().optional(), currency,
   exchangeRate: z.number().positive().optional(), items: z.array(z.object({ size: lockerSize, count: z.number().int().positive() })).min(1),

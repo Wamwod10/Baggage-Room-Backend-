@@ -77,16 +77,24 @@ const planEdit = (order, body, user, { requireManagerApproval = false } = {}) =>
   return { data, movements, convert };
 };
 
-const recordEdit = async (tx, order, updated, plan, user, key, reason) => {
+const recordEdit = async (tx, order, updated, plan, user, key, reason, fx) => {
   const shift = await findOpenShift(tx, order.branchId);
   if (!shift) throw new AppError('Open shift required to correct payment/currency', 409);
   const sheets = require('./googleSheets.service');
   for (const { source, amount, currency, paymentType } of plan.movements) {
     const base = { branchId: order.branchId, shiftId: shift.id, orderId: order.id, type: source.type, createdById: user.id };
+    const { paymentSnapshot } = require('./cbuRates.service');
+    const originalFx = source.fxRateDate && source.uzsEquivalent != null
+      ? { fxRate: source.fxRate, fxRateDate: source.fxRateDate, fxNominal: source.fxNominal,
+        fxSource: source.fxSource, uzsEquivalent: source.uzsEquivalent }
+      : {}; // Never revalue a historical receipt using today's exchange rate.
+    const nextFx = fx && fx.currency === currency ? paymentSnapshot(amount, fx) : {};
     if (source.amount > 0) await tx.cashMovement.create({ data: { ...base, direction: 'OUT', amount: source.amount, currency: source.currency,
-      paymentType: source.paymentType, financialKind: 'EDIT_CORRECTION', note: `Edit correction source:${source.id}` } });
+      paymentType: source.paymentType, financialKind: 'EDIT_CORRECTION', note: `Edit correction source:${source.id}`,
+      ...originalFx } });
     if (amount > 0) await tx.cashMovement.create({ data: { ...base, direction: 'IN', amount, currency, paymentType,
-      note: `${String(source.note || '').startsWith('Overtime') ? 'Overtime' : 'Order'} ${order.orderNumber}; edit ${key}` } });
+      note: `${String(source.note || '').startsWith('Overtime') ? 'Overtime' : 'Order'} ${order.orderNumber}; edit ${key}`,
+      ...nextFx } });
     const identity = `ORDER_EDIT:${key}:${source.id}`;
     const payloads = source.amount > 0 ? [sheets._internals.orderPayload('FINANCIAL_OPERATION', order, {
       idempotencyKey: `${identity}:OUT`, amount: -source.amount, currency: source.currency, paymentType: source.paymentType,
@@ -109,7 +117,7 @@ const debtBalance = (order, plan) => {
     Math.max(0, plan.data.finalAmount - plan.data.realPaidAmount) + plan.convert(debt.amount - previousBase));
   return plan.convert(debt?.amount || 0);
 };
-const convertForPickup = async (tx, order, body, user, key) => {
+const convertForPickup = async (tx, order, body, user, key, officialFx = null) => {
   if (!body.currency || body.currency === order.currency) return order;
   const plan = planEdit(order, { currency: body.currency, exchangeRate: body.exchangeRate,
     sourceExchangeRate: body.sourceExchangeRate, priceChangeReason: body.priceChangeReason }, user, { requireManagerApproval: true });
@@ -130,7 +138,7 @@ const convertForPickup = async (tx, order, body, user, key) => {
     debt = { ...debt, ...data };
   }
   const updated = { ...order, ...plan.data, items, debt };
-  await recordEdit(tx, order, updated, plan, user, `${key}:currency`, body.priceChangeReason);
+  await recordEdit(tx, order, updated, plan, user, `${key}:currency`, body.priceChangeReason, officialFx);
   updated.cashMovements = await tx.cashMovement.findMany({ where: { orderId: order.id } });
   await tx.auditLog.create({ data: { branchId: order.branchId, userId: user.id, entityType: 'Order', entityId: order.id,
     action: 'ORDER_CURRENCY_CORRECTION', oldValue: JSON.parse(JSON.stringify(order)), newValue: JSON.parse(JSON.stringify(updated)), description: body.priceChangeReason } });

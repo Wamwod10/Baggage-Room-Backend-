@@ -57,6 +57,13 @@ test('repeat correction skips replaced receipts and conserves total across round
   assert.equal(plan.data.realPaidAmount,12000);
 });
 test('order edit converts and records atomically through the existing save flow; replay adds no receipts', async () => {
+  const cbuRates = require('../src/services/cbuRates.service');
+  const previousGetRate = cbuRates.getRate;
+  cbuRates.getRate = async (currency) => ({
+    currency, rate: currency === 'USD' ? 12000 : 1,
+    nominal: 1, publishedRate: currency === 'USD' ? '12000' : '1',
+    effectiveDate: '2026-10-28', source: currency === 'UZS' ? 'UZS' : 'CBU',
+  });
   const prisma = require('../src/config/prisma');
   const telegram = require('../src/services/telegram.service');
   const sheets = require('../src/services/googleSheets.service');
@@ -85,6 +92,7 @@ test('order edit converts and records atomically through the existing save flow;
     assert.equal(state.cashMovements.length,5);assert.equal(outbox.length,4);
     assert.throws(()=>planEdit({...order,cashMovements:[]},{paymentType:'TERMINAL',priceChangeReason:'test'},user),/reconciliation/);
   } finally {
+    cbuRates.getRate = previousGetRate;
     if (original.approvers === undefined) delete process.env.PRICE_APPROVER_USER_IDS; else process.env.PRICE_APPROVER_USER_IDS=original.approvers;
     prisma.$transaction=original.transaction; prisma.order.findUnique=original.lookup;
     telegram.sendSafely=original.telegram; sheets.sendSafely=original.sheets;

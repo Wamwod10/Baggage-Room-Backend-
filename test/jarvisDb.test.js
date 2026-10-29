@@ -51,6 +51,118 @@ test('Jarvis real PostgreSQL HTTP + ledger reconciliation (isolated DB required)
       }
     } finally { migrationClient.release(); }
     prisma = new PrismaClient({ adapter: new PrismaPg(pool, { schema }), log: [] });
+    await t.test('signed CBU inbox persists and rejects forged receipts against isolated real PostgreSQL', async () => {
+      const cbuInbox = require('../src/services/cbuRateInbox.service');
+      const sharedSecret = 'ci-test-only-strong-secret-key-with-32-chars-or-more';
+      const priorSecret = process.env.CBU_SYNC_SHARED_SECRET;
+      process.env.CBU_SYNC_SHARED_SECRET = sharedSecret;
+      try {
+        const now = new Date('2026-10-28T11:00:00Z');
+        const rates = ['RUB','USD','EUR','KZT','TJS'].map(Ccy => ({
+          Ccy, Rate: Ccy === 'RUB' ? '146.75' : '12000.00',
+          Nominal: 1, Date: '28.10.2026',
+        }));
+        const raw = Buffer.from(JSON.stringify({ source:'CBU', fetchedAt:now.toISOString(), rates }));
+        const timestamp = String(now.getTime());
+        const signature = 'sha256=' + crypto.createHmac('sha256', sharedSecret)
+          .update(timestamp).update('.').update(raw).digest('hex');
+        const headers = {'x-cbu-sync-timestamp':timestamp,'x-cbu-sync-signature':signature};
+        await assert.rejects(cbuInbox.acceptSignedEnvelope(
+          Buffer.from(raw.toString().replace('146.75','89')), headers, {now,prisma}
+        ), /authentication/);
+        assert.deepEqual(await cbuInbox.acceptSignedEnvelope(raw, headers, {now,prisma}),{
+          accepted:true,date:'2026-10-28',currencies:5,
+        });
+        const fromDb = await prisma.cbuRateInbox.findUnique({where:{day:'2026-10-28'}});
+        assert.equal(fromDb.officialRows.find(row=>row.Ccy==='RUB').Rate,'146.75');
+        const result = await cbuInbox.readFreshRates('2026-10-28',{now,prisma});
+        assert.equal(result.RUB.rate,146.75);
+        assert.equal(result.USD.rate,12000);
+      } finally {
+        if(priorSecret===undefined)delete process.env.CBU_SYNC_SHARED_SECRET;
+        else process.env.CBU_SYNC_SHARED_SECRET=priorSecret;
+      }
+    });
+    await t.test('Google Apps Script HMAC payload is accepted by real raw HTTP + isolated PostgreSQL', async () => {
+      const vm = require('node:vm');
+      const { createSyncHandler } = require('../src/services/cbuRateInbox.service');
+      const fixtureTime = '2026-10-28T12:00:00.000Z';
+      const fixed = new Date(fixtureTime);
+      const googleSecret = 'ci-only-google-hmac-shared-secret-0123456789';
+      const priorSecret = process.env.CBU_SYNC_SHARED_SECRET;
+      process.env.CBU_SYNC_SHARED_SECRET = googleSecret;
+      const sent = [];
+      const cbuRows = ['USD','EUR','RUB','KZT','TJS'].map(code => ({
+        Ccy: code, Rate: code === 'RUB' ? '146.75' : '12000',
+        Nominal: 1, Date: '28.10.2026',
+      }));
+      class FixedDate extends Date {
+        constructor(...args) { super(...(args.length ? args : [fixtureTime])); }
+        static now() { return fixed.getTime(); }
+      }
+      const script = fs.readFileSync(path.join(__dirname, '../scripts/googleCbuRelay.gs'), 'utf8');
+      const context = {
+        Date: FixedDate, console: { log() {} },
+        Utilities: {
+          Charset: { UTF_8: 'UTF-8' },
+          formatDate: () => '2026-10-28',
+          newBlob: value => ({ getBytes: () => [...Buffer.from(value, 'utf8')] }),
+          computeHmacSha256Signature: (message, key) =>
+            [...crypto.createHmac('sha256', key).update(message).digest()]
+              .map(byte => byte >= 128 ? byte - 256 : byte),
+        },
+        PropertiesService: { getScriptProperties: () => ({
+          getProperty: key => ({
+            CBU_SYNC_SHARED_SECRET: googleSecret,
+            CBU_SYNC_TARGET_URL: 'https://staging.example.org/api/integrations/cbu-rate-sync',
+          })[key],
+        }) },
+        LockService: { getScriptLock: () => ({ tryLock: () => true, releaseLock() {} }) },
+        UrlFetchApp: { fetch: (url, options) => {
+          if (url.startsWith('https://cbu.uz/')) {
+            return { getResponseCode: () => 200, getContentText: () => JSON.stringify(cbuRows) };
+          }
+          sent.push({ url, options });
+          return { getResponseCode: () => 200,
+            getContentText: () => JSON.stringify({ accepted: true, date: '2026-10-28', currencies: 5 }) };
+        } },
+      };
+      let localServer;
+      try {
+        vm.runInNewContext(script, context, { filename: 'googleCbuRelay.gs' });
+        context.syncGoogleCbuRates();
+        assert.equal(sent.length, 1);
+        const outgoing = sent[0];
+        assert.equal(outgoing.url, 'https://staging.example.org/api/integrations/cbu-rate-sync');
+        const incoming = express();
+        incoming.post('/api/integrations/cbu-rate-sync', express.raw({type:'application/json'}),
+          createSyncHandler({prisma,now:()=>fixed}));
+        localServer = await new Promise(resolve => {
+          const listener = incoming.listen(0, '127.0.0.1', () => resolve(listener));
+        });
+        const endpoint = `http://127.0.0.1:${localServer.address().port}/api/integrations/cbu-rate-sync`;
+        const headers = {
+          'Content-Type': 'application/json',
+          'X-CBU-Sync-Timestamp': outgoing.options.headers['X-CBU-Sync-Timestamp'],
+          'X-CBU-Sync-Signature': outgoing.options.headers['X-CBU-Sync-Signature'],
+        };
+        const accepted = await fetch(endpoint, { method:'POST', headers, body:outgoing.options.payload });
+        assert.equal(accepted.status, 200);
+        assert.deepEqual(await accepted.json(), { accepted:true,date:'2026-10-28',currencies:5 });
+        const persisted = await prisma.cbuRateInbox.findUnique({where:{day:'2026-10-28'}});
+        assert.equal(persisted.officialRows.find(row=>row.Ccy==='RUB').Rate,'146.75');
+        assert.equal(persisted.officialRows.length,5);
+        const replay = await fetch(endpoint, {method:'POST',headers,body:outgoing.options.payload});
+        assert.equal(replay.status,409,'replayed Google request must not replace a rate');
+        const forged = await fetch(endpoint, {method:'POST',headers,
+          body:outgoing.options.payload.replace('146.75','89')});
+        assert.equal(forged.status,401,'forged Google request must be refused');
+      } finally {
+        if (localServer) await new Promise(resolve=>localServer.close(resolve));
+        if (priorSecret===undefined) delete process.env.CBU_SYNC_SHARED_SECRET;
+        else process.env.CBU_SYNC_SHARED_SECRET = priorSecret;
+      }
+    });
     for (let n = 1; n <= 5; n++) await pool.query('INSERT INTO "Branch" (id,name,code,"createdAt","updatedAt") VALUES ($1,$2,$3,$4,$4)', ['b' + n, 'Test branch ' + n, 'BR' + n, '2026-10-01T00:00:00Z']);
     await pool.query('INSERT INTO "User" (id,login,name,"passwordHash",role,"branchId","updatedAt") VALUES ($1,$2,$3,$4,$5,$6,$7)', ['u1','test-staff','private staff','private-hash','BRANCH_ADMIN','b1','2026-10-01']);
     await pool.query(`INSERT INTO "Order" (id,"orderNumber","branchId","clientName",phone,passport,"tariffHours","paymentType","finalAmount","realPaidAmount","checkIn","plannedCheckOut","createdById","createdAt","updatedAt")
@@ -190,6 +302,50 @@ test('Jarvis real PostgreSQL HTTP + ledger reconciliation (isolated DB required)
         }
       }
       assert.deepEqual(await fingerprint(),before,'GETs and rejected methods must not change business DB records');
+    });
+    await t.test('two synthetic RUB and USD payments reconcile with Jarvis, old records remain unchanged', async () => {
+      const { paymentSnapshot } = require('../src/services/cbuRates.service');
+      const mockRate = (currency, rate) => ({
+        currency, rate, publishedRate: String(rate), nominal: 1, source: 'CBU', effectiveDate: '2026-10-28',
+      });
+      const fixtures = [
+        { id: 'fx-rub', order: 'FX-TEST-RUB', currency: 'RUB', amount: 10000, fx: mockRate('RUB', 146.75), expected: 14675 },
+        { id: 'fx-usd', order: 'FX-TEST-USD', currency: 'USD', amount: 2500, fx: mockRate('USD', 12000), expected: 300000 },
+      ];
+      for (const entry of fixtures) {
+        await pool.query(`INSERT INTO "Order" (id,"orderNumber","branchId","clientName",phone,"tariffHours","currency","paymentType","finalAmount","realPaidAmount","checkIn","plannedCheckOut","createdById","createdAt","updatedAt")
+          VALUES ($1,$2,'b1','synthetic customer','synthetic-phone',1,$3,'CASH',$4,$4,'2026-10-28T06:00:00Z','2026-10-28T07:00:00Z','u1','2026-10-28T06:00:00Z','2026-10-28T06:00:00Z')`,
+          [entry.id + '-order', entry.order, entry.currency, entry.amount]);
+        const snap = paymentSnapshot(entry.amount, entry.fx);
+        assert.equal(snap.uzsEquivalent, entry.expected);
+        await pool.query(`INSERT INTO "CashMovement" (id,"branchId","orderId","shiftId",type,direction,amount,currency,"paymentType","createdById","createdAt","updatedAt","fxRate","fxRateDate","fxNominal","fxSource","uzsEquivalent")
+          VALUES ($1,'b1',$2,'s1','ORDER_PAYMENT','IN',$3,$4,'CASH','u1','2026-10-28T06:00:00Z','2026-10-28T06:00:00Z',$5,$6,$7,$8,$9)`,
+          [entry.id, entry.id + '-order', entry.amount, entry.currency, snap.fxRate, snap.fxRateDate, snap.fxNominal, snap.fxSource, snap.uzsEquivalent]);
+      }
+      const transactions = (await get('transactions', { branchCode: 'BR1', from: '2026-10-28', to: '2026-10-28' })).data;
+      for (const entry of fixtures) {
+        const row = transactions.find(item => item.id === entry.id);
+        assert.ok(row, entry.id + ' missing from Jarvis');
+        assert.equal(row.currency, entry.currency);
+        assert.equal(row.amount, entry.amount);
+        assert.equal(Number(row.fxRate), entry.fx.rate);
+        assert.equal(row.fxRateDate, '2026-10-28');
+        assert.equal(row.fxSource, 'CBU');
+        assert.equal(row.uzsEquivalent, entry.expected);
+      }
+      // The Analytics SQL aggregation must preserve FX equivalent and legacy
+      // coverage even after grouping many ledger movements into one row.
+      const { loadMovementFacts } = require('../src/repositories/cashMovementAnalytics.repository');
+      const fxFacts = await loadMovementFacts({branchId:'b1',dateFrom:'2026-10-28',dateTo:'2026-10-28'},prisma);
+      assert.equal(fxFacts.filter(m=>m.currency==='RUB').reduce((n,m)=>n+Number(m.uzsEquivalent || 0),0),14675);
+      assert.equal(fxFacts.filter(m=>m.currency==='USD').reduce((n,m)=>n+Number(m.uzsEquivalent || 0),0),300000);
+      assert.equal(fxFacts.reduce((n,m)=>n+m.missingFxCount,0),0);
+      const oldFacts = await loadMovementFacts({branchId:'b1',dateFrom:'2026-10-09',dateTo:'2026-10-09'},prisma);
+      assert.ok(oldFacts.some(m=>m.currency==='RUB' && m.uzsEquivalent===null && m.missingFxCount>=1));
+      const original = (await get('transactions', { branchCode: 'BR1', from: '2026-10-09', to: '2026-10-09' })).data.find(item=>item.id==='rub');
+      assert.ok(original, 'existing RUB transaction must be retained');
+      assert.equal(original.fxRate, null);
+      assert.equal(original.uzsEquivalent, null);
     });
   } finally {
     if(server) await new Promise(resolve=>server.close(resolve));

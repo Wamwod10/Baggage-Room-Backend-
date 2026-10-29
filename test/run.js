@@ -1,3 +1,8 @@
+require('./googleFinanceInbox.test');
+require('./googleCbuRelay.test');
+require('./currencyapiProbe.test');
+require('./cbuRateInbox.test');
+require('./cbuRates.test');
 require("./moneySheets.test");
 require("./tariffTelegram.test");
 require("./date.test");

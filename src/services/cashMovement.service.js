@@ -8,9 +8,10 @@ const findOpenShift = (tx, branchId) => tx.shift.findFirst({
   include: { openedBy: { select: { id: true, name: true, login: true } } },
 });
 
-const createCashMovement = async ({ tx = prisma, branchId, shiftId, orderId = null, type, direction, amount, currency, paymentType = null, note = null, createdById }) => {
+const createCashMovement = async ({ tx = prisma, branchId, shiftId, orderId = null, type, direction, amount, currency, paymentType = null, note = null, createdById, fxSnapshot = null }) => {
   return tx.cashMovement.create({
-    data: { branchId, shiftId, orderId, type, direction, amount, currency, paymentType, note, createdById },
+    data: { branchId, shiftId, orderId, type, direction, amount, currency, paymentType, note, createdById,
+      ...(fxSnapshot || {}) },
   });
 };
 

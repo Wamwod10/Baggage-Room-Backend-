@@ -3,7 +3,7 @@
   "info": {
     "title": "Baggage Room Jarvis Read-only API",
     "version": "1.0.0",
-    "description": "Server-to-server integration. GET only. Keys in headers only; unknown filters rejected. All timestamps include UTC Z. Monetary record values are integers in existing stored units, aggregate money uses exact integer strings. No currency conversion. Read-only transactions protect business tables. Financial timestamp tracking begins at migration rollout."
+    "description": "Server-to-server integration. GET only. Keys in headers only; unknown filters rejected. All timestamps include UTC Z. Monetary record values are integers in existing stored units, aggregate money uses exact integer strings. No currency conversion. Read-only transactions protect business tables. Financial timestamp tracking begins at migration rollout. Optional FX snapshots are captured only on new transactions; historical entries may have null FX fields and are not revalued."
   },
   "servers": [
     {
@@ -1421,10 +1421,24 @@
             "items": {
               "type": "object",
               "additionalProperties": false,
-              "required": ["size", "count"],
+              "required": [
+                "size",
+                "count"
+              ],
               "properties": {
-                "size": { "type": "string", "enum": ["S", "M", "L", "XL"] },
-                "count": { "type": "integer", "minimum": 1 }
+                "size": {
+                  "type": "string",
+                  "enum": [
+                    "S",
+                    "M",
+                    "L",
+                    "XL"
+                  ]
+                },
+                "count": {
+                  "type": "integer",
+                  "minimum": 1
+                }
               }
             }
           },
@@ -1511,6 +1525,56 @@
             "type": "string",
             "format": "date-time",
             "nullable": true
+          },
+          "fx": {
+            "type": "object",
+            "nullable": true,
+            "additionalProperties": false,
+            "required": [
+              "currency",
+              "amountMinor",
+              "rate",
+              "publishedRate",
+              "nominal",
+              "effectiveDate",
+              "source",
+              "uzsEquivalent"
+            ],
+            "properties": {
+              "currency": {
+                "$ref": "#/components/schemas/Currency"
+              },
+              "amountMinor": {
+                "type": "integer",
+                "format": "int32"
+              },
+              "rate": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "publishedRate": {
+                "type": "string"
+              },
+              "nominal": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "effectiveDate": {
+                "type": "string",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+              },
+              "source": {
+                "type": "string",
+                "enum": [
+                  "CBU",
+                  "UZS"
+                ]
+              },
+              "uzsEquivalent": {
+                "type": "integer",
+                "format": "int32"
+              }
+            }
           }
         }
       },
@@ -1607,7 +1671,39 @@
           "financialKind": {
             "type": "string",
             "nullable": true,
-            "enum": ["REFUND", "PAYMENT_CORRECTION", null]
+            "enum": [
+              "REFUND",
+              "PAYMENT_CORRECTION",
+              null
+            ]
+          },
+          "fxRate": {
+            "type": "string",
+            "nullable": true
+          },
+          "fxRateDate": {
+            "type": "string",
+            "nullable": true,
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "fxNominal": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 1
+          },
+          "fxSource": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "CBU",
+              "UZS",
+              null
+            ]
+          },
+          "uzsEquivalent": {
+            "type": "integer",
+            "nullable": true,
+            "format": "int32"
           }
         }
       },

@@ -1,0 +1,136 @@
+// Read-only network diagnostic for Render Frankfurt; never imports the application or reads DATABASE_URL.
+// This temporary service must run on the free plan, with auto deploy disabled and no secrets.
+const http = require("node:http");
+
+const today = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Asia/Tashkent", year: "numeric", month: "2-digit", day: "2-digit",
+}).format(new Date());
+const urls = [
+  `https://cbu.uz/uz/arkhiv-kursov-valyut/json/all/${today}/`,
+  "https://cbu.uz/uz/arkhiv-kursov-valyut/json/",
+  "https://www.cbu.uz/uz/arkhiv-kursov-valyut/json/",
+  "https://cbu.uz/ru/arkhiv-kursov-valyut/json/",
+];
+async function runForcedIpv4(url) {
+  const https = require("node:https");
+  return new Promise(resolve => {
+    const req = https.get(url, {
+      family: 4, timeout: 10000, headers: { Accept: "application/json" },
+    }, response => {
+      let raw = "";
+      response.on("data", chunk => {
+        raw += chunk.toString("utf8");
+        if (raw.length > 500000) req.destroy(new Error("Response too large"));
+      });
+      response.on("end", () => {
+        try {
+          const data = JSON.parse(raw);
+          const rub = Array.isArray(data) ? data.find(row => row.Ccy === "RUB") : null;
+          const usd = Array.isArray(data) ? data.find(row => row.Ccy === "USD") : null;
+          resolve({ status: response.statusCode, reachable: response.statusCode === 200 && Boolean(rub?.Rate && usd?.Rate),
+            effectiveDate: rub?.Date || null, rate: rub?.Rate || null });
+        } catch (error) { resolve({ reachable:false, error: error.name }); }
+      });
+    });
+    req.once("error", error => resolve({ reachable:false, error:error.name, code:error.code || null }));
+    req.once("timeout", () => req.destroy(new Error("IPv4 Timeout")));
+  });
+}
+async function runKeylessCbuMirrorProbe() {
+  for (const [label, url] of [
+    ["allratestoday-open", "https://allratestoday.com/api/open/central-bank/cbu"],
+    ["allratestoday-public", "https://allratestoday.com/api/public/central-bank/cbu"],
+  ]) {
+    try {
+      const response = await fetch(url, {
+        headers: { Accept: "application/json" }, signal: AbortSignal.timeout(6500),
+      });
+      let json = null;
+      try { json = await response.json(); } catch { /* only report status */ }
+      const rows = Array.isArray(json?.rates) ? json.rates : Array.isArray(json?.data?.rates) ? json.data.rates : [];
+      console.log(JSON.stringify({
+        diagnostic: "CBU_KEYLESS_MIRROR_PROBE", provider: label,
+        httpStatus: response.status, ok: response.ok,
+        bank: json?.bank ?? json?.data?.bank ?? null,
+        rateDate: json?.rate_date ?? json?.data?.rate_date ?? null,
+        rowCount: rows.length, sample: rows.find(x=>x?.base==="RUB"||x?.source==="RUB")||null,
+        topKeys: json&&typeof json==="object"?Object.keys(json).slice(0,12):[],
+      }));
+    } catch(error) {
+      console.log(JSON.stringify({diagnostic:"CBU_KEYLESS_MIRROR_PROBE",
+        provider:label,ok:false,error:error?.name||"Error"}));
+    }
+  }
+}
+async function runMirrorDiagnostic() {
+  const sources = [
+    ["allratestoday.com","https://allratestoday.com/api/v1/central-bank/cbu/latest"],
+    ["api.currencyapi.com","https://api.currencyapi.com/v3/official?source=cbu"],
+  ];
+  await Promise.all(sources.map(async ([vendor, url]) => {
+    try {
+      const response = await fetch(url,{signal:AbortSignal.timeout(7000),headers:{Accept:"application/json"}});
+      console.log(JSON.stringify({diagnostic:"CBU_ALTERNATIVE_SERVICE_CONNECTIVITY",
+        vendor,httpStatus:response.status,networkReachable:true,requiresAuthentication:response.status===401||response.status===403}));
+    } catch(error) { console.log(JSON.stringify({diagnostic:"CBU_ALTERNATIVE_SERVICE_CONNECTIVITY",
+      vendor,networkReachable:false,error:error?.name||"Error"})); }
+  }));
+}
+async function run() {
+  for (const url of urls) {
+    const path = new URL(url).pathname;
+    try {
+      const response = await fetch(url, {
+        signal: AbortSignal.timeout(9000),
+        headers: { Accept: "application/json" },
+      });
+      const body = await response.json();
+      const rub = Array.isArray(body) ? body.find(x => x.Ccy === "RUB") : null;
+      const usd = Array.isArray(body) ? body.find(x => x.Ccy === "USD") : null;
+      console.log(JSON.stringify({
+        diagnostic: "CBU_FRANKFURT_PROBE", path, httpStatus: response.status,
+        valid: response.ok && Boolean(rub && usd),
+        rubRate: rub?.Rate ?? null, usdRate: usd?.Rate ?? null,
+        publishedDate: rub?.Date ?? null,
+      }));
+      if (response.ok && rub && usd) {
+        console.log(JSON.stringify({ diagnostic: "CBU_FRANKFURT_PROBE_RESULT", reachable: true }));
+        return;
+      }
+    } catch (error) {
+      console.log(JSON.stringify({
+        diagnostic: "CBU_FRANKFURT_PROBE", path, error: error?.name || "Error",
+        cause: error?.cause?.code || null,
+      }));
+    }
+  }
+  const ipv4 = await runForcedIpv4("https://cbu.uz/uz/arkhiv-kursov-valyut/json/");
+  console.log(JSON.stringify({ diagnostic: "CBU_FORCED_IPV4_RESULT", ...ipv4 }));
+  console.log(JSON.stringify({ diagnostic: "CBU_FRANKFURT_PROBE_RESULT", reachable: ipv4.reachable }));
+
+}
+// A minimal listener satisfies Render web health requirements; no DB, credentials or customer data.
+http.createServer((req, res) => {
+  res.writeHead(req.url === "/health" ? 200 : 404, {
+    "Content-Type": "application/json", "Cache-Control": "no-store",
+  });
+  res.end(req.url === "/health" ? '{"status":"probe-only"}' : '{"error":"not-found"}');
+}).listen(Number(process.env.PORT || 10000), "0.0.0.0", () => {
+  console.log(JSON.stringify({ diagnostic: "CBU_FRANKFURT_PROBE_STARTED" }));
+  if (process.env.CURRENCYAPI_KEY) {
+    // Explicit operator-supplied secret is used only inside this isolated
+    // diagnostic service; never publish key, never insert rates into the app.
+    require('./verifyCurrencyapiCbu').verify().then(result => {
+      console.log(JSON.stringify({diagnostic:'CBU_CURRENCYAPI_AUTHENTICATED_CHECK',...result}));
+    }).catch(error => {
+      console.log(JSON.stringify({diagnostic:'CBU_CURRENCYAPI_AUTHENTICATED_CHECK',
+        valid:false,error:error.message}));
+    });
+  } else {
+    console.log(JSON.stringify({diagnostic:'CBU_CURRENCYAPI_AUTHENTICATED_CHECK',
+      valid:false,reason:'CURRENCYAPI_KEY not configured (expected)'}));
+  }
+  runKeylessCbuMirrorProbe().catch(error=>console.log(JSON.stringify({diagnostic:"CBU_KEYLESS_PROBE_FATAL",error:error?.name||"Error"})));
+  runMirrorDiagnostic().catch(error=>console.log(JSON.stringify({diagnostic:"CBU_ALTERNATIVES_FAILED",error:error?.name||"Error"})));
+  run().catch(error => console.log(JSON.stringify({ diagnostic: "CBU_FRANKFURT_PROBE_FATAL", error: error?.name || "Error" })));
+});

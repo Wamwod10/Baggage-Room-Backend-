@@ -10,6 +10,8 @@ const loadMovementFacts = async ({ branchId, dateFrom, dateTo } = {}, client = p
            m."type"::text AS "type",
            m."direction"::text AS "direction",
            COALESCE(SUM(m."amount"), 0)::bigint AS "amount",
+           SUM(m."uzsEquivalent")::bigint AS "uzsEquivalent",
+           COUNT(*) FILTER (WHERE m."currency" <> 'UZS' AND m."uzsEquivalent" IS NULL AND m."type"::text IN ('ORDER_PAYMENT', 'DEBT_CLOSE'))::int AS "missingFxCount",
            m."currency"::text AS "currency",
            m."paymentType"::text AS "paymentType",
            m."createdById",
@@ -27,6 +29,8 @@ const loadMovementFacts = async ({ branchId, dateFrom, dateTo } = {}, client = p
   return rows.map((row) => ({
     ...row,
     amount: Number(row.amount || 0),
+    uzsEquivalent: row.uzsEquivalent == null ? null : Number(row.uzsEquivalent),
+    missingFxCount: Number(row.missingFxCount || 0),
     count: Number(row.count || 0),
     isSalary: Boolean(row.isSalary),
   }));

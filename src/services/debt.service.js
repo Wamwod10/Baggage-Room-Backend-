@@ -47,6 +47,10 @@ const closeDebt = async (user, id, body, { idempotencyKey } = {}) => {
     if (replay.id !== id) throw new AppError("Idempotency key belongs to another debt", 409);
     return { ...replay, idempotentReplay: true };
   }
+  const paymentDebt = await prisma.debt.findUnique({ where: { id }, select: { currency: true, branchId: true } });
+  if (!paymentDebt) throw new AppError('Debt not found', 404);
+  getScopedBranchId(user, paymentDebt.branchId);
+  const fx = await require('./cbuRates.service').getRate(paymentDebt.currency);
   const result = await prisma.$transaction(async (tx) => {
     const linked = await tx.debt.findUnique({ where: { id }, select: { orderId: true } });
     if (!linked) throw new AppError('Debt not found', 404);
@@ -80,6 +84,7 @@ const closeDebt = async (user, id, body, { idempotencyKey } = {}) => {
       amount: paidAmount,
       currency: body.currency || debt.currency,
       paymentType,
+      fxSnapshot: require('./cbuRates.service').paymentSnapshot(paidAmount, fx),
       note: body.note || `Debt closed for ${debt.order.orderNumber}`,
       createdById: user.id,
     });

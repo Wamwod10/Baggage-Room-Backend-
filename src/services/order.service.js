@@ -16,6 +16,7 @@ const { findOpenShift, createCashMovement } = require("./cashMovement.service");
 const { computeShiftReport, normalizeCurrencyMap } = require("./shift.service");
 const telegram = require("./telegram.service");
 const googleSheets = require("./googleSheets.service");
+const cbuRates = require("./cbuRates.service");
 const { getPagination } = require("../utils/pagination");
 const { createTimer } = require("../utils/perf");
 const { markAnalyticsMutation } = require("./analyticsCache");
@@ -87,6 +88,7 @@ const includeOrder = {
       paymentType: true,
       note: true,
       financialKind: true,
+      fxRate: true, fxRateDate: true, fxNominal: true, fxSource: true, uzsEquivalent: true,
       createdAt: true,
     },
     orderBy: { createdAt: "asc" },
@@ -662,6 +664,9 @@ const createOrder = async (user, body, { idempotencyKey } = {}) => {
   );
   if (duplicate) warnings.push({ type: "DUPLICATE_ACTIVE_CUSTOMER", orderNumber: duplicate.orderNumber });
 
+  // Fetch official rate before opening a database transaction; never trust browser rates.
+  // For UZS this is resolved locally and never depends on the CBU website.
+  const paymentFx = await cbuRates.getRate(body.currency || "UZS");
   let created;
   try {
     created = await timer.time("transaction total", () => prisma.$transaction(async (tx) => {
@@ -710,11 +715,12 @@ const createOrder = async (user, body, { idempotencyKey } = {}) => {
       { field: "paymentType", message: "paymentType is required" },
     ]);
     const currency = body.currency || "UZS";
-    const exchangeRate = currency === "UZS" ? 1 : Number(body.exchangeRate || 0);
-    if (currency !== "UZS" && (!Number.isFinite(exchangeRate) || exchangeRate <= 0)) {
-      throw new AppError(`Exchange rate for ${currency} is required`, 400, [
-        { field: "exchangeRate", message: `Exchange rate for ${currency} is required` },
-      ]);
+    // Every new order uses the official CBU snapshot, not mutable local Settings.
+    const exchangeRate = paymentFx.rate;
+    // A stale quote must never become an implicit discount or overpayment.
+    if (currency !== "UZS" && body.exchangeRate !== undefined
+        && Math.abs(Number(body.exchangeRate) - exchangeRate) > 0.00000001) {
+      throw new AppError("CBU kursi yangilandi. Narxni qayta hisoblab, buyurtmani qayta saqlang.", 409);
     }
     const itemRows = inputItems.map((item) => {
       const locker = lockers.find((row) => row.id === item.lockerId);
@@ -800,7 +806,7 @@ const createOrder = async (user, body, { idempotencyKey } = {}) => {
         passport: body.passport || null,
         tariffHours,
         customHours: body.customHours || null,
-        pricingSnapshot: { version: 1, ...(branch.code === 'TJV' && isCustomTariff && tariffHours > 12 && tariffHours <= 72 ? { customTariffRule: 'TJV_12H_PLUS_HOURLY' } : {}), dailyRates, tariffs: Object.fromEntries(tariffs.map(({ size, price1h, price12h, price24h, price48h, price72h, after72hPrice }) => [size, { price1h, price12h, price24h, price48h, price72h, after72hPrice }])), exchangeRate },
+        pricingSnapshot: { version: 1, ...(branch.code === 'TJV' && isCustomTariff && tariffHours > 12 && tariffHours <= 72 ? { customTariffRule: 'TJV_12H_PLUS_HOURLY' } : {}), dailyRates, tariffs: Object.fromEntries(tariffs.map(({ size, price1h, price12h, price24h, price48h, price72h, after72hPrice }) => [size, { price1h, price12h, price24h, price48h, price72h, after72hPrice }])), exchangeRate, fx: cbuRates.quoteSnapshot(realPaidAmount, paymentFx) },
         priceApprovedById: discountAmount > 0 ? user.id : null,
         priceApprovedByName: discountAmount > 0 ? user.name : null,
         currency,
@@ -858,6 +864,7 @@ const createOrder = async (user, body, { idempotencyKey } = {}) => {
         amount: realPaidAmount,
         currency,
         paymentType: paidPaymentType,
+        fxSnapshot: cbuRates.paymentSnapshot(realPaidAmount, paymentFx),
         note: `Order ${order.orderNumber}`,
         createdById: user.id,
       }));
@@ -949,6 +956,16 @@ const updateOrder = async (user, id, body, { idempotencyKey } = {}) => {
     if (replay.id !== id) throw new AppError("Idempotency key belongs to another order", 409);
     return replay;
   }
+  // A new payment or payment correction receives today's verified CBU rate.
+  const preEdit = await prisma.order.findUnique({ where: { id }, select: {
+    branchId: true, currency: true, paymentType: true, realPaidAmount: true,
+    overtimeAmount: true, overtimePaymentType: true,
+  } });
+  if (!preEdit) throw new AppError('Order not found', 404);
+  getScopedBranchId(user, preEdit.branchId);
+  const needsPaymentFx = ['currency', 'paymentType', 'realPaidAmount', 'overtimeAmount', 'overtimePaymentType']
+    .some((field) => body[field] !== undefined && String(body[field]) !== String(preEdit[field]));
+  const editFx = needsPaymentFx ? await cbuRates.getRate(body.currency || preEdit.currency) : null;
   let result;
   try {
     result = await prisma.$transaction(async (tx) => {
@@ -957,7 +974,9 @@ const updateOrder = async (user, id, body, { idempotencyKey } = {}) => {
     if (!current) throw new AppError("Order not found", 404);
     getScopedBranchId(user, current.branchId);
     if (!["ACTIVE", "DELAYED", "PICKED_UP"].includes(current.status)) throw new AppError("Only active or picked up orders can be edited", 400);
-    const financialPlan = financialEdit.planEdit(current, body, user);
+    if (editFx && editFx.currency !== (body.currency || current.currency)) throw new AppError('Payment currency changed. Retry this edit.', 409);
+    const financialPlan = financialEdit.planEdit(current,
+      editFx ? { ...body, exchangeRate: editFx.rate } : body, user);
     const staffDiscountOnly = !financialPlan && isStaffDiscountOnlyEdit(current, body);
     if (financialPlan) {
       const requests = await tx.financialRequest.findMany({ where: { orderId: id, status: { not: 'REJECTED' } } });
@@ -1144,7 +1163,7 @@ const updateOrder = async (user, id, body, { idempotencyKey } = {}) => {
       throw new AppError("Order was changed by another operator. Reload and try again.", 409);
     }
     const updatedBase = await tx.order.findUnique({ where: { id }, include: includeOrder });
-    if (financialPlan) await financialEdit.recordEdit(tx, current, updatedBase, financialPlan, user, requestKey, body.priceChangeReason);
+    if (financialPlan) await financialEdit.recordEdit(tx, current, updatedBase, financialPlan, user, requestKey, body.priceChangeReason, editFx);
     const nextDebtAmount = financialPlan && current.debt?.status === 'OPEN' ? financialEdit.debtBalance(current, financialPlan)
       : Math.max(0, Number(updatedBase.finalAmount || 0) - Number(updatedBase.realPaidAmount || 0));
     const financialCurrencyChanged = financialPlan && updatedBase.currency !== current.currency;
@@ -1291,6 +1310,21 @@ const pickupOrder = async (user, id, body, { idempotencyKey } = {}) => {
     if (replay.id !== id) throw new AppError("Idempotency key belongs to another order", 409);
     return replay;
   }
+  // Fetch the applicable rate outside the pickup transaction. Old orders retain
+  // their original price snapshot; only this NEW payment gets today's rate.
+  const fxOrder = await prisma.order.findUnique({ where: { id }, select: { branchId: true, currency: true } });
+  if (!fxOrder) throw new AppError('Order not found', 404);
+  getScopedBranchId(user, fxOrder.branchId);
+  let pickupFx = null;
+  let pickupFxFailure = null;
+  try {
+    pickupFx = await cbuRates.getRate(body.currency || fxOrder.currency);
+  } catch (error) {
+    pickupFxFailure = error;
+  }
+  // An old fully-paid order can be picked up without a new FX transaction
+  // even during a CBU outage. Never use a stale rate for a NEW receipt.
+  if (!pickupFx && body.currency && body.currency !== fxOrder.currency) throw pickupFxFailure;
   const timer = createTimer("orders.pickup", {
     hasOvertime: Number(body.overtimeAmount || body.extraPayment || 0) > 0,
     hasDebtPayment: body.debtPaidAmount !== undefined,
@@ -1302,7 +1336,9 @@ const pickupOrder = async (user, id, body, { idempotencyKey } = {}) => {
     let order = await timer.time("order lookup", () => tx.order.findUnique({ where: { id }, include: includeOrder }));
     if (!order || !["ACTIVE", "DELAYED"].includes(order.status)) throw new AppError("Active order not found", 404);
     await timer.time("branch lookup", async () => getScopedBranchId(user, order.branchId));
-    order = await financialEdit.convertForPickup(tx, order, body, user, requestKey);
+    order = await financialEdit.convertForPickup(tx, order,
+      pickupFx ? { ...body, exchangeRate: pickupFx.rate } : body, user, requestKey, pickupFx);
+    if (pickupFx && pickupFx.currency !== order.currency) throw new AppError('Payment currency changed. Retry the pickup.', 409);
     const discounted = withRecordedDiscount(order);
     if (discounted !== order) {
       await tx.order.update({ where: { id }, data: {
@@ -1345,6 +1381,10 @@ const pickupOrder = async (user, id, body, { idempotencyKey } = {}) => {
     if (Number(body.debtPaidAmount || 0) > 0 && !debtPaymentType) {
       throw new AppError("paymentType is required", 400);
     }
+    if (!pickupFx && ((overtimeAmount > 0 && overtimePaymentType !== "DEBT")
+      || Number(body.debtPaidAmount || 0) > 0)) {
+      throw pickupFxFailure || new AppError("CBU kursi topilmadi", 503);
+    }
     await timer.time("order status transition", () => ensureSingleStatusTransition({
       model: tx.order,
       where: { id, status: { in: ["ACTIVE", "DELAYED"] } },
@@ -1374,6 +1414,7 @@ const pickupOrder = async (user, id, body, { idempotencyKey } = {}) => {
         amount: overtimeAmount,
         currency: overtimeCurrency,
         paymentType: overtimePaymentType,
+        fxSnapshot: cbuRates.paymentSnapshot(overtimeAmount, pickupFx),
         note: `Overtime ${order.orderNumber}`,
         createdById: user.id,
       }));
@@ -1395,6 +1436,7 @@ const pickupOrder = async (user, id, body, { idempotencyKey } = {}) => {
           amount: debtPaidAmount,
           currency: body.currency || order.currency,
           paymentType: debtPaymentType,
+          fxSnapshot: cbuRates.paymentSnapshot(debtPaidAmount, pickupFx),
           note: `Debt payment ${order.orderNumber}`,
           createdById: user.id,
         }));

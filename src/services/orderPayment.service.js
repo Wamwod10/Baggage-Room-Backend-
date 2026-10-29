@@ -6,8 +6,18 @@ const { AppError } = require('../utils/response');
 const { findOpenShift } = require('./cashMovement.service');
 const { audit } = require('./activity.service');
 const { markAnalyticsMutation } = require('./analyticsCache');
+const cbuRates = require('./cbuRates.service');
 const pay = async (user, orderId, body, key) => {
   const idempotencyKey = requireIdempotencyKey(key);
+  const existing = await prisma.cashMovement.findUnique({ where: { idempotencyKey } });
+  if (existing) {
+    if (existing.orderId !== orderId || existing.amount !== body.amount || existing.currency !== body.currency || existing.paymentType !== body.paymentType) throw new AppError('Idempotency payload mismatch', 409);
+    const order = await prisma.order.findUnique({ where: { id: orderId }, select: { branchId: true } });
+    if (!order) throw new AppError('Order not found', 404);
+    getScopedBranchId(user, order.branchId);
+    return existing;
+  }
+  const fx = await cbuRates.getRate(body.currency);
   const result = await prisma.$transaction(async (tx) => {
     await lockOrder(tx, orderId);
     const order = await tx.order.findUnique({ where: { id: orderId }, include: { cashMovements: true, debt: true } });
@@ -27,7 +37,8 @@ const pay = async (user, orderId, body, key) => {
     if (!shift) throw new AppError('Open shift required', 409);
     const movement = await tx.cashMovement.create({ data: { idempotencyKey, branchId: order.branchId,
       orderId, shiftId: shift.id, type: 'ORDER_PAYMENT', direction: 'IN', amount: body.amount, currency: body.currency,
-      paymentType: body.paymentType, createdById: user.id, note: `Additional payment ${order.orderNumber}` } });
+      paymentType: body.paymentType, createdById: user.id, note: `Additional payment ${order.orderNumber}`,
+      ...cbuRates.paymentSnapshot(body.amount, fx) } });
     await tx.order.update({ where: { id: orderId }, data: { realPaidAmount: { increment: body.amount }, paymentDifference: order.realPaidAmount + body.amount - order.finalAmount } });
     await audit({ tx, branchId: order.branchId, userId: user.id, entityType: 'Order', entityId: orderId, action: 'ORDER_PAYMENT_RECEIVED',
       newValue: JSON.parse(JSON.stringify(movement)), description: 'Actual outstanding payment received' });

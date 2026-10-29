@@ -13,6 +13,8 @@ function serializeRecord(endpoint, row) {
       overtimePaymentType: row.overtimePaymentType, checkIn: iso(row.checkIn), plannedCheckOut: iso(row.plannedCheckOut),
       realPickupTime: iso(row.realPickupTime), cancelledAt: iso(row.cancelledAt),
       baggageItems: (row.items || []).map(({ size, count }) => ({ size, count })),
+      // Legacy orders retain null; never retroactively apply today's CBU rate.
+      fx: row.pricingSnapshot?.fx || null,
     };
     case 'transactions': return {
       ...record, transactionId: row.id, transactionType: row.type, direction: row.direction,
@@ -20,6 +22,9 @@ function serializeRecord(endpoint, row) {
       currency: row.currency, paymentType: row.paymentType ?? null, orderId: row.orderId ?? null, shiftId: row.shiftId ?? null,
       isRevenue: ['ORDER_PAYMENT', 'DEBT_CLOSE'].includes(row.type) && row.paymentType != null && row.paymentType !== 'DEBT',
       financialKind: row.financialKind ?? null,
+      fxRate: row.fxRate ?? null, fxRateDate: row.fxRateDate ?? null,
+      fxNominal: row.fxNominal ?? null, fxSource: row.fxSource ?? null,
+      uzsEquivalent: row.uzsEquivalent ?? null,
     };
     case 'shifts': return {
       ...record, status: row.status, openedAt: iso(row.openedAt), closedAt: iso(row.closedAt),

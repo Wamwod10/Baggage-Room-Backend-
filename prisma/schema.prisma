@@ -359,6 +359,12 @@ model CashMovement {
   amount       Int
   currency     Currency          @default(UZS)
   paymentType  PaymentType?
+  // Only payments created after CBU rollout have these rate snapshots.
+  fxRate       String?
+  fxRateDate   String?
+  fxNominal    Int?
+  fxSource     String?
+  uzsEquivalent Int?
   note         String?
   financialKind String?
   createdById  String
@@ -538,4 +544,19 @@ model OrderArchiveRun {
   combinedCountBefore Int
   combinedCountAfter  Int
   executedAt          DateTime @default(now())
+}
+
+// Verified signed CBU feed for the operating date (new data only).
+model CbuRateInbox {
+  day          String   @id @db.VarChar(10)
+  officialRows Json
+  fetchedAt    DateTime
+  receivedAt   DateTime @default(now())
+}
+
+model GoogleFinanceRateInbox {
+  day        String   @id @db.VarChar(10)
+  rates      Json
+  observedAt DateTime
+  receivedAt DateTime @default(now())
 }
