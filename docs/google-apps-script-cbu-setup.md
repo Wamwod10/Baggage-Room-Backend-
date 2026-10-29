@@ -11,6 +11,16 @@ browser rates, customer data, or database credentials are used in this worker.
 
 1. Open https://script.google.com/home/projects/create in the trusted company's Google account.
    Create a standalone script named `Qonoq CBU Official Rates`.
+Security — limit Google permissions: this repository includes
+`scripts/googleCbuManifest.json`. In Google Apps Script, open **Project Settings**,
+enable **Show appsscript.json manifest file in editor**, and copy its JSON into
+the project's `appsscript.json`. This grants only external HTTP access and
+management of this project's own time-driven triggers; **no Google Drive,
+Gmail, Calendar or Sheets access is requested**. The account owner must still
+review the Google authorization prompt. Google Apps Script automatically
+manages scopes if you don't set this manifest, but the explicit manifest
+makes them auditable.
+
 2. Replace the editor's `Code.gs` contents with the contents of
    [scripts/googleCbuRelay.gs](../scripts/googleCbuRelay.gs). Save.
    **Do not also copy `googleCbuProbe.gs`** because both define `probeCbu`.
