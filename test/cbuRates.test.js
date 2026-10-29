@@ -50,26 +50,23 @@ test('CBU rates stale across multiple business days are never used for payments'
   assert.equal(cbu._internals.countElapsedWeekdays('2026-10-22','2026-10-28'), 2);
 });
 
-test('official CBU fallback accepts only correctly dated official feed, not stale currency rows', async (t) => {
-  const priorFetch = global.fetch;
-  const requested = '2026-08-17';
-  const calls = [];
-  const officialRows = ['USD','EUR','RUB','KZT','TJS']
-    .map((code) => mk(code, 1, '120.00', '17.08.2026'));
-  global.fetch = async (url) => {
-    calls.push(url);
-    if (url.endsWith('/all/' + requested + '/')) return { ok: false, status: 404 };
-    return { ok: true, json: async () => officialRows };
-  };
-  t.after(() => { global.fetch = priorFetch; });
-  const rates = await cbu.getRates(new Date('2026-08-17T09:00:00Z'));
-  assert.equal(rates.RUB.rate, 120);
-  assert.deepEqual(calls, [
-    'https://cbu.uz/uz/arkhiv-kursov-valyut/json/all/2026-08-17/',
-    'https://cbu.uz/uz/arkhiv-kursov-valyut/json/',
-  ]);
-  const stale = ['USD','EUR','RUB','KZT','TJS'].map((code) => mk(code, 1, '120', '01.08.2026'));
-  assert.throws(() => cbu._internals.validateRates(stale, requested), /out of range/);
-  const future = ['USD','EUR','RUB','KZT','TJS'].map((code) => mk(code, 1, '120', '19.08.2026'));
-  assert.throws(() => cbu._internals.validateRates(future, requested), /out of range/);
+test('Google-only runtime never fetches CBU and preserves trusted source', async (t) => {
+  const originalFetch=global.fetch;
+  const inbox=require('../src/services/googleFinanceInbox.service');
+  const originalRead=inbox.getFreshRates;
+  const now=new Date('2026-10-29T09:00:00Z');
+  let calls=0;
+  global.fetch=async()=>{calls++; throw Error('network call must not occur');};
+  inbox.getFreshRates=async(day)=> Object.fromEntries(['USD','EUR','RUB','KZT','TJS'].map(currency=>[
+    currency,{currency,source:'GOOGLE_FINANCE',rate:150,publishedRate:'150',
+      nominal:1,effectiveDate:day}
+  ]));
+  t.after(()=>{global.fetch=originalFetch;inbox.getFreshRates=originalRead;});
+  const result=await cbu.getRates(now);
+  assert.equal(result.RUB.rate,150);
+  assert.equal(result.RUB.source,'GOOGLE_FINANCE');
+  assert.equal(calls,0);
+  inbox.getFreshRates=async()=>null;
+  await assert.rejects(cbu.getRates(now),/Google Finance kurslari yangilanmagan/);
+  assert.equal(calls,0);
 });
