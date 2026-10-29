@@ -48,7 +48,6 @@ https://support.google.com/docs/answer/58515
 A dedicated database migration `202610290001_google_finance_rate_inbox`
 creates a separate `GoogleFinanceRateInbox` table. No old cash/order rows
 are changed. Add environment variables on an **isolated staging backend**:
-- `FX_RATE_PROVIDER=GOOGLE_FINANCE`
 - `GOOGLE_FINANCE_SYNC_SECRET=<secure random 32+ byte secret>`
 
 In Apps Script Project Settings -> Script Properties set:
@@ -70,7 +69,7 @@ It records the source as `GOOGLE_FINANCE`, sets the observation business
 date in `fxRateDate`, and calculates new payment's UZS equivalent using
 minor units. This date is NOT an official CBU effective date. It refuses
 stale (>65min), missing, forged, duplicated or untrusted currency quotes.
-In Google provider mode it **never falls back to CBU or a browser exchange rate**.
+The new runtime is **Google-only**; it never requests CBU or a browser exchange rate.
 Older orders/ledger records are unchanged.
 
 Before going live: verify the Google Sheet currency quotes are present and
