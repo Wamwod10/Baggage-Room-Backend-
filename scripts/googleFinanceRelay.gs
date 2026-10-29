@@ -15,13 +15,20 @@ function setupGoogleFinanceSheet() {
     book=SpreadsheetApp.create('Qonoq Baggage - Google Finance FX (staging)');
     props.setProperty('GF_SHEET_ID',book.getId());
   }
+  // Force comma-separated formula syntax in all Google account locales.
+  book.setSpreadsheetLocale('en_US');
   var sheet=book.getSheetByName(GF_SHEET_NAME)||book.insertSheet(GF_SHEET_NAME);
   sheet.getRange('A1:C1').setValues([['Valyuta','Google Finance / 1 birlik = UZS','Formula']]);
   GF_CODES.forEach(function(currency,index){
     var row=index+2, symbol='CURRENCY:'+currency+'UZS';
+    // The only fallback is another GOOGLEFINANCE formula, never an external FX provider.
+    // Some less-traded pairs are unavailable as direct Google quotes.
+    var formula=(currency==='TJS'||currency==='KZT')
+      ? '=IFERROR(GOOGLEFINANCE("'+symbol+'"),GOOGLEFINANCE("CURRENCY:'+currency+'USD")*GOOGLEFINANCE("CURRENCY:USDUZS"))'
+      : '=GOOGLEFINANCE("'+symbol+'")';
     sheet.getRange(row,1).setValue(currency);
-    sheet.getRange(row,2).setFormula('=GOOGLEFINANCE("'+symbol+'")');
-    sheet.getRange(row,3).setValue(symbol);
+    sheet.getRange(row,2).setFormula(formula);
+    sheet.getRange(row,3).setValue(formula);
   });
   sheet.setFrozenRows(1);
   sheet.getRange('B2:B6').setNumberFormat('0.0000000000');
