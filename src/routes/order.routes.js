@@ -22,7 +22,7 @@ router.get('/exchange-rates', require('../utils/response').asyncHandler(async (r
   const { getRates, tashkentDate } = require('../services/cbuRates.service');
   const rates = await getRates();
   return require('../utils/response').success(res, {
-    source: process.env.FX_RATE_PROVIDER === 'GOOGLE_FINANCE' ? 'GOOGLE_FINANCE' : 'CBU', date: tashkentDate(), rates: {
+    source: 'GOOGLE_FINANCE', date: tashkentDate(), rates: {
       UZS: { currency: 'UZS', rate: 1, source: 'UZS', nominal: 1, effectiveDate: tashkentDate() },
       ...rates,
     },
