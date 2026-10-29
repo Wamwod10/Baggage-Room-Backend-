@@ -69,6 +69,15 @@ function syncGoogleCbuRates() {
     console.log(JSON.stringify({status:'CBU_SYNC_OK',day:quote.day,currencies:5}));
   } finally {lock.releaseLock();}
 }
+// Staging-only one-click activation after Script Properties and backend are ready.
+// A failed Google->CBU fetch or failed signed backend push prevents scheduling.
+function activateGoogleCbuOnStaging() {
+  var probe = probeCbu();
+  syncGoogleCbuRates();
+  var result = installCbuTrigger();
+  return { source: 'CBU', day: probe.day, syncVerified: true,
+    triggerInstalled: result.installed };
+}
 function installCbuTrigger() {
   var exists=ScriptApp.getProjectTriggers().some(function(t){return t.getHandlerFunction()==='syncGoogleCbuRates';});
   if(!exists) ScriptApp.newTrigger('syncGoogleCbuRates').timeBased().everyMinutes(30).create();
