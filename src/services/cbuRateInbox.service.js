@@ -74,13 +74,19 @@ async function readFreshRates(day, { now = new Date(), prisma = require('../conf
   } catch { return null; }
 }
 
-async function handleSync(req, res) {
+// Testable HTTP handler: production uses the configured Prisma client,
+// while staging/CI can supply an isolated database connection explicitly.
+const createSyncHandler = ({ prisma, now = () => new Date() } = {}) => async (req, res) => {
   try {
-    const result = await acceptSignedEnvelope(req.body, req.headers);
+    const options = { now: now() };
+    if (prisma) options.prisma = prisma;
+    const result = await acceptSignedEnvelope(req.body, req.headers, options);
     return res.status(200).json(result);
   } catch (error) {
     return res.status(error.statusCode || 500).json({ success: false,
       message: error.statusCode ? error.message : 'CBU sync failed' });
   }
-}
-module.exports = { verifySignedRequest, validateEnvelope, acceptSignedEnvelope, readFreshRates, handleSync };
+};
+const handleSync = createSyncHandler();
+module.exports = { verifySignedRequest, validateEnvelope, acceptSignedEnvelope,
+  readFreshRates, createSyncHandler, handleSync };
