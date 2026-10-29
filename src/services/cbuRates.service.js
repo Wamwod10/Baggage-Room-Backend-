@@ -78,54 +78,16 @@ const unavailable = () => new AppError(
   'Markaziy bank kurslarini hozir olish imkoni yo‘q. Noto‘g‘ri kursda xorijiy valyuta operatsiyasi yaratilmaydi; qayta urinib ko‘ring.', 503,
 );
 
+// Google-only currency provider. No requests to CBU, any other FX API, or browser rates.
 const getRates = async (now = new Date()) => {
   const day = tashkentDate(now);
-  // Explicit provider mode: never consult CBU or a browser rate when Google mode is active.
-  if (process.env.FX_RATE_PROVIDER === 'GOOGLE_FINANCE') {
+  try {
     const rates = await require('./googleFinanceInbox.service').getFreshRates(day,{now});
-    if (!rates) throw new AppError(
-      'Google Finance kurslari yangilanmagan. Xorijiy valyuta to‘lovi vaqtincha yopiq.',503);
-    return rates;
-  }
-  if (cached?.day === day && Date.now() - cached.fetchedAt < TTL_MS) return cached.rates;
-  if (pending?.day === day) return pending.promise;
-  const promise = (async () => {
-    // Optional authenticated domestic worker feed, stored in our own database.
-    // Never fall back to stale browser config or untrusted third-party FX services.
-    if (process.env.CBU_RELAY_ENABLED === '1') {
-      try {
-        const rates = await require('./cbuRateInbox.service').readFreshRates(day, { now });
-        if (rates) {
-          cached = { day, fetchedAt: Date.now(), rates };
-          return rates;
-        }
-      } catch { /* Ignore missing/unavailable inbox; direct official feed is still attempted. */ }
-    }
-    // Only the Central Bank's OWN endpoints are trusted. The dated archive is
-    // primary; the official current-rate feed is used for weekends/holidays.
-    for (const url of [CBU_BASE + 'all/' + day + '/', CBU_BASE]) {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 7000);
-      try {
-        const response = await fetch(url, {
-          signal: controller.signal, headers: { Accept: 'application/json' },
-        });
-        if (!response.ok) continue;
-        const rates = validateRates(await response.json(), day);
-        cached = { day, fetchedAt: Date.now(), rates };
-        return rates;
-      } catch {
-        // Try the other official endpoint. Never use unverified third-party
-        // exchange rates or obsolete browser-configured prices.
-      } finally {
-        clearTimeout(timeout);
-      }
-    }
-    throw unavailable();
-  })();
-  pending = { day, promise };
-  try { return await promise; }
-  finally { if (pending?.promise === promise) pending = null; }
+    if (rates) return rates;
+  } catch { /* Database unavailable / no verified Google observation: fail closed. */ }
+  throw new AppError(
+    'Google Finance kurslari yangilanmagan. Xorijiy valyuta to‘lovi vaqtincha yopiq.',503
+  );
 };
 
 const getRate = async (currency = 'UZS', now = new Date()) => {
