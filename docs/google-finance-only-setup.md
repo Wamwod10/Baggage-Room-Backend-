@@ -34,6 +34,9 @@ https://support.google.com/docs/answer/58515
    formulas. The Script Properties entry `GF_SHEET_ID` is created automatically.
 4. Open **Executions** and copy the resulting `sheetUrl`. Inspect all five
    rows; wait briefly for Google Finance formulas to calculate.
+   For KZT and TJS, if the direct Google Finance UZS quote is unavailable,
+   the sheet attempts a **Google-only** derived rate using the currency/USD
+   and USD/UZS quotes. This is a derived market rate, not a bank rate.
 5. Select `probeGoogleFinance` and **Run**. Success must print
    source `GOOGLE_FINANCE` and FIVE positive numeric rates.
    If even one currency displays `#N/A` or another error, the probe
