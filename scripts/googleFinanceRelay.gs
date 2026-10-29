@@ -1,4 +1,4 @@
-// GOOGLE FINANCE ONLY. No cbu.uz or GOOGLE market scrapers.
+// GOOGLE FINANCE ONLY. This script reads market quotes from Google Sheets.
 // Copy into Google Apps Script Code.gs. This script creates its own Google Sheet.
 // Staging first: do not use for commercial payment pricing before licensing review.
 var GF_CODES = ['USD','EUR','RUB','KZT','TJS'];
