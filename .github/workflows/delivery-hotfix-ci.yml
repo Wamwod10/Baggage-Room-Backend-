@@ -1,0 +1,23 @@
+name: Telegram and Sheets delivery hotfix checks
+on:
+  pull_request:
+    paths:
+      - 'src/services/googleSheets.service.js'
+      - 'src/services/telegram.service.js'
+      - 'src/jobs/financialOutbox.job.js'
+      - 'test/**'
+      - '.github/workflows/delivery-hotfix-ci.yml'
+  workflow_dispatch:
+
+jobs:
+  fast-delivery-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm test

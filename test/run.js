@@ -1,3 +1,4 @@
+require('./deliveryLatency.test');
 require("./moneySheets.test");
 require("./tariffTelegram.test");
 require("./date.test");
