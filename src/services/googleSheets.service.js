@@ -169,7 +169,7 @@ const validateWebhookResult = (payload, json, expectedRow = sheetMapper.buildLeg
   // Google Apps Script writes to the correct existing tab and returns its
   // actual name. Compare normalized whitespace, NEVER loosen the month/year
   // or spreadsheet/branch identity checks.
-  const normalizeMonthName = (name) => String(name || "").replace(/\\s+/g, " ").trim();
+  const normalizeMonthName = (name) => String(name || "").replace(/\s+/g, " ").trim();
   if (normalizeMonthName(json?.monthSheetName) !== normalizeMonthName(expectedMonthSheetName)) {
     throw new Error(`Google Sheets month sheet mismatch: expected ${expectedMonthSheetName}, received ${json?.monthSheetName || "missing"}`);
   }
