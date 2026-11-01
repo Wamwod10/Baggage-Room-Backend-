@@ -44,24 +44,44 @@ const sendRaw = async (setting, text, { requireEnabled = true } = {}) => {
   const groupId = String(setting.groupId).trim();
   if (!botToken || !groupId) return { skipped: true, reason: "missing_credentials" };
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 8000);
-  let response;
-  try {
-    response = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: groupId, text }),
-      signal: controller.signal,
-    });
-  } finally {
-    clearTimeout(timeout);
+  const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
+  const body = JSON.stringify({ chat_id: groupId, text });
+  // A short second attempt recovers intermittent connection failures and
+  // Telegram's explicit rate-limit responses. Never retry a timeout or an
+  // ambiguous HTTP 5xx response: Telegram might already have sent the text.
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    let response;
+    try {
+      response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body,
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (attempt === 0 && error?.message === "fetch failed") {
+        logger.warn("Telegram network error; retrying shortly");
+        await new Promise((resolve) => setTimeout(resolve, 450));
+        continue;
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
+    if (response.status === 429 && attempt === 0) {
+      await response.text().catch(() => "");
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      continue;
+    }
+    if (!response.ok) {
+      await response.text().catch(() => "");
+      throw new AppError(`Telegram send failed: HTTP ${response.status}`, 502);
+    }
+    return response.json();
   }
-  if (!response.ok) {
-    await response.text().catch(() => "");
-    throw new AppError(`Telegram send failed: HTTP ${response.status}`, 502);
-  }
-  return response.json();
+  throw new AppError("Telegram delivery attempts exhausted", 502);
 };
 
 const sendBranchEvent = async (branchId, event, text) => {
