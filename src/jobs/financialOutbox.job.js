@@ -74,7 +74,8 @@ const deliver = async (entry, tx) => {
 };
 const flushOne = () => prisma.$transaction(async (tx) => {
   const rows = await tx.$queryRaw`SELECT * FROM "FinancialOutbox" WHERE "deliveredAt" IS NULL AND "availableAt" <= NOW()
-    ORDER BY "createdAt" LIMIT 1 FOR UPDATE SKIP LOCKED`;
+    ORDER BY CASE WHEN "attempts" = 0 THEN 0 ELSE 1 END, "availableAt", "createdAt"
+    LIMIT 1 FOR UPDATE SKIP LOCKED`;
   const entry = rows[0];
   if (!entry) return false;
   try {
@@ -85,7 +86,11 @@ const flushOne = () => prisma.$transaction(async (tx) => {
     const reason = error.deliveryCode || 'DELIVERY_FAILED';
     logger.warn('Financial delivery failed; retry scheduled', { requestId: entry.requestId || null, branchId: request?.branchId || null, action: entry.action, reason });
     await tx.financialOutbox.update({ where: { id: entry.id }, data: {
-      attempts: { increment: 1 }, availableAt: new Date(Date.now() + Math.min(3600000, 10000 * 2 ** Math.min(entry.attempts, 8))),
+      // Sheets backlog must not be blocked for hours by an old transient error.
+      // Retain financial approval backoff unchanged.
+      attempts: { increment: 1 }, availableAt: new Date(Date.now() + (entry.action === 'PAYMENT_SHEETS'
+        ? Math.min(60000, 3000 * 2 ** Math.min(entry.attempts, 5))
+        : Math.min(3600000, 10000 * 2 ** Math.min(entry.attempts, 8)))),
       lastError: `${reason}; will retry`,
     } });
     await tx.auditLog.create({ data: { branchId: request?.branchId || null, entityType: 'FinancialDelivery', entityId: entry.requestId || entry.deliveryKey,
@@ -94,15 +99,31 @@ const flushOne = () => prisma.$transaction(async (tx) => {
   return true;
 }, { timeout: 30000 });
 const startFinancialOutboxJob = () => {
-  if (process.env.FINANCE_OUTBOX_ENABLED !== 'true') return { stop() {} };
-  let running = false;
-  const timer = setInterval(async () => {
-    if (running) return;
-    running = true;
-    try { await flushOne(); } catch { /* Leave undelivered entries for the next tick. */ }
-    finally { running = false; }
-  }, 5000);
-  timer.unref();
-  return { stop: () => clearInterval(timer) };
+  if (process.env.FINANCE_OUTBOX_ENABLED !== 'true') {
+    logger.warn('Financial outbox is disabled; queued Sheets events will NOT be delivered');
+    return { stop() {} };
+  }
+  // One serial worker avoids exceeding the Google Apps Script global lock.
+  // Drain ready entries without an artificial five-second gap; wake quickly
+  // for new orders when the queue is empty. Database rows remain durable.
+  let stopped = false;
+  let timer = null;
+  const schedule = (delayMs) => {
+    if (stopped) return;
+    timer = setTimeout(async () => {
+      timer = null;
+      if (stopped) return;
+      let processed = false;
+      try {
+        processed = await flushOne();
+      } catch (error) {
+        logger.warn('Financial outbox worker error', { message: error.message });
+      }
+      schedule(processed ? 150 : 1000);
+    }, delayMs);
+    timer.unref();
+  };
+  schedule(100);
+  return { stop: () => { stopped = true; if (timer) clearTimeout(timer); } };
 };
 module.exports = { startFinancialOutboxJob, flushOne, message, keyboard };
