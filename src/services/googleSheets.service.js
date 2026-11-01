@@ -165,13 +165,15 @@ const validateWebhookResult = (payload, json, expectedRow = sheetMapper.buildLeg
     throw new Error("Google Sheets response is missing spreadsheetName or sheetName");
   }
   const expectedMonthSheetName = payload?.monthSheetName || sheetMapper.monthSheetNameForPayload_(payload || {});
-  // Some existing branch tabs have trailing spaces in their names. The script may
-  // correctly write and return that exact tab name; normalize only outer whitespace.
-  // Keep verifying spreadsheet identity, month, 22-column row and amounts below.
-  if (String(json?.monthSheetName || '').trim() !== expectedMonthSheetName) {
+  // Operational month tabs use inconsistent spaces (e.g. "Ноябрь  2026").
+  // Google Apps Script writes to the correct existing tab and returns its
+  // actual name. Compare normalized whitespace, NEVER loosen the month/year
+  // or spreadsheet/branch identity checks.
+  const normalizeMonthName = (name) => String(name || "").replace(/\\s+/g, " ").trim();
+  if (normalizeMonthName(json?.monthSheetName) !== normalizeMonthName(expectedMonthSheetName)) {
     throw new Error(`Google Sheets month sheet mismatch: expected ${expectedMonthSheetName}, received ${json?.monthSheetName || "missing"}`);
   }
-  if (String(json?.sheetName || '').trim() !== expectedMonthSheetName) {
+  if (normalizeMonthName(json?.sheetName) !== normalizeMonthName(expectedMonthSheetName)) {
     throw new Error(`Google Sheets wrote to wrong sheet: expected ${expectedMonthSheetName}, received ${json?.sheetName || "missing"}`);
   }
   const row = Array.isArray(json?.finalRow) ? json.finalRow : expectedRow;
