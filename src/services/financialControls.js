@@ -7,10 +7,13 @@ const assertMinorAmount = (value) => {
   }
   return value;
 };
-const assertPricePermission = (user, reason, configuredIds = process.env.PRICE_APPROVER_USER_IDS || '') => {
-  const ids = configuredIds.split(',').map((id) => id.trim()).filter(Boolean);
-  const logins = (process.env.PRICE_APPROVER_LOGINS || '').split(',').map((login) => login.trim()).filter(Boolean);
-  if (user.role !== 'SUPER_ADMIN' && !ids.includes(user.id) && !logins.includes(user.login)) throw new AppError('Sizda narx yoki chegirmani tasdiqlash huquqi yo‘q', 403);
+const assertPricePermission = (user, reason) => {
+  // Financial price/discount adjustments are available to every authenticated,
+  // active employee role. Callers must still enforce branch scope, amount bounds,
+  // recorded reasons, ledger reconciliation and audit logging.
+  if (!user?.id || !['SUPER_ADMIN', 'BRANCH_ADMIN'].includes(user.role)) {
+    throw new AppError('Moliyaviy o‘zgartirish uchun faol xodim hisobi talab qilinadi', 403);
+  }
   if (!String(reason || '').trim()) throw new AppError('Narx o‘zgarishi uchun sabab majburiy', 400);
 };
 // New-order discounts are entered by authenticated branch staff without manager approval.
