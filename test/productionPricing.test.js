@@ -50,7 +50,12 @@ test('pricing quote passes TJV scope, count and minor-unit conversion', async (t
  const {quote}=require('../src/services/pricing.service');
  const body={branchId:'tjv',hours:15,isCustom:true,currency:'UZS',items:[{size:'S',count:2},{size:'M',count:1}]};
  assert.equal((await quote({role:'SUPER_ADMIN'},body)).calculatedAmount,177000);
- assert.equal((await quote({role:'SUPER_ADMIN'},{...body,currency:'USD',exchangeRate:12500})).calculatedAmount,1416);
+ const uzs = await quote({role:'SUPER_ADMIN'},body);
+ assert.equal(uzs.calculatedAmountUZS,177000);
+ const foreign = await quote({role:'SUPER_ADMIN'},{...body,currency:'USD',exchangeRate:12500});
+ assert.equal(foreign.calculatedAmount,1416);
+ assert.equal(foreign.calculatedAmountUZS,177000);
+ assert.equal(foreign.exchangeRate,12500);
 });
 
 test('new TJV foreign-currency overtime uses corrected base, historical snapshots retain hourly rule',()=>{
@@ -59,4 +64,14 @@ test('new TJV foreign-currency overtime uses corrected base, historical snapshot
  assert.equal(calculateOvertimeAmount({order,tariffs:[{size:'S',...rates.S}],overtimeHours:1}),32);
  const historical={...order,items:[{...order.items[0],unitPrice:480}],pricingSnapshot:{version:1}};
  assert.equal(calculateOvertimeAmount({order:historical,tariffs:[{size:'S',...rates.S}],overtimeHours:1}),32);
+});
+
+
+test('TIA 12-hour L tariff stays at 180000 UZS while 16 USD remains 1600 cents', () => {
+  const { calculatePrice } = require('../src/services/tariff.service');
+  const { convertUzsToCurrencyMinor } = require('../src/utils/money');
+  const uzs = calculatePrice({price1h:40000,price12h:180000,price24h:300000},12,{branchCode:'TIA'});
+  assert.equal(uzs,180000);
+  assert.equal(convertUzsToCurrencyMinor(uzs,'USD',12500),1440);
+  assert.equal(convertUzsToCurrencyMinor(200000,'USD',12500),1600);
 });
