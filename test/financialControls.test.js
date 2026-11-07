@@ -43,7 +43,7 @@ test('only existing formal debt is a pickup exception; currencies cannot be adde
   assert.throws(() => controls.assertPickupPaid(order));
 });
 test('price permission requires authenticated branch staff and mandatory reason', () => {
-  assert.throws(() => controls.assertPricePermission({ id: 'employee', role: 'UNKNOWN' }, 'reason', 'manager'), /huquqi/);
+  assert.throws(() => controls.assertPricePermission({ id: 'employee', role: 'UNKNOWN' }, 'reason', 'manager'), /faol xodim/);
   assert.doesNotThrow(() => controls.assertPricePermission({ id: 'employee', role: 'BRANCH_ADMIN' }, 'reason', 'manager'));
   assert.doesNotThrow(() => controls.assertPricePermission({ id: 'leader', role: 'SUPER_ADMIN' }, 'reason', ''));
   assert.throws(() => controls.assertPricePermission({ id: 'leader', role: 'SUPER_ADMIN' }, ' ', ''), /sabab/);
