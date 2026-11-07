@@ -186,6 +186,12 @@ model Order {
   tariffHours        Int
   customHours        Int?
   pricingSnapshot    Json?
+  // Native tariff baseline is always in UZS, regardless of payment currency.
+  calculatedAmountUZS Int?
+  // Foreign payment is retained in the currency's minor units (e.g. USD cents).
+  paymentAmountForeignMinor Int?
+  // UZS per one major foreign currency unit; independent of the tariff.
+  exchangeRate       Decimal?      @db.Decimal(22, 10)
   priceApprovedById  String?
   priceApprovedByName String?
   currency           Currency      @default(UZS)
