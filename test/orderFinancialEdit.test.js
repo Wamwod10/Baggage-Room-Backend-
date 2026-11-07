@@ -29,7 +29,7 @@ test('method correction preserves amount, requires permission/reason and never c
   assert.equal(planEdit(order, { paymentType: 'TERMINAL', priceChangeReason: 'Wrong method' }, user).movements[0].paymentType, 'TERMINAL');
   assert.throws(() => planEdit(order, { paymentType: 'TERMINAL' }, user));
   assert.doesNotThrow(() => planEdit(order, { paymentType: 'TERMINAL', priceChangeReason: 'test' }, { id: 'employee' }));
-  assert.throws(() => rawPlanEdit(order, { paymentType: 'TERMINAL', priceChangeReason: 'test' }, { id: 'employee' }, { requireManagerApproval: true }), /huquqi/);
+  assert.throws(() => rawPlanEdit(order, { paymentType: 'TERMINAL', priceChangeReason: 'test' }, { id: 'employee' }, { requireManagerApproval: true }), /faol xodim/);
   assert.throws(() => planEdit(order, { paymentType: 'DEBT', priceChangeReason: 'test' }, user));
   assert.equal(planEdit(order, { paymentType: 'TERMINAL', realPaidAmount: 1, priceChangeReason: 'test' }, user).data.finalAmount, 1);
 });

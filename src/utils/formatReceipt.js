@@ -32,6 +32,11 @@ const formatReceipt = (order) => {
     })),
     totals: {
       calculatedAmount: order.calculatedAmount,
+      calculatedAmountUZS: order.calculatedAmountUZS ?? null,
+      displayCalculatedAmountUZS: order.calculatedAmountUZS == null ? null : formatCurrency(order.calculatedAmountUZS, 'UZS'),
+      exchangeRate: order.exchangeRate == null ? (order.pricingSnapshot?.exchangeRate ?? null) : Number(order.exchangeRate),
+      paymentCurrency: order.currency,
+      paymentAmountForeignMinor: order.currency === 'UZS' ? null : (order.paymentAmountForeignMinor ?? order.realPaidAmount),
       discountAmount: order.discountAmount,
       finalAmount: order.finalAmount,
       realPaidAmount: order.realPaidAmount,

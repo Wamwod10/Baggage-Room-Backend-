@@ -88,6 +88,7 @@ const closeDebt = async (user, id, body, { idempotencyKey } = {}) => {
       where: { id: debt.orderId },
       data: {
         realPaidAmount: newRealPaidAmount,
+        paymentAmountForeignMinor: debt.order.currency === 'UZS' ? null : newRealPaidAmount,
         paymentDifference: newRealPaidAmount - Number(debt.order.finalAmount || 0),
       },
     });

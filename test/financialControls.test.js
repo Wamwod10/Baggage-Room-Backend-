@@ -42,21 +42,21 @@ test('only existing formal debt is a pickup exception; currencies cannot be adde
   order.cashMovements = [{ type: 'ORDER_PAYMENT', direction: 'IN', amount: 100, currency: 'USD', paymentType: 'CASH' }];
   assert.throws(() => controls.assertPickupPaid(order));
 });
-test('price permission uses actual account allowlist and mandatory reason', () => {
-  assert.throws(() => controls.assertPricePermission({ id: 'employee', role: 'UNKNOWN' }, 'reason', 'manager'), /huquqi/);
-  assert.throws(() => controls.assertPricePermission({ id: 'employee', role: 'BRANCH_ADMIN' }, 'reason', 'manager'), /huquqi/);
+test('price permission requires authenticated branch staff and mandatory reason', () => {
+  assert.throws(() => controls.assertPricePermission({ id: 'employee', role: 'UNKNOWN' }, 'reason', 'manager'), /faol xodim/);
+  assert.doesNotThrow(() => controls.assertPricePermission({ id: 'employee', role: 'BRANCH_ADMIN' }, 'reason', 'manager'));
   assert.doesNotThrow(() => controls.assertPricePermission({ id: 'leader', role: 'SUPER_ADMIN' }, 'reason', ''));
   assert.throws(() => controls.assertPricePermission({ id: 'leader', role: 'SUPER_ADMIN' }, ' ', ''), /sabab/);
-  assert.throws(() => controls.assertPricePermission({ id: 'manager' }, ' ', 'manager'), /sabab/);
-  assert.doesNotThrow(() => controls.assertPricePermission({ id: 'manager' }, 'reason', 'manager'));
+  assert.throws(() => controls.assertPricePermission({ id: 'manager', role: 'BRANCH_ADMIN' }, ' ', 'manager'), /sabab/);
+  assert.doesNotThrow(() => controls.assertPricePermission({ id: 'manager', role: 'BRANCH_ADMIN' }, 'reason', 'manager'));
 });
-test('price permission accepts only exact configured account logins and requires a reason', () => {
+test('price permission is role-based and still requires a reason', () => {
   const previous = process.env.PRICE_APPROVER_LOGINS;
   process.env.PRICE_APPROVER_LOGINS = ' manager-login, other ';
   try {
     assert.doesNotThrow(() => controls.assertPricePermission({ id: '1', login: 'manager-login', role: 'BRANCH_ADMIN' }, 'Correction', ''));
-    assert.throws(() => controls.assertPricePermission({ id: '2', login: 'manager-login-extra', role: 'BRANCH_ADMIN' }, 'Correction', ''), /huquqi/);
-    assert.throws(() => controls.assertPricePermission({ id: '1', login: 'manager-login' }, '  ', ''), /sabab/);
+    assert.doesNotThrow(() => controls.assertPricePermission({ id: '2', login: 'manager-login-extra', role: 'BRANCH_ADMIN' }, 'Correction', ''));
+    assert.throws(() => controls.assertPricePermission({ id: '1', login: 'manager-login', role: 'BRANCH_ADMIN' }, '  ', ''), /sabab/);
   } finally {
     if (previous === undefined) delete process.env.PRICE_APPROVER_LOGINS; else process.env.PRICE_APPROVER_LOGINS = previous;
   }
@@ -66,8 +66,8 @@ test('authenticated branch staff can record a new-order discount without a manag
   assert.doesNotThrow(() => controls.assertDiscountReason('TJV staff discount'));
   assert.throws(() => controls.assertDiscountReason('  '), /sababi/);
   assert.throws(() => controls.assertDiscountReason(undefined), /sababi/);
-  // Sensitive post-creation financial changes remain manager-only.
-  assert.throws(() => controls.assertPricePermission({ id: 'staff', role: 'BRANCH_ADMIN' }, 'reason', ''), /huquqi/);
+  // Branch staff may edit prices; financial ledger reconciliation remains enforced.
+  assert.doesNotThrow(() => controls.assertPricePermission({ id: 'staff', role: 'BRANCH_ADMIN' }, 'reason', ''));
 });
 test('staff can discount existing active orders but cannot alter recorded receipts', () => {
   const order = { status: 'ACTIVE', calculatedAmount: 180000, finalAmount: 180000,
@@ -84,7 +84,7 @@ test('staff can discount existing active orders but cannot alter recorded receip
   assert.equal(controls.isStaffDiscountOnlyEdit({ ...order, paymentType: 'DEBT' }, { finalAmount: 100000 }), false);
   assert.equal(controls.isStaffDiscountOnlyEdit({ ...order, debt: { status: 'OPEN' } }, { finalAmount: 100000 }), false);
   assert.throws(() => controls.assertDiscountReason(' '), /sababi/);
-  assert.throws(() => controls.assertPricePermission({ id: 'employee', role: 'BRANCH_ADMIN' }, 'some reason', ''), /huquqi/);
+  assert.doesNotThrow(() => controls.assertPricePermission({ id: 'employee', role: 'BRANCH_ADMIN' }, 'some reason', ''));
 });
 test('completed baggage corrections preserve cash and reconcile price without a refund', () => {
   const original = { finalAmount: 180000, realPaidAmount: 180000 };

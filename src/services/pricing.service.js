@@ -20,7 +20,10 @@ const quote = async (user, body) => {
   });
   let canAdjustPrice = false;
   try { require('./financialControls').assertPricePermission(user, 'Capability check'); canAdjustPrice = true; } catch { /* Fail closed. */ }
-  return { items, calculatedAmount: assertMinorAmount(items.reduce((sum, item) => sum + item.amount, 0)), canAdjustPrice };
+  return { items, calculatedAmount: assertMinorAmount(items.reduce((sum, item) => sum + item.amount, 0)),
+    calculatedAmountUZS: assertMinorAmount(items.reduce((sum, item) => sum + item.unitPriceUZS * item.count, 0)),
+    exchangeRate: body.currency && body.currency !== 'UZS' ? Number(body.exchangeRate) : 1,
+    canAdjustPrice };
 };
 const pickupQuote = async (user, id) => {
   const order = await prisma.order.findUnique({ where: { id }, include: { items: true, branch: true } });

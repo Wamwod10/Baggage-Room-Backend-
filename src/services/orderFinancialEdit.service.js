@@ -55,7 +55,11 @@ const planEdit = (order, body, user, { requireManagerApproval = false } = {}) =>
   if (paymentType === 'DEBT' && data.realPaidAmount > data.finalAmount) throw new AppError('Debt payment exceeds price', 400);
   data.discountAmount = Math.max(0, data.calculatedAmount - data.finalAmount);
   data.paymentDifference = data.realPaidAmount - data.finalAmount;
-  if (currency !== order.currency) data.pricingSnapshot = { ...(order.pricingSnapshot || { version: 0, tariffs: {}, dailyRates: {} }), exchangeRate: targetRate };
+  if (currency !== order.currency) {
+    data.pricingSnapshot = { ...(order.pricingSnapshot || { version: 0, tariffs: {}, dailyRates: {} }), exchangeRate: targetRate };
+    data.exchangeRate = currency === 'UZS' ? null : targetRate;
+  }
+  data.paymentAmountForeignMinor = currency === 'UZS' ? null : data.realPaidAmount;
   if (body.overtimeAmount !== undefined) data.overtimeAmount = assertMinorAmount(body.overtimeAmount);
   if (overtimeType) data.overtimePaymentType = overtimeType;
   const movements = [];

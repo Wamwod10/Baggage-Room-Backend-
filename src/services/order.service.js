@@ -107,6 +107,9 @@ const listOrderSelect = {
   currency: true,
   paymentType: true,
   calculatedAmount: true,
+  calculatedAmountUZS: true,
+  paymentAmountForeignMinor: true,
+  exchangeRate: true,
   pricingSnapshot: true,
   discountAmount: true,
   finalAmount: true,
@@ -756,6 +759,7 @@ const createOrder = async (user, body, { idempotencyKey } = {}) => {
       const discountAmount = Number(item.discountAmount || 0);
       return {
         locker,
+        unitPriceUZS,
         data: {
           lockerId: locker.id,
           lockerNumber: locker.number,
@@ -772,6 +776,7 @@ const createOrder = async (user, body, { idempotencyKey } = {}) => {
     });
 
     const calculatedAmount = itemRows.reduce((total, item) => total + item.data.originalPrice, 0);
+    const calculatedAmountUZS = assertMinorAmount(itemRows.reduce((total, item) => total + item.unitPriceUZS * item.data.count, 0));
     const itemDiscount = itemRows.reduce((total, item) => total + item.data.discountAmount, 0);
     let discountAmount = Number(body.discountAmount || 0) + itemDiscount;
     assertMinorAmount(discountAmount);
@@ -806,6 +811,9 @@ const createOrder = async (user, body, { idempotencyKey } = {}) => {
         currency,
         paymentType,
         calculatedAmount,
+        calculatedAmountUZS,
+        paymentAmountForeignMinor: currency === 'UZS' ? null : realPaidAmount,
+        exchangeRate: currency === 'UZS' ? null : exchangeRate,
         discountAmount,
         discountReason: body.discountReason || (discountAmount > 0 ? body.realPaidReason || body.note : null) || null,
         finalAmount,
@@ -1089,6 +1097,7 @@ const updateOrder = async (user, id, body, { idempotencyKey } = {}) => {
         validateBaggage(nextItems, current.branch.code);
         const tariffs = await tx.tariff.findMany({ where: { branchId: current.branchId } });
         let calculatedAmount = 0;
+        let calculatedAmountUZS = 0;
         for (const row of nextItems) {
           const previous = currentItemsById.get(row.id);
           let unitPrice = previous?.size === row.size ? previous.unitPrice : undefined;
@@ -1107,8 +1116,16 @@ const updateOrder = async (user, id, body, { idempotencyKey } = {}) => {
           }
           const originalPrice = assertMinorAmount(unitPrice * row.count);
           calculatedAmount = assertMinorAmount(calculatedAmount + originalPrice);
+          const originalTariff = current.pricingSnapshot?.tariffs?.[row.size] || tariffs.find((t) => t.size === row.size);
+          if (originalTariff) {
+            calculatedAmountUZS = assertMinorAmount(calculatedAmountUZS + calculatePrice(originalTariff, row.tariffHours, {
+              branchCode: current.pricingSnapshot?.customTariffRule === 'TJV_12H_PLUS_HOURLY' ? 'TJV' : undefined,
+              isCustom: current.customHours !== null, dailyRate: current.pricingSnapshot?.dailyRates?.[row.size],
+            }) * row.count);
+          }
           await tx.orderItem.update({ where: { id: row.id }, data: { unitPrice, originalPrice, finalPrice: Math.max(0, originalPrice - row.discountAmount) } });
         }
+        data.calculatedAmountUZS = calculatedAmountUZS;
         if (current.status === 'PICKED_UP') {
           Object.assign(data, completedOrderReprice(current, calculatedAmount,
             body.finalAmount !== undefined && body.finalAmount !== current.finalAmount ? body.finalAmount : undefined));
@@ -1135,6 +1152,11 @@ const updateOrder = async (user, id, body, { idempotencyKey } = {}) => {
           discountAmount: financialPlan.convert(item.discountAmount), finalPrice: financialPlan.convert(item.finalPrice),
         } });
       }
+    }
+    // Separate FX paid metadata follows edits; historical cash ledger stays untouched.
+    if (data.realPaidAmount !== undefined || data.currency !== undefined) {
+      const effectiveCurrency = data.currency ?? current.currency;
+      data.paymentAmountForeignMinor = effectiveCurrency === 'UZS' ? null : Number(data.realPaidAmount ?? current.realPaidAmount);
     }
     const updatedBaseWrite = await tx.order.updateMany({
       where: { id, updatedAt: current.updatedAt },
@@ -1407,6 +1429,7 @@ const pickupOrder = async (user, id, body, { idempotencyKey } = {}) => {
           where: { id },
           data: {
             realPaidAmount: newRealPaidAmount,
+            paymentAmountForeignMinor: order.currency === 'UZS' ? null : newRealPaidAmount,
             paymentDifference: newRealPaidAmount - Number(order.finalAmount || 0),
           },
           include: includeOrder,
