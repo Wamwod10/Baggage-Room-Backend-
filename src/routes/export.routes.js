@@ -18,6 +18,10 @@ const query = z.object({
   }),
 });
 
+router.get("/orders/monthly-pdf", validate(z.object({ query: z.object({
+  month: z.string().regex(/^(20[0-9]{2})-(0[1-9]|1[0-2])$/),
+  branchId: z.string().optional(),
+}) })), exportController.monthlySalesPdf);
 router.get("/orders", validate(query), exportController.orders);
 router.get("/shifts", validate(query), exportController.shifts);
 router.get("/finance", validate(query), exportController.finance);
