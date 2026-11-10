@@ -382,17 +382,17 @@ const shiftSalesSnapshotMessage = (shift = {}) => {
   return [
     "📊 Savdo hisoboti",
     "",
-    `Общий счёт: ${formatMoney(summary.totalUzs || 0, "UZS")}${hasUnknownRates ? " (kurs yetishmaydi, jami to'liq emas)" : ""}`,
+    `💰 Jami tushum: ${formatMoney(summary.totalUzs || 0, "UZS")}${hasUnknownRates ? " (ayirboshlash kursi yetishmaydi, jami to'liq emas)" : ""}`,
     "",
-    `нал: ${formatMoney(summary.cashUzs || 0, "UZS")}`,
+    `💵 Naqd pul: ${formatMoney(summary.cashUzs || 0, "UZS")}`,
     "",
-    "Валюта:",
-    ...(foreignLines.length ? foreignLines : ["0"]),
+    "💱 Chet el valyutasidagi to'lovlar:",
+    ...(foreignLines.length ? foreignLines : ["To'lov yo'q"]),
     "",
-    `Terminal: ${formatMoney(summary.terminalUzs || 0, "UZS")}`,
-    `Payme: ${formatMoney(summary.paymeUzs || 0, "UZS")}`,
-    `Click: ${formatMoney(summary.clickUzs || 0, "UZS")}`,
-    ...(nonCash ? [`Boshqa: ${formatMoney(nonCash, "UZS")}`] : []),
+    `💳 Terminal orqali: ${formatMoney(summary.terminalUzs || 0, "UZS")}`,
+    `🟢 Payme orqali: ${formatMoney(summary.paymeUzs || 0, "UZS")}`,
+    `🔵 Click orqali: ${formatMoney(summary.clickUzs || 0, "UZS")}`,
+    ...(nonCash ? [`Boshqa to'lovlar: ${formatMoney(nonCash, "UZS")}`] : []),
   ].join("\n");
 };
 

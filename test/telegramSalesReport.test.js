@@ -22,12 +22,12 @@ test("Telegram sale report matches manager's UZS total and separate foreign curr
   assert.equal(sales.foreign[1].uzs, 13000);
   assert.equal(sales.hasUnknownRates, false);
   const text = shiftSalesSnapshotMessage({ telegramSalesSummary: sales });
-  assert.match(text, /Общий счёт: 1 768 000 so'm/);
-  assert.match(text, /нал: 500 000 so'm/);
-  assert.match(text, /Валюта:\n50\$ - 575 000 so'm\n100₽ - 13 000 so'm/);
-  assert.match(text, /Terminal: 680 000 so'm/);
-  assert.match(text, /Payme: 0 so'm/);
-  assert.match(text, /Click: 0 so'm/);
+  assert.match(text, /Jami tushum: 1 768 000 so'm/);
+  assert.match(text, /Naqd pul: 500 000 so'm/);
+  assert.match(text, /Chet el valyutasidagi to'lovlar:\n50\$ - 575 000 so'm\n100₽ - 13 000 so'm/);
+  assert.match(text, /Terminal orqali: 680 000 so'm/);
+  assert.match(text, /Payme orqali: 0 so'm/);
+  assert.match(text, /Click orqali: 0 so'm/);
   assert.doesNotMatch(text, /курс не указан|kurs topilmadi|Naqd:.*USD/);
 });
 
@@ -68,7 +68,7 @@ test("missing FX rate is visible and never silently added to a fake total", () =
   assert.equal(sales.totalUzs, 100000);
   assert.equal(sales.hasUnknownRates, true);
   const text = shiftSalesSnapshotMessage({ telegramSalesSummary: sales });
-  assert.match(text, /kurs yetishmaydi, jami to'liq emas/);
+  assert.match(text, /ayirboshlash kursi yetishmaydi, jami to'liq emas/);
   assert.match(text, /50\$ - kurs topilmadi/);
   assert.doesNotMatch(text, /50\$ - 0 so'm/);
 });
