@@ -330,15 +330,69 @@ const overtimePaymentMessageV2 = (order = {}) => [
   line("👤 Admin", formatAdmin(order.shiftOpenedBy || order.cashierAdmin || order.pickedUpBy || order.admin || order.createdBy, order.branch || order.branchName)),
 ].join("\n");
 
+const salesCurrencySymbols = { USD: "$", RUB: "₽", EUR: "€", TJS: "TJS", KZT: "₸" };
+const compactForeignMoney = (minor, currency) => {
+  const digits = currencyFractionDigits[currency] ?? 2;
+  const major = Number(minor || 0) / 10 ** digits;
+  const amount = new Intl.NumberFormat("ru-RU", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: digits,
+  }).format(major).replace(/[\u00a0\u202f]/g, " ");
+  const symbol = salesCurrencySymbols[currency] || currency;
+  return currency === "TJS" ? `${amount} ${symbol}` : `${amount}${symbol}`;
+};
+
 const shiftSalesSnapshotMessage = (shift = {}) => {
   const report = shift.report || {};
+  const revenue = shift.revenueByCurrency || report.revenueByCurrency || {};
+  const cash = shift.cashByCurrency || report.cashByCurrency || {};
+  const terminal = shift.terminalByCurrency || report.terminalByCurrency || {};
+  const payme = shift.paymeByCurrency || report.paymeByCurrency || {};
+  const click = shift.clickByCurrency || report.clickByCurrency || {};
+  // Historic callers without a movement-level breakdown can still render,
+  // but never silently convert currencies without a stored exchange rate.
+  const foreign = CURRENCIES.filter((currency) => currency !== "UZS" && Number(revenue[currency] || 0) !== 0)
+    .map((currency) => ({ currency, amountMinor: Number(revenue[currency]), uzs: 0, missingMinor: Number(revenue[currency]) }));
+  const summary = shift.telegramSalesSummary || report.telegramSalesSummary || {
+    totalUzs: Number(revenue.UZS || 0),
+    cashUzs: Number(cash.UZS || 0),
+    terminalUzs: Number(terminal.UZS || 0),
+    paymeUzs: Number(payme.UZS || 0),
+    clickUzs: Number(click.UZS || 0),
+    foreign,
+    hasUnknownRates: foreign.length > 0,
+    otherUzs: 0,
+  };
+
+  const foreignLines = (summary.foreign || []).flatMap((item) => {
+    const amountMinor = Number(item.amountMinor || 0);
+    const unknown = Number(item.missingMinor || 0);
+    const known = amountMinor - unknown;
+    const lines = [];
+    if (known !== 0 || Number(item.uzs || 0) !== 0) {
+      lines.push(`${compactForeignMoney(known, item.currency)} - ${formatMoney(item.uzs, "UZS")}`);
+    }
+    if (unknown !== 0) {
+      lines.push(`${compactForeignMoney(unknown, item.currency)} - kurs topilmadi`);
+    }
+    return lines;
+  });
+  const hasUnknownRates = Boolean(summary.hasUnknownRates);
+  const nonCash = Number(summary.otherUzs || 0);
   return [
-    "Savdo hisoboti",
-    line("Umumiy summa", formatCurrencyMap(shift.revenueByCurrency || report.revenueByCurrency)),
-    line("Naqd", formatCurrencyMap(shift.cashByCurrency || report.cashByCurrency)),
-    line("Terminal", formatCurrencyMap(shift.terminalByCurrency || report.terminalByCurrency)),
-    line("Click", formatCurrencyMap(shift.clickByCurrency || report.clickByCurrency)),
-    line("Payme", formatCurrencyMap(shift.paymeByCurrency || report.paymeByCurrency)),
+    "📊 Savdo hisoboti",
+    "",
+    `Общий счёт: ${formatMoney(summary.totalUzs || 0, "UZS")}${hasUnknownRates ? " (kurs yetishmaydi, jami to'liq emas)" : ""}`,
+    "",
+    `нал: ${formatMoney(summary.cashUzs || 0, "UZS")}`,
+    "",
+    "Валюта:",
+    ...(foreignLines.length ? foreignLines : ["0"]),
+    "",
+    `Terminal: ${formatMoney(summary.terminalUzs || 0, "UZS")}`,
+    `Payme: ${formatMoney(summary.paymeUzs || 0, "UZS")}`,
+    `Click: ${formatMoney(summary.clickUzs || 0, "UZS")}`,
+    ...(nonCash ? [`Boshqa: ${formatMoney(nonCash, "UZS")}`] : []),
   ].join("\n");
 };
 

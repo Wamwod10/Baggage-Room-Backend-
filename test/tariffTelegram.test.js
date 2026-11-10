@@ -232,10 +232,11 @@ test("Telegram sales snapshot reports current shift payment totals", () => {
   });
 
   assert.match(message, /Savdo hisoboti/);
-  assert.doesNotMatch(message, /\n\n/);
+  assert.match(message, /\n\nОбщий счёт:/);
   assert.doesNotMatch(message, /Buyurtmalar:/);
-  assert.match(message, /Umumiy summa: 3 587 000 so'm/);
-  assert.match(message, /Naqd: 2 601 000 so'm/);
+  assert.match(message, /Общий счёт: 3 587 000 so'm/);
+  assert.match(message, /нал: 2 601 000 so'm/);
+  assert.ok(message.includes(["Валюта:", "0"].join(String.fromCharCode(10))));
   assert.match(message, /Terminal: 986 000 so'm/);
   assert.match(message, /Click: 0 so'm/);
   assert.match(message, /Payme: 0 so'm/);
