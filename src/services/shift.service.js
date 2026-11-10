@@ -8,6 +8,7 @@ const telegram = require("./telegram.service");
 const googleSheets = require("./googleSheets.service");
 const { createCashMovement } = require("./cashMovement.service");
 const { summarizeMovements, cashBalanceByCurrency } = require("./cashAccounting.service");
+const { buildTelegramSalesSummary } = require("./telegramSalesReport.service");
 const { requireIdempotencyKey, isUniqueConflictFor } = require("../utils/idempotency");
 const { markAnalyticsMutation } = require("./analyticsCache");
 
@@ -141,8 +142,21 @@ const sendCurrentSalesTelegram = async (user, query = {}) => {
   const shift = await prisma.shift.findFirst({ where: { branchId, status: "OPEN" }, include, orderBy: { openedAt: "desc" } });
   if (!shift) throw new AppError("Bu filialda ochiq smena yo'q", 404);
 
-  const { ordersCount, ...report } = await computeShiftReport(prisma, shift);
-  const snapshot = { ...shift, ...report, ordersCount };
+  const [computed, movements] = await Promise.all([
+    computeShiftReport(prisma, shift),
+    prisma.cashMovement.findMany({
+      where: { shiftId: shift.id },
+      select: {
+        amount: true, currency: true, direction: true, type: true, paymentType: true,
+        order: { select: { currency: true, exchangeRate: true, pricingSnapshot: true } },
+      },
+    }),
+  ]);
+  const { ordersCount, ...report } = computed;
+  const snapshot = {
+    ...shift, ...report, ordersCount,
+    telegramSalesSummary: buildTelegramSalesSummary(movements),
+  };
   const result = await telegram.sendSafely(
     () => telegram.sendShiftSalesSnapshot(snapshot),
     {
