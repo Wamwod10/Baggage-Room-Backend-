@@ -81,7 +81,7 @@ const buildTelegramSalesSummary = (movements = []) => {
     byCurrency.set(currency, info);
   }
   result.foreign = [...byCurrency.values()]
-    .filter((item) => item.amountMinor !== 0 || item.missingMinor !== 0)
+    .filter((item) => item.amountMinor !== 0 || item.missingMinor !== 0 || item.uzs !== 0)
     .sort((a, b) => FOREIGN_ORDER.indexOf(a.currency) - FOREIGN_ORDER.indexOf(b.currency));
   result.missingRates = [...unknownByCurrency.entries()]
     .filter(([, minor]) => minor !== 0)
