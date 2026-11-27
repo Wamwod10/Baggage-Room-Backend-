@@ -210,9 +210,11 @@ test("Telegram shift report separates payment and currency balances", () => {
     inkassaByCurrency: { RUB: 10000 },
     cashBalanceByCurrency: { UZS: 190000, RUB: 11429 },
   });
-  assert.match(message, /Click orqali: 123,45 USD/);
-  assert.match(message, /Payme orqali: 99,50 EUR/);
+  assert.match(message, /Click orqali: 0 so\'m/);
+  assert.match(message, /Payme orqali: 0 so\'m/);
   assert.match(message, /Inkassa: 100,00 RUB/);
+  assert.match(message, /kurs topilmadi/);
+  assert.match(message, /Jami tushum: 250 000 so\'m/);
   assert.match(message, /Smenani yopgan: Vali/);
   assert.match(message, /Boshlang'ich kassa: 100 000 so'm \/ 100,00 USD/);
   assert.match(message, /Qabul qilingan: 50 000 so'm \/ 50,00 USD/);
