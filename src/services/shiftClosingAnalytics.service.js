@@ -1,7 +1,7 @@
 // Read-only analytics for the *same* Telegram shift-close notification.
 // Orders are attributed to the branch shift by their timestamps (no direct
 // Order.shiftId exists). Cash payments are attributed by CashMovement.shiftId.
-const { buildTelegramSalesSummary, convertForeignToUzs, readRate } = require("./telegramSalesReport.service");
+const { buildTelegramSalesSummary } = require("./telegramSalesReport.service");
 
 const SIZES = Object.freeze(["S", "M", "L", "XL"]);
 const isFiniteAmount = (n) => Number.isSafeInteger(n) && n >= 0;
@@ -33,7 +33,7 @@ const summarizeShiftOrders = ({ orders = [], pickups = 0, cancellations = 0, del
   const additional = movements.filter((movement) =>
     movement.type === "ORDER_PAYMENT" &&
     movement.direction === "IN" &&
-    /^(?:Additional payment|Overtime)\s/i.test(String(movement.note || "")));
+    /^(?:Additional payment|Overtime|Manual additional)\s/i.test(String(movement.note || "")));
   const extra = buildTelegramSalesSummary(additional);
   const revenue = buildTelegramSalesSummary(movements);
   const previous = previousMovements === null ? null : buildTelegramSalesSummary(previousMovements);
