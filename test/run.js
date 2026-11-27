@@ -22,3 +22,4 @@ require('./validationLimits.test');
 require('./monthlySalesPdf.test');
 
 require('./telegramSalesReport.test');
+require('./shiftClosingAnalytics.test');
