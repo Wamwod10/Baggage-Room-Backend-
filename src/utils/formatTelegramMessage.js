@@ -302,7 +302,8 @@ const shiftClosedMessageV2 = (shift = {}) => {
   const comparisonLabel = comparison == null
     ? "Taqqoslash uchun ma'lumot yetarli emas"
     : `${comparison > 0 ? "+" : ""}${comparison}%`;
-  const unknownRate = analytics?.revenue?.hasUnknownRates;
+  const fallbackRevenue = shift.revenueByCurrency || report.revenueByCurrency || {};
+  const unknownRate = analytics ? analytics.revenue.hasUnknownRates : CURRENCIES.some((currency) => currency !== "UZS" && Number(fallbackRevenue[currency] || 0) !== 0);
   const extraUnknown = analytics?.additionalTotal?.hasUnknownRates;
   const cashSummary = [
     "",
@@ -332,7 +333,7 @@ const shiftClosedMessageV2 = (shift = {}) => {
     "",
     "📦 Smena ko'rsatkichlari",
     line("Qabul qilingan buyurtmalar", `${Number(analytics?.received ?? shift.ordersCount ?? 0)} ta`),
-    line("💰 Jami tushum", `${compact(analytics?.revenue?.totalUzs ?? shift.totalRevenue ?? 0)}${unknownRate ? " (kursi yo'q valyutalar qo'shilmagan)" : ""}`),
+    line("💰 Jami tushum", `${compact(analytics?.revenue?.totalUzs ?? fallbackRevenue.UZS ?? shift.totalRevenue ?? 0)}${unknownRate ? " (kursi yo'q valyutalar qo'shilmagan)" : ""}`),
     line("O'rtacha chek (tarif)", analytics?.averageTariffUzs == null ? "Ma'lumot yo'q" : compact(analytics.averageTariffUzs)),
     line("✅ Topshirilgan buyurtmalar", analytics ? `${analytics.pickups} ta` : "Ma'lumot yo'q"),
     "",
