@@ -217,7 +217,7 @@ test("Telegram shift report separates payment and currency balances", () => {
   assert.match(message, /Jami tushum: 250 000 so\'m/);
   assert.match(message, /Smenani yopgan: Vali/);
   assert.match(message, /Boshlang'ich kassa: 100 000 so'm \/ 100,00 USD/);
-  assert.match(message, /Qabul qilingan: 50 000 so'm \/ 50,00 USD/);
+  assert.match(message, /Qabul qilingan kassa: 50 000 so'm \/ 50,00 USD/);
 });
 
 test("Telegram sales snapshot reports current shift payment totals", () => {
