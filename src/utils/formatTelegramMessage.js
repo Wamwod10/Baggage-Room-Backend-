@@ -286,35 +286,73 @@ const shiftOpenedMessageV2 = (shift = {}) => [
 
 const shiftClosedMessageV2 = (shift = {}) => {
   const report = shift.report || {};
+  const analytics = shift.shiftAnalytics || null;
+  const compact = (value) => formatMoney(value, "UZS");
+  const salesText = shiftSalesSnapshotMessage({
+    ...shift,
+    ...(analytics ? { telegramSalesSummary: analytics.revenue } : {}),
+  });
+  // Reuse the exact standalone sales breakdown, but skip its title and
+  // duplicate total: closing the shift sends only one consolidated message.
+  const salesLines = salesText.split("\n").slice(4);
+  const priceLabel = (extreme) => extreme
+    ? `${extreme.number} — ${compact(extreme.amountUzs)}`
+    : "Ma'lumot yo'q";
+  const comparison = analytics?.comparisonPercent;
+  const comparisonLabel = comparison == null
+    ? "Taqqoslash uchun ma'lumot yetarli emas"
+    : `${comparison > 0 ? "+" : ""}${comparison}%`;
+  const unknownRate = analytics?.revenue?.hasUnknownRates;
+  const extraUnknown = analytics?.additionalTotal?.hasUnknownRates;
+  const cashSummary = [
+    "",
+    "💳 To'lovlar bo'yicha",
+    ...salesLines,
+    "",
+    "💼 Kassa va xarajatlar",
+    line("Boshlang'ich kassa", formatCurrencyMap(shift.openingCashByCurrency || report.openingCashByCurrency)),
+    line("Qabul qilingan kassa", formatCurrencyMap(shift.acceptedCashByCurrency || report.acceptedCashByCurrency)),
+    line("Xarajatlar", formatCurrencyMap(shift.expenseByCurrency || report.expenseByCurrency)),
+    line("Oylik", formatCurrencyMap(shift.salaryByCurrency || report.salaryByCurrency)),
+    ...(shift.salaryReceiver ? [line("Oylik olgan", shift.salaryReceiver)] : []),
+    line("Inkassa", formatCurrencyMap(shift.inkassaByCurrency || report.inkassaByCurrency)),
+    line("Ochiq qarz", formatCurrencyMap(shift.debtByCurrency || report.debtByCurrency)),
+    line("Kassada qolgan", formatCurrencyMap(shift.cashBalanceByCurrency || report.cashBalanceByCurrency)),
+  ];
   return [
-  "🔴 Smena yopildi",
-  "",
-  line("🏢 Filial", formatBranch(shift.branch || shift.branchName)),
-  "",
-  line("👤 Kim topshirdi", shift.acceptedByName || formatAdmin(shift.openedBy || shift.admin || shift.openedByName, shift.branch || shift.branchName)),
-  line("👤 Kim qabul qildi", shift.handoverToName || shift.handoverTo || formatAdmin(shift.closedBy || shift.closedByName, shift.branch || shift.branchName)),
-  line("👤 Yopgan admin", formatAdmin(shift.closedBy || shift.closedByName, shift.branch || shift.branchName)),
-  "",
-  line("💼 Boshlang'ich kassa", formatCurrencyMap(shift.openingCashByCurrency || report.openingCashByCurrency)),
-  line("🤝 Qabul qilingan", formatCurrencyMap(shift.acceptedCashByCurrency || report.acceptedCashByCurrency)),
-  ...(shift.shiftTime ? ["", line("Smena", shift.shiftTime)] : []),
-  "",
-  line("📦 Buyurtmalar", `${Number(shift.ordersCount || shift.orders || 0)} ta`),
-  line("💰 Umumiy tushum", formatCurrencyMap(shift.revenueByCurrency || report.revenueByCurrency)),
-  line("💵 Naqd", formatCurrencyMap(shift.cashByCurrency || report.cashByCurrency)),
-  line("💳 Terminal", formatCurrencyMap(shift.terminalByCurrency || report.terminalByCurrency)),
-  line("🔵 Click", formatCurrencyMap(shift.clickByCurrency || report.clickByCurrency)),
-  line("🟢 Payme", formatCurrencyMap(shift.paymeByCurrency || report.paymeByCurrency)),
-  "",
-  line("💸 Xarajat", formatCurrencyMap(shift.expenseByCurrency || report.expenseByCurrency)),
-  line("👛 Oylik", formatCurrencyMap(shift.salaryByCurrency || report.salaryByCurrency)),
-  ...(shift.salaryReceiver ? [line("Oylik kimga", shift.salaryReceiver)] : []),
-  line("🏦 Inkassa", formatCurrencyMap(shift.inkassaByCurrency || report.inkassaByCurrency)),
-  line("📝 Ochiq qarz", formatCurrencyMap(shift.debtByCurrency || report.debtByCurrency)),
-  line("💼 Kassada qolgan", formatCurrencyMap(shift.cashBalanceByCurrency || report.cashBalanceByCurrency)),
-  "",
-  line("🕒 Yopildi", formatDate(shift.closedAt || new Date())),
-].join("\n");
+    "✅ Smena yopildi",
+    "📊 Smena yakuniy hisoboti",
+    "",
+    line("🏢 Filial", formatBranch(shift.branch || shift.branchName)),
+    line("👤 Xodim", shift.acceptedByName || formatAdmin(shift.openedBy || shift.admin || shift.openedByName, shift.branch || shift.branchName)),
+    line("👤 Smenani yopgan", formatAdmin(shift.closedBy || shift.closedByName, shift.branch || shift.branchName)),
+    ...(shift.handoverToName ? [line("🤝 Topshirildi", shift.handoverToName)] : []),
+    line("🕒 Smena boshlandi", formatDate(shift.openedAt || shift.createdAt)),
+    line("🕘 Smena yopildi", formatDate(shift.closedAt || new Date())),
+    "",
+    "📦 Smena ko'rsatkichlari",
+    line("Qabul qilingan buyurtmalar", `${Number(analytics?.received ?? shift.ordersCount ?? 0)} ta`),
+    line("💰 Jami tushum", `${compact(analytics?.revenue?.totalUzs ?? shift.totalRevenue ?? 0)}${unknownRate ? " (kursi yo'q valyutalar qo'shilmagan)" : ""}`),
+    line("O'rtacha chek (tarif)", analytics?.averageTariffUzs == null ? "Ma'lumot yo'q" : compact(analytics.averageTariffUzs)),
+    line("✅ Topshirilgan buyurtmalar", analytics ? `${analytics.pickups} ta` : "Ma'lumot yo'q"),
+    "",
+    "🏆 Buyurtmalar tahlili",
+    line("Eng qimmat buyurtma (tarif)", priceLabel(analytics?.highest)),
+    line("Eng arzon buyurtma (tarif)", priceLabel(analytics?.lowest)),
+    line("Qo'shimcha to'lovlar", analytics ? `${analytics.additionalPayments} ta — ${compact(analytics.additionalTotal?.totalUzs ?? 0)}${extraUnknown ? " (kursi yo'q valyutalar qo'shilmagan)" : ""}` : "Ma'lumot yo'q"),
+    line("Bekor qilingan buyurtmalar", analytics ? `${analytics.cancellations} ta` : "Ma'lumot yo'q"),
+    line("⏰ Muddati o'tgan faol bagajlar", analytics ? `${analytics.delayed} ta` : "Ma'lumot yo'q"),
+    ...(analytics?.missingTariffs ? [line("Tarifi aniqlanmagan buyurtmalar", `${analytics.missingTariffs} ta`)] : []),
+    "",
+    "📦 Bagaj o'lchamlari",
+    ...(analytics ? [
+      `S — ${analytics.sizes.S} ta | M — ${analytics.sizes.M} ta`,
+      `L — ${analytics.sizes.L} ta | XL — ${analytics.sizes.XL} ta`,
+    ] : ["Ma'lumot yo'q"]),
+    "",
+    line("📈 Oldingi smenaga nisbatan tushum", comparisonLabel),
+    ...cashSummary,
+  ].join("\n");
 };
 
 const overtimePaymentMessageV2 = (order = {}) => [
