@@ -9,6 +9,8 @@ const googleSheets = require("./googleSheets.service");
 const { createCashMovement } = require("./cashMovement.service");
 const { summarizeMovements, cashBalanceByCurrency } = require("./cashAccounting.service");
 const { buildTelegramSalesSummary } = require("./telegramSalesReport.service");
+const { loadShiftClosingAnalytics } = require("./shiftClosingAnalytics.service");
+const logger = require("../utils/logger");
 const { requireIdempotencyKey, isUniqueConflictFor } = require("../utils/idempotency");
 const { markAnalyticsMutation } = require("./analyticsCache");
 
@@ -427,6 +429,16 @@ const closeShift = async (user, id, body, { idempotencyKey } = {}) => {
   });
   if (result.idempotentReplay) return result;
   markAnalyticsMutation(result);
+  // One Telegram SHIFT_CLOSE event combines the original cash reconciliation
+  // and the detailed shift analytics. Failure to collect stats must never
+  // undo a successfully closed shift or trigger a second Telegram message.
+  try {
+    result.shiftAnalytics = await loadShiftClosingAnalytics(prisma, result);
+  } catch (error) {
+    logger.warn("Shift analytics unavailable after closing; sending financial summary only", {
+      shiftId: id, branchId: result.branchId, message: error.message,
+    });
+  }
   telegram.sendSafely(() => telegram.sendShiftClose(result), { action: "SHIFT_CLOSE", branchId: result.branchId, userId: user.id, entityType: "Shift", entityId: id });
   if (result.salaryReceiver && Number(result.salaryAmount || 0) > 0) {
     googleSheets.sendSafely(
