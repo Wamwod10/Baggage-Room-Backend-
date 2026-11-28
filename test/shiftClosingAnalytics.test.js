@@ -87,8 +87,8 @@ test("missing old FX rate suppresses percentage comparison instead of fabricatin
   assert.equal(x.highest,null);
   assert.equal(x.comparisonPercent,null);
   const message=shiftClosedMessage({shiftAnalytics:x});
-  assert.match(message,/Ma'lumot yo'q/);
-  assert.match(message,/kursi yo'q valyutalar qo'shilmagan/);
+  assert.match(message,/1 ta buyurtmaning tarifi noma'lum/);
+  assert.match(message,/Kursi yo'q valyutalar jamiga kiritilmadi/);
 });
 
 test("loader confines order counts and pickups to the closed shift and reads previous branch shift", async () => {
