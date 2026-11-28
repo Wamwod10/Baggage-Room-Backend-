@@ -58,17 +58,18 @@ test("merged shift Telegram message includes closure, analytics, payment types a
     cashBalanceByCurrency:{UZS:1200000},shiftAnalytics,
   };
   const message = shiftClosedMessage(shift);
-  assert.equal((message.match(/Smena yopildi/g)||[]).length,2); // headline + timestamp; only one send event
-  assert.match(message,/📊 Smena yakuniy hisoboti/);
-  assert.match(message,/👤 Xodim: Dinara/);
-  assert.match(message,/Qabul qilingan buyurtmalar: 2 ta/);
-  assert.match(message,/Eng qimmat buyurtma \(tarif\): TIA-000001 — 250 000 so'm/);
-  assert.match(message,/Eng arzon buyurtma \(tarif\): TIA-000002 — 35 000 so'm/);
-  assert.match(message,/Qo'shimcha to'lovlar: 1 ta — 120 000 so'm/);
-  assert.match(message,/50\$ - 575 000 so'm/);
-  assert.match(message,/100₽ - 13 000 so'm/);
-  assert.match(message,/Terminal orqali: 680 000 so'm/);
-  assert.match(message,/Oylik: 50 000 so'm/);
+  assert.equal((message.match(/Smena yopildi/g)||[]).length,1); // only one close headline, no duplicated status
+  assert.doesNotMatch(message,/📊 Smena yakuniy hisoboti/);
+  assert.ok(message.split('\n').length < 20, 'compact Telegram report should fit a phone screen');
+  assert.match(message,/👤 Dinara/);
+  assert.match(message,/Buyurtmalar: 2 qabul \| 1 topshirildi/);
+  assert.match(message,/Eng qimmat: TIA-000001 — 250 000 so'm/);
+  assert.match(message,/Eng arzon: TIA-000002 — 35 000 so'm/);
+  assert.match(message,/Qo'shimcha: 120 000 so'm \(1 ta\)/);
+  assert.match(message,/50\$ → 575 000 so'm/);
+  assert.match(message,/100₽ → 13 000 so'm/);
+  assert.match(message,/Terminal: 680 000 so'm/);
+  assert.match(message,/shundan oylik: 50 000 so'm/);
   assert.match(message,/Inkassa: 200 000 so'm/);
   assert.match(message,/Kassada qolgan: 1 200 000 so'm/);
   assert.doesNotMatch(message,/📊 Savdo hisoboti/);
@@ -86,8 +87,8 @@ test("missing old FX rate suppresses percentage comparison instead of fabricatin
   assert.equal(x.highest,null);
   assert.equal(x.comparisonPercent,null);
   const message=shiftClosedMessage({shiftAnalytics:x});
-  assert.match(message,/Ma'lumot yo'q/);
-  assert.match(message,/kursi yo'q valyutalar qo'shilmagan/);
+  assert.match(message,/1 ta buyurtmaning tarifi noma'lum/);
+  assert.match(message,/Kursi yo'q valyutalar jamiga kiritilmadi/);
 });
 
 test("loader confines order counts and pickups to the closed shift and reads previous branch shift", async () => {

@@ -287,73 +287,95 @@ const shiftOpenedMessageV2 = (shift = {}) => [
 const shiftClosedMessageV2 = (shift = {}) => {
   const report = shift.report || {};
   const analytics = shift.shiftAnalytics || null;
-  const compact = (value) => formatMoney(value, "UZS");
-  const salesText = shiftSalesSnapshotMessage({
-    ...shift,
-    ...(analytics ? { telegramSalesSummary: analytics.revenue } : {}),
+  const revenue = analytics?.revenue || null;
+  const revenueByCurrency = shift.revenueByCurrency || report.revenueByCurrency || {};
+  const cash = shift.cashByCurrency || report.cashByCurrency || {};
+  const terminal = shift.terminalByCurrency || report.terminalByCurrency || {};
+  const click = shift.clickByCurrency || report.clickByCurrency || {};
+  const payme = shift.paymeByCurrency || report.paymeByCurrency || {};
+  const hasUnknownRates = revenue
+    ? Boolean(revenue.hasUnknownRates)
+    : CURRENCIES.some((currency) => currency !== "UZS" && Number(revenueByCurrency[currency] || 0) !== 0);
+  const totalUzs = Number(revenue?.totalUzs ?? revenueByCurrency.UZS ?? shift.totalRevenue ?? 0);
+  const cashUzs = Number(revenue?.cashUzs ?? cash.UZS ?? 0);
+  const terminalUzs = Number(revenue?.terminalUzs ?? terminal.UZS ?? 0);
+  const paymeUzs = Number(revenue?.paymeUzs ?? payme.UZS ?? 0);
+  const clickUzs = Number(revenue?.clickUzs ?? click.UZS ?? 0);
+  const otherUzs = Number(revenue?.otherUzs ?? 0);
+  const foreign = revenue?.foreign || CURRENCIES
+    .filter((currency) => currency !== "UZS" && Number(revenueByCurrency[currency] || 0) !== 0)
+    .map((currency) => ({ currency, amountMinor: Number(revenueByCurrency[currency]), uzs: 0, missingMinor: Number(revenueByCurrency[currency]) }));
+  const foreignLines = foreign.flatMap((item) => {
+    const minor = Number(item.amountMinor || 0);
+    const missing = Number(item.missingMinor || 0);
+    const known = minor - missing;
+    const values = [];
+    if (known !== 0 || Number(item.uzs || 0) !== 0) {
+      values.push(`${compactForeignMoney(known, item.currency)} → ${formatMoney(item.uzs, "UZS")}`);
+    }
+    if (missing !== 0) values.push(`${compactForeignMoney(missing, item.currency)} (kurs yo'q)`);
+    return values;
   });
-  // Reuse the exact standalone sales breakdown, but skip its title and
-  // duplicate total: closing the shift sends only one consolidated message.
-  const salesLines = salesText.split("\n").slice(4);
-  const priceLabel = (extreme) => extreme
-    ? `${extreme.number} — ${compact(extreme.amountUzs)}`
-    : "Ma'lumot yo'q";
-  const comparison = analytics?.comparisonPercent;
-  const comparisonLabel = comparison == null
-    ? "Taqqoslash uchun ma'lumot yetarli emas"
-    : `${comparison > 0 ? "+" : ""}${comparison}%`;
-  const fallbackRevenue = shift.revenueByCurrency || report.revenueByCurrency || {};
-  const unknownRate = analytics ? analytics.revenue.hasUnknownRates : CURRENCIES.some((currency) => currency !== "UZS" && Number(fallbackRevenue[currency] || 0) !== 0);
-  const extraUnknown = analytics?.additionalTotal?.hasUnknownRates;
-  const cashSummary = [
-    "",
-    "💳 To'lovlar bo'yicha",
-    ...salesLines,
-    "",
-    "💼 Kassa va xarajatlar",
-    line("Boshlang'ich kassa", formatCurrencyMap(shift.openingCashByCurrency || report.openingCashByCurrency)),
-    line("Qabul qilingan kassa", formatCurrencyMap(shift.acceptedCashByCurrency || report.acceptedCashByCurrency)),
-    line("Xarajatlar", formatCurrencyMap(shift.expenseByCurrency || report.expenseByCurrency)),
-    line("Oylik", formatCurrencyMap(shift.salaryByCurrency || report.salaryByCurrency)),
-    ...(shift.salaryReceiver ? [line("Oylik olgan", shift.salaryReceiver)] : []),
-    line("Inkassa", formatCurrencyMap(shift.inkassaByCurrency || report.inkassaByCurrency)),
-    line("Ochiq qarz", formatCurrencyMap(shift.debtByCurrency || report.debtByCurrency)),
-    line("Kassada qolgan", formatCurrencyMap(shift.cashBalanceByCurrency || report.cashBalanceByCurrency)),
-  ];
-  return [
+  const hasAmount = (map) => CURRENCIES.some((currency) => Number(map?.[currency] || 0) !== 0);
+  const expenses = shift.expenseByCurrency || report.expenseByCurrency || {};
+  const salaries = shift.salaryByCurrency || report.salaryByCurrency || {};
+  const inkassa = shift.inkassaByCurrency || report.inkassaByCurrency || {};
+  const debts = shift.debtByCurrency || report.debtByCurrency || {};
+  const cashBalance = shift.cashBalanceByCurrency || report.cashBalanceByCurrency
+    || shift.closingCashByCurrency || { UZS: shift.closingCash ?? shift.systemExpectedCash ?? 0 };
+  const shortTime = (value) => {
+    const date = formatDateMinute(value);
+    const match = date.match(/^(\d{2})\.(\d{2})\.(\d{4}) (\d{2}:\d{2})$/);
+    return match ? { day: `${match[1]}.${match[2]}.${match[3]}`, time: match[4] } : { day: date, time: "" };
+  };
+  const opened = shortTime(shift.openedAt || shift.createdAt);
+  const closed = shortTime(shift.closedAt || new Date());
+  const timeRange = opened.day === closed.day
+    ? `${opened.day}, ${opened.time}–${closed.time}`
+    : `${opened.day} ${opened.time} → ${closed.day} ${closed.time}`;
+  const operator = shift.acceptedByName
+    || formatAdmin(shift.openedBy || shift.admin || shift.openedByName, shift.branch || shift.branchName);
+  const extrema = (item) => item ? `${item.number} — ${formatMoney(item.amountUzs, "UZS")}` : null;
+  const lines = [
     "✅ Smena yopildi",
-    "📊 Smena yakuniy hisoboti",
+    `🏢 ${formatBranch(shift.branch || shift.branchName)} | 👤 ${cleanText(operator)}`,
+    `🕒 ${timeRange}`,
     "",
-    line("🏢 Filial", formatBranch(shift.branch || shift.branchName)),
-    line("👤 Xodim", shift.acceptedByName || formatAdmin(shift.openedBy || shift.admin || shift.openedByName, shift.branch || shift.branchName)),
-    line("👤 Smenani yopgan", formatAdmin(shift.closedBy || shift.closedByName, shift.branch || shift.branchName)),
-    ...(shift.handoverToName ? [line("🤝 Topshirildi", shift.handoverToName)] : []),
-    line("🕒 Smena boshlandi", formatDate(shift.openedAt || shift.createdAt)),
-    line("🕘 Smena yopildi", formatDate(shift.closedAt || new Date())),
-    "",
-    "📦 Smena ko'rsatkichlari",
-    line("Qabul qilingan buyurtmalar", `${Number(analytics?.received ?? shift.ordersCount ?? 0)} ta`),
-    line("💰 Jami tushum", `${compact(analytics?.revenue?.totalUzs ?? fallbackRevenue.UZS ?? shift.totalRevenue ?? 0)}${unknownRate ? " (kursi yo'q valyutalar qo'shilmagan)" : ""}`),
-    line("O'rtacha chek (tarif)", analytics?.averageTariffUzs == null ? "Ma'lumot yo'q" : compact(analytics.averageTariffUzs)),
-    line("✅ Topshirilgan buyurtmalar", analytics ? `${analytics.pickups} ta` : "Ma'lumot yo'q"),
-    "",
-    "🏆 Buyurtmalar tahlili",
-    line("Eng qimmat buyurtma (tarif)", priceLabel(analytics?.highest)),
-    line("Eng arzon buyurtma (tarif)", priceLabel(analytics?.lowest)),
-    line("Qo'shimcha to'lovlar", analytics ? `${analytics.additionalPayments} ta — ${compact(analytics.additionalTotal?.totalUzs ?? 0)}${extraUnknown ? " (kursi yo'q valyutalar qo'shilmagan)" : ""}` : "Ma'lumot yo'q"),
-    line("Bekor qilingan buyurtmalar", analytics ? `${analytics.cancellations} ta` : "Ma'lumot yo'q"),
-    line("⏰ Muddati o'tgan faol bagajlar", analytics ? `${analytics.delayed} ta` : "Ma'lumot yo'q"),
-    ...(analytics?.missingTariffs ? [line("Tarifi aniqlanmagan buyurtmalar", `${analytics.missingTariffs} ta`)] : []),
-    "",
-    "📦 Bagaj o'lchamlari",
-    ...(analytics ? [
-      `S — ${analytics.sizes.S} ta | M — ${analytics.sizes.M} ta`,
-      `L — ${analytics.sizes.L} ta | XL — ${analytics.sizes.XL} ta`,
-    ] : ["Ma'lumot yo'q"]),
-    "",
-    line("📈 Oldingi smenaga nisbatan tushum", comparisonLabel),
-    ...cashSummary,
-  ].join("\n");
+    `💰 Jami tushum: ${formatMoney(totalUzs, "UZS")}`,
+    `💵 Naqd: ${formatMoney(cashUzs, "UZS")} | 💳 Terminal: ${formatMoney(terminalUzs, "UZS")}`,
+    ...foreignLines.map((value, index) => `${index === 0 ? "💱 Valyuta: " : "   "}${value}`),
+    ...(paymeUzs !== 0 || clickUzs !== 0
+      ? [`🟢 Payme: ${formatMoney(paymeUzs, "UZS")} | 🔵 Click: ${formatMoney(clickUzs, "UZS")}`]
+      : []),
+    ...(otherUzs ? [`Boshqa to'lovlar: ${formatMoney(otherUzs, "UZS")}`] : []),
+    ...(hasUnknownRates ? ["⚠️ Kursi yo'q valyutalar jamiga kiritilmadi"] : []),
+    `💼 Kassada qolgan: ${formatCurrencyMap(cashBalance)}`,
+  ];
+  if (analytics) {
+    lines.push(
+      "",
+      `📦 Buyurtmalar: ${analytics.received} qabul | ${analytics.pickups} topshirildi`,
+      ...(extrema(analytics.highest) ? [`🏆 Eng qimmat: ${extrema(analytics.highest)}`] : []),
+      ...(extrema(analytics.lowest) ? [`🔻 Eng arzon: ${extrema(analytics.lowest)}`] : []),
+      ...(analytics.additionalPayments || analytics.cancellations
+        ? [`➕ Qo'shimcha: ${formatMoney(analytics.additionalTotal?.totalUzs || 0, "UZS")} (${analytics.additionalPayments} ta) | ❌ Bekor: ${analytics.cancellations}`]
+        : []),
+      ...(analytics.additionalTotal?.hasUnknownRates ? ["⚠️ Qo'shimcha to'lovlarda kurs topilmadi"] : []),
+      `⏰ Kechikkan: ${analytics.delayed} | 🧳 S:${analytics.sizes.S} M:${analytics.sizes.M} L:${analytics.sizes.L} XL:${analytics.sizes.XL}`,
+      ...(analytics.comparisonPercent == null
+        ? []
+        : [`📈 Oldingi smenaga: ${analytics.comparisonPercent > 0 ? "+" : ""}${analytics.comparisonPercent}%`]),
+      ...(analytics.missingTariffs ? [`⚠️ ${analytics.missingTariffs} ta buyurtmaning tarifi noma'lum`] : []),
+    );
+  } else {
+    lines.push("", `📦 Buyurtmalar: ${Number(shift.ordersCount || 0)} ta`);
+  }
+  if (hasAmount(expenses) || hasAmount(salaries)) {
+    lines.push(`💸 Xarajatlar: ${formatCurrencyMap(expenses)}${hasAmount(salaries) ? ` (shundan oylik: ${formatCurrencyMap(salaries)})` : ""}`);
+  }
+  if (hasAmount(inkassa)) lines.push(`🏦 Inkassa: ${formatCurrencyMap(inkassa)}`);
+  if (hasAmount(debts)) lines.push(`📝 Ochiq qarz: ${formatCurrencyMap(debts)}`);
+  return lines.join("\n");
 };
 
 const overtimePaymentMessageV2 = (order = {}) => [
